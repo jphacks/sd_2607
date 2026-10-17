@@ -42,9 +42,21 @@ type PostRecord = {
 
 公式の型識別子・名前空間は [0014](0014-namespaces.md) に従う。版管理は [0010 §3.3](0010-core.md#33-三層の独立した版管理合意済み) に従う。初期基本版は `1` とし、通常投稿の基本項目は §3.2.4 に従う。メッシュ符号化版の初期値は整数 `1` とし、配置は §4 に従う。新型の命名規則・上限等には未確定事項が残る。型付き表示データを再出力して未知の型・フィールドを落とさず、元データを保持する。具体例は [0011](0011-extensions.md) に示す。
 
-レコードを標準の atproto CBOR で符号化して record CID を得る。repository path は `dev.oriom.mosimo.post/<record-key>`。本文投稿ごとに新しい path へ追加し、既存投稿の更新には使わない。record key の生成方式・上限は未決定である。
+レコードを標準の atproto CBOR で符号化して record CID を得る。repository path は `dev.oriom.mosimo.post/<record-key>`。本文投稿ごとに新しい path へ追加し、既存投稿の更新には使わない。record key は atproto 標準の TID とし、Lexicon のレコード定義では `key: "tid"` を指定する。
 
 現行 Data Model は DRISL（DAG-CBOR の後継として説明される正規化 CBOR）を規定する。任意の CBOR エンコーダーの出力や JSON のキー整列を、そのまま同じ CID を作る手段とはしない。一般の deterministic CBOR と atproto の符号化制約を区別する。
+
+### 2.1.1 レコードキーの生成（合意済み）
+
+通常投稿・訂正・補足・追認の新規レコードには、端末で生成した13文字の TID を使う。文字種とビット構造は atproto の TID 仕様に従い、独自の短縮・大文字化・区切り文字追加は行わない。
+
+- 端末の時計と TID 標準の clock identifier を用い、オフラインでも生成する。
+- 直前に生成した値を永続化し、同時刻の連続生成・通常動作中の時計の後退・アプリ再起動でも、同じリポジトリのこの collection でキーを再利用せず単調増加させる。並行して作成する場合も生成状態を共有する。
+- キーに含まれる時刻は投稿時刻の証拠にしない。表示・情報の有効期間・配送期限は、それぞれの日時フィールドで扱う。
+- キー単体の世界的な一意性は要求しない。レコードの場所は `(DID, collection, record-key)` の組で識別する。Nostr event ID・record CID・commit の `rev` とは別の識別子であり、同じ文字列にする要件はない。
+- 中継者・PDS は著者が署名した path を保持し、受信時刻に合わせたキーの再生成や置換を行わない。
+
+例: `dev.oriom.mosimo.post/3jzfcijpj2z2a`。この決定は本プロトコルの投稿 collection に適用し、既存 BSAF 投稿等のキーを書き換えるものではない。OS バックアップ復元等による端末状態の巻き戻りへの対応は、引き続き [延期事項](0003-open-questions.md#95-端末状態の巻き戻りへの対応) とする。
 
 ### 2.2 commit と操作
 
@@ -300,6 +312,8 @@ flowchart TD
 
 - [atproto Data Model](https://atproto.com/specs/data-model)（2026-10-17 確認）
 - [atproto Repository](https://atproto.com/specs/repository)（2026-10-17 確認）
+- [atproto Record Key](https://atproto.com/specs/record-key)（2026-10-17 確認）
+- [atproto Timestamp Identifiers](https://atproto.com/specs/tid)（2026-10-17 確認）
 - [atproto Lexicon](https://atproto.com/specs/lexicon)（2026-10-17 確認）
 - [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md)（2026-10-17 確認）
 - [RFC 8949 — CBOR](https://www.rfc-editor.org/rfc/rfc8949.html)

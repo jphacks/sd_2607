@@ -31,7 +31,7 @@
 
 型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。
 
-投稿の repository path は `dev.oriom.mosimo.post/<record-key>`。record key の生成方式は別途定める。atURI の collection も同じ NSID を使う。
+投稿の repository path は `dev.oriom.mosimo.post/<record-key>`。record key は端末で生成する13文字の atproto TID とする（[0012 §2.1.1](0012-bindings.md#211-レコードキーの生成合意済み)）。atURI の collection も同じ NSID を使う。
 
 ### 2.2 公開・解決
 
