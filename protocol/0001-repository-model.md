@@ -20,6 +20,16 @@ atproto は ECDSA、Nostr は BIP-340 Schnorr を用いる。曲線・鍵生成�
 
 再インストール、OS バックアップ復元、状態の巻き戻りの扱いは別途定義する。
 
+### 1.1.1 DID の生成と代理登録
+
+DID method は `did:plc` を採用する。発信アプリは初期操作を生成・署名し、そのハッシュから DID を決定する。署名済み初期操作をメッシュ等で配送し、これを受け取ったインターネット接続ノードが、発信端末の再接続を待たずに PLC Directory への登録を試みる。発信端末自身が接続可能な場合も同じ初期操作を送信できる。
+
+代理登録は署名済み初期操作をそのまま送信する行為であり、中継者へ秘密鍵や DID の管理権限を渡すものではない。PLC 仕様は認証不要の HTTP リクエストで署名済み操作の提出を受け付け、操作の署名等を検証する。
+
+全ノードがオフラインの場合に登録完了は保証できない。初期操作のローカル検証と、公開ディレクトリでの登録・解決確認を区別する。既存登録がある場合は初期操作の一致と現在の状態を確認し、重複送信の応答だけで失敗や最新状態を判断しない。具体的な再試行・重複抑止・負荷制限の規則は未決定である。
+
+初期操作は DID Document そのものではなく、その導出元である。初期操作の配送形式、`rotationKeys`、PDS endpoint、鍵更新・失効と登録確認の伝達方式は未決定である。公開ディレクトリへの依存と、オフライン時に更新・失効を確認できない限界は残る。
+
 ### 1.2 投稿の単独検証と表示
 
 過去の投稿やリポジトリ状態を取得していなくても、投稿内容を含む Nostr イベントの著者署名を検証して表示できることを必須とする。投稿内容は Nostr の署名対象に含める。
@@ -152,6 +162,7 @@ commit の署名検証と、レコードがその commit の状態に含まれ�
 ## 4. 参照
 
 - [AT Protocol Repository](https://atproto.com/specs/repository)（2026-10-17 確認）
+- [DID PLC Method Specification](https://github.com/did-method-plc/did-method-plc/blob/main/website/spec/v0.1/did-plc.md)（本文 v0.3.0、2026-10-17 確認）
 - [AT Protocol Cryptography](https://atproto.com/specs/cryptography)（2026-10-17 確認）
 - [NIP-09: Event Deletion Request](https://github.com/nostr-protocol/nips/blob/master/09.md)
 - [BSAF 日本語仕様](https://github.com/osprey74/bsaf-protocol/blob/main/docs/bsaf-spec-ja.md)（2026-10-17 確認。将来、参照リビジョンを固定する）
