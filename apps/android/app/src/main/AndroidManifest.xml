@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:name="org.mndt.app.MeshApplication" android:label="@string/app_name" android:icon="@drawable/ic_mesh" android:theme="@style/AppTheme" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true" android:supportsRtl="true">
+        <!-- TODO(undecided): set real deployment endpoints and explicit PLC policy before first install. -->
+        <meta-data android:name="mndt.pds.endpoint" android:value="https://pds.invalid" />
+        <meta-data android:name="mndt.plc.directory" android:value="" />
+        <meta-data android:name="mndt.plc.registration.enabled" android:value="false" />
+        <activity android:name="org.mndt.app.MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

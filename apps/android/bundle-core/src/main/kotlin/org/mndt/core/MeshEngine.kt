@@ -1,0 +1,227 @@
+package org.mndt.core
+
+import io.nodle.dtn.bpv7.*
+import io.nodle.dtn.bpv7.extensions.*
+import java.net.URI
+
+// TODO(undecided): demo-only wire values and local resource policy, not protocol constants.
+object MeshPolicy {
+    const val DESTINATION = "dtn://mndt.local/~demo"
+    const val MAX_BUNDLE_BYTES = 24_000
+    const val MAX_ENTRIES = 128
+    const val PER_PRIORITY_ENTRIES = 32
+    const val MAX_HOPS = 8
+    const val MAX_RESIDENCE_MILLIS = 86_400_000L
+    const val PER_AUTHOR_PER_MINUTE = 12
+}
+
+data class StoredBundle(
+    val event: NostrEvent,
+    val bytes: ByteArray,
+    val hop: Int,
+    val receivedAtMillis: Long,
+    val receivedElapsedMillis: Long,
+)
+
+/** Call from one serialized coordinator. Nearby is a link, not a mesh router. */
+class MeshEngine {
+    private val stored = linkedMapOf<String, StoredBundle>()
+
+    private val rates = mutableMapOf<String, MutableList<Long>>()
+    private val sendRates = mutableMapOf<String, MutableList<Long>>()
+
+    fun originate(event: NostrEvent, nowMillis: Long, elapsedMillis: Long): StoredBundle {
+        require(event.verify()) { "invalid author signature" }
+        val policy = policy(event)
+        require(policy.expirySeconds > nowMillis / 1000) { "delivery deadline expired" }
+        val lifetime = minOf(MeshPolicy.MAX_RESIDENCE_MILLIS, (policy.expirySeconds - nowMillis / 1000).coerceAtMost(86_400) * 1000)
+        val bundle = PrimaryBlock(
+            destination = URI(policy.destination),
+            source = URI("dtn://mndt.local/${event.pubkey}"),
+            creationTimestamp = 0,
+            // ponytail: 60-bit event-derived sequence; a persistent allocator if bundle-ID collisions matter.
+            sequenceNumber = event.id.take(15).toLong(16),
+            lifetime = lifetime,
+        ).setProcV7Flags(BundleV7Flags.MustNotFragment).makeBundle()
+            .addBlock(hopCountBlockData(policy.maxHops, 0).crcType(CRCType.CRC32))
+            .addBlock(ageBlock(0).crcType(CRCType.CRC32))
+            .addBlock(payloadBlock(EventCodec.encode(event)).crcType(CRCType.CRC32))
+        return accept(bundle.cborMarshal(), nowMillis, elapsedMillis)
+            ?: throw IllegalArgumentException("already stored")
+    }
+
+    fun accept(bytes: ByteArray, nowMillis: Long, elapsedMillis: Long): StoredBundle? =
+        insert(bytes, nowMillis, elapsedMillis, applyRateLimit = true)
+
+    /** Restore the original age plus downtime, not a freshly wrapped event. */
+    fun restore(bytes: ByteArray, receivedAtMillis: Long, nowMillis: Long, elapsedMillis: Long): StoredBundle? {
+        val bundle = parse(bytes)
+        val age = bundle.getAgeBlockData() ?: error("missing bundle age")
+        age.age = saturatedAdd(age.age, positiveDifference(nowMillis, receivedAtMillis))
+        // Expired entries remain available to the relay backlog, but never to mesh forwarding.
+        return insert(bundle.cborMarshal(), nowMillis, elapsedMillis, applyRateLimit = false, restoring = true)
+    }
+
+    fun entries(): List<StoredBundle> = stored.values.toList()
+
+    fun inventory(nowMillis: Long, elapsedMillis: Long): List<String> =
+        stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { it.event.id }
+
+    /** Each retry derives a fresh send view; it never increments the stored hop count. */
+    fun forward(id: String, nowMillis: Long, elapsedMillis: Long): ByteArray? {
+        val entry = stored[id] ?: return null
+        if (!eligible(entry, nowMillis, elapsedMillis)) return null
+        val sent = sendRates.getOrPut(entry.event.pubkey) { mutableListOf() }
+        sent.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it }
+        if (sent.size >= 36) return null
+        sent.add(elapsedMillis)
+        val bundle = parse(entry.bytes)
+        bundle.canonicalBlocks.removeAll { it.blockType == BlockType.PreviousNodeBlock.code }
+        bundle.getHopCountBlockData()!!.count++
+        bundle.getAgeBlockData()!!.age = currentAge(entry, elapsedMillis)
+        return bundle.cborMarshal().also { require(it.size <= MeshPolicy.MAX_BUNDLE_BYTES) }
+    }
+
+    private fun insert(
+        bytes: ByteArray,
+        nowMillis: Long,
+        elapsedMillis: Long,
+        applyRateLimit: Boolean,
+        restoring: Boolean = false,
+    ): StoredBundle? {
+        val bundle = parse(bytes)
+        // Library checkValid() uses wall clock and rejects expired bundles. Offline restore
+        // needs those for the relay queue, so validate structure separately here.
+        bundle.checkValidPrimaryBlock()
+        bundle.canonicalBlocks.forEach { bundle.checkValidCanonicalBlock(it) }
+        require(bundle.primaryBlock.hasCRC()) { "primary CRC required" }
+        require(!bundle.primaryBlock.isFragment() && !bundle.isAdminRecord()) { "unsupported bundle category" }
+        require(bundle.canonicalBlocks.count { it.blockType == 1 } == 1) { "one payload required" }
+        require(bundle.canonicalBlocks.last().blockType == 1) { "payload must be last" }
+        require(bundle.canonicalBlocks.map { it.blockNumber }.distinct().size == bundle.canonicalBlocks.size) { "duplicate block numbers" }
+        for (type in listOf(6, 7, 10)) {
+            require(bundle.canonicalBlocks.count { it.blockType == type } <= 1) { "duplicate extension" }
+        }
+        require(bundle.canonicalBlocks.none { it.blockType == 11 || it.blockType == 12 }) { "BPSec not supported by this profile" }
+        val hop = bundle.getHopCountBlockData() ?: error("missing hop count")
+        val age = bundle.getAgeBlockData() ?: error("missing age")
+        val event = EventCodec.decode(bundle.getPayloadBlockData().buffer)
+        require(event.verify()) { "invalid author signature" }
+        val signed = policy(event)
+        require(bundle.primaryBlock.destination.toString() == signed.destination) { "signed destination mismatch" }
+        require(hop.limit in 1..signed.maxHops && hop.count in 0..minOf(hop.limit, MeshPolicy.MAX_HOPS)) { "hop limit exceeded" }
+        require(bundle.primaryBlock.lifetime in 1..MeshPolicy.MAX_RESIDENCE_MILLIS) { "lifetime exceeds local policy" }
+        if (!restoring) {
+            require(age.age < bundle.primaryBlock.lifetime) { "bundle lifetime expired" }
+            require(signed.expirySeconds > nowMillis / 1000) { "delivery deadline expired" }
+            if (bundle.primaryBlock.creationTimestamp != 0L) require(!bundle.isExpired()) { "bundle expired" }
+        }
+        val knownTypes = setOf(1, 6, 7, 10)
+        val unknown = bundle.canonicalBlocks.filter { it.blockType !in knownTypes }
+        require(unknown.none { it.procV7flags and 0x04 != 0L }) { "unknown block requires bundle deletion" }
+        bundle.canonicalBlocks.removeAll { it.blockType !in knownTypes && it.procV7flags and 0x10 != 0L }
+        if (stored.containsKey(event.id)) return null
+        require(stored.size < MeshPolicy.MAX_ENTRIES) { "mesh storage full" }
+        require(stored.values.count { policy(it.event).priority == signed.priority } < MeshPolicy.PER_PRIORITY_ENTRIES) { "priority storage full" }
+        if (applyRateLimit) {
+            rates.values.forEach { samples -> samples.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it } }
+            rates.entries.removeAll { it.value.isEmpty() }
+            val samples = rates.getOrPut(event.pubkey) { mutableListOf() }
+            require(samples.size < MeshPolicy.PER_AUTHOR_PER_MINUTE) { "author rate limit" }
+            samples.add(elapsedMillis)
+        }
+        val entry = StoredBundle(event, bundle.cborMarshal(), hop.count, nowMillis, elapsedMillis)
+        stored[event.id] = entry
+
+        return entry
+    }
+
+    private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {
+        val signed = policy(entry.event)
+        val bundle = parse(entry.bytes)
+        val hop = bundle.getHopCountBlockData()!!
+        return signed.expirySeconds > nowMillis / 1000 &&
+            hop.count < minOf(hop.limit, MeshPolicy.MAX_HOPS) &&
+            currentAge(entry, elapsedMillis) < bundle.primaryBlock.lifetime &&
+            (bundle.primaryBlock.creationTimestamp == 0L || !bundle.isExpired())
+    }
+
+    private fun currentAge(entry: StoredBundle, elapsedMillis: Long): Long =
+        saturatedAdd(parse(entry.bytes).getAgeBlockData()!!.age, positiveDifference(elapsedMillis, entry.receivedElapsedMillis))
+
+    private data class SignedPolicy(val destination: String, val maxHops: Int, val priority: Int, val expirySeconds: Long)
+
+    private fun policy(event: NostrEvent): SignedPolicy {
+        val tag = event.tags.singleOrNull { it.firstOrNull() == "mndt" } ?: error("one mndt tag required")
+        require(tag.size == 5 && tag[1] == "1") { "unsupported mesh version" }
+        require(tag[2] == MeshPolicy.DESTINATION) { "unknown mesh destination" }
+        require(tag[3].matches(Regex("[1-9][0-9]{0,2}"))) { "invalid max hops" }
+        val hops = tag[3].toInt()
+        require(hops in 1..255) { "invalid max hops" }
+        require(tag[4] in listOf("0", "1", "2", "3")) { "invalid priority" }
+        val expiry = event.tags.singleOrNull { it.firstOrNull() == "mndt-exp" } ?: error("signed delivery deadline required")
+        require(expiry.size == 2 && expiry[1].matches(Regex("[1-9][0-9]{0,14}"))) { "invalid expiry" }
+        return SignedPolicy(tag[2], hops, tag[4].toInt(), expiry[1].toLong())
+    }
+
+    private fun parse(bytes: ByteArray): Bundle {
+        require(bytes.size in 1..MeshPolicy.MAX_BUNDLE_BYTES) { "bundle size limit" }
+        BoundedCbor.check(bytes)
+        return cborUnmarshalBundle(bytes)
+    }
+}
+
+private fun positiveDifference(now: Long, then: Long): Long =
+    if (now <= then) 0 else if (then < 0 && now > Long.MAX_VALUE + then) Long.MAX_VALUE else now - then
+
+private fun saturatedAdd(a: Long, b: Long): Long = if (a > Long.MAX_VALUE - b) Long.MAX_VALUE else a + b
+
+/** Shape preflight before a third-party parser can allocate a claimed byte-string length. */
+internal object BoundedCbor {
+    fun check(bytes: ByteArray) {
+        var at = 0
+        var items = 0
+        fun argument(ai: Int): Long {
+            if (ai < 24) return ai.toLong()
+            val width = when (ai) { 24 -> 1; 25 -> 2; 26 -> 4; 27 -> 8; else -> error("invalid CBOR argument") }
+            require(at + width <= bytes.size) { "truncated CBOR" }
+            var value = 0L
+            repeat(width) {
+                val next = bytes[at++].toLong() and 255
+                require(value <= (Long.MAX_VALUE - next) / 256) { "CBOR integer overflow" }
+                value = value * 256 + next
+            }
+            return value
+        }
+        fun read(depth: Int) {
+            require(depth <= 16 && ++items <= 4096 && at < bytes.size) { "CBOR resource limit" }
+            val head = bytes[at++].toInt() and 255
+            val major = head ushr 5
+            val ai = head and 31
+            if (ai == 31) {
+                require(major == 4 || major == 5) { "unsupported indefinite CBOR" }
+                var count = 0
+                while (at < bytes.size && (bytes[at].toInt() and 255) != 255) { read(depth + 1); count++ }
+                require(at < bytes.size && (major != 5 || count % 2 == 0)) { "truncated CBOR container" }
+                at++
+                return
+            }
+            val count = argument(ai)
+            when (major) {
+                0, 1 -> Unit
+                2, 3 -> {
+                    require(count <= bytes.size - at) { "truncated CBOR string" }
+                    at += count.toInt()
+                }
+                4, 5 -> {
+                    require(count <= 4096) { "CBOR container limit" }
+                    repeat(count.toInt() * if (major == 5) 2 else 1) { read(depth + 1) }
+                }
+                6 -> error("CBOR tags are not part of the BPv7 envelope")
+                7 -> require(ai in 20..22) { "unsupported CBOR simple value" }
+            }
+        }
+        read(0)
+        require(at == bytes.size) { "trailing CBOR data" }
+    }
+}
