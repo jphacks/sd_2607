@@ -1,0 +1,13 @@
+{
+  "name": "mosimo-lexicons",
+  "private": true,
+  "scripts": {
+    "test": "node --test post.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@atproto/lexicon": "0.7.17"
+  }
+}

@@ -26,6 +26,10 @@
 
 ### 2.1 独自レコード
 
+基本投稿の Lexicon JSON は [`lexicons/dev/oriom/mosimo/post.json`](../lexicons/dev/oriom/mosimo/post.json) に実装する。未確定の個別拡張は登録せず、現段階の `extensions.items` は `refs: []`・`closed: false` の open union とする。空の refs を持つ open union は Lexicon 標準で認められており、各要素の `$type` を必須にしつつ第三者の型も運べる。正式な個別拡張スキーマの実装・DNS／PDS への公開が済んだことを意味しない。
+
+Lexicon の `datetime` は時差オフセットを許容するため、本プロトコルの UTC・末尾 `Z` 制約は別途適用する。トップレベル5項目の制約やメッシュ payload の32 KiB上限も、Lexicon の型検査だけで実施したとは扱わない。
+
 ```ts
 type PostRecord = {
   $type: "dev.oriom.mosimo.post";

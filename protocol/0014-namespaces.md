@@ -14,7 +14,7 @@
 
 | 識別子 | 役割 | 確定範囲 |
 |---|---|---|
-| `dev.oriom.mosimo.post` | 通常投稿・訂正・補足・追認のレコード型と collection | NSID を割り当て。スキーマの未決項目は残る |
+| `dev.oriom.mosimo.post` | 通常投稿・訂正・補足・追認のレコード型と collection | [基本投稿の Lexicon JSON](../lexicons/dev/oriom/mosimo/post.json) を実装。個別拡張・一部の資源上限は未確定 |
 | `dev.oriom.mosimo.defs` | 公式拡張の共有定義を収める Lexicon | NSID を割り当て。各拡張は下記の定義を参照 |
 
 ### 2.1 公式拡張の型参照
