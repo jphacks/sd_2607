@@ -1,0 +1,69 @@
+# Android メッシュデモ（実験実装）
+
+`protocol/` を正とする。投稿のタグ・メッシュ用 CBOR は 0012 §3.2.4・§4、名前は 0014 に従う。リンク・制御メッセージ等の未確定部分は [mndt.md §9](../../protocol/mndt.md#9-android-実装の暫定値提案未採用) の暫定値を使う。完成した共通 wire 仕様の実装ではない。
+
+## 構成
+
+- `bundle-core`: Android 非依存。署名、atproto レコード・MST・commit、0012 のタグ、メッシュ CBOR v1、BPv7 の検証・保存・転送・退避。
+- `mesh-android`:
+  - `GattLink`（BLE GATT）と `LanLink`（`_mosimo._tcp` の mDNS + TCP）。どちらも `Link` を実装する。
+  - `Exchange`: hello / inventory / want / bundle / ack の接触時交換。
+  - `MeshCoordinator`: 暗号化保存とリレー搬出。
+  - `MeshService`: 単一の `connectedDevice` 前景サービス。
+  - `BootReceiver`: 再起動後の再開。
+- `app`: Compose の投稿・中継開始・リレー一覧・診断表示。
+- `../../third_party/sd_2607-dtn7-kotlin`: BPv7 コーデックの固定スナップショット。
+
+store-carry-forward（バケツリレー）: 受信した Bundle は署名検証後に暗号化保存され、後で接続した端末へ hop を1増やして渡される。接触中に全経路がつながっている必要はない。
+
+## ビルド
+
+JDK 21、Android SDK 36。リポジトリ直下から:
+
+```sh
+apps/android/gradlew -p apps/android \
+  :dtn7-bpv7:test :bundle-core:test :mesh-android:testDebugUnitTest \
+  :app:assembleDemoDebug :app:assemblePeerDebug
+```
+
+成果物は `app/build/outputs/apk/{demo,peer}/debug/`（`org.mndt.demo` / `org.mndt.demo.peer`）。Google Play 開発者サービスは不要。
+
+## 動作
+
+- 「中継開始」で Bluetooth 権限を求め、前景サービスを開始する。
+  - 各端末は GATT server・広告・scan を兼ね、node ID の小さい側が接続する。同じ LAN 上の端末とは mDNS で見つけて TCP 接続する。
+  - 接続は自動で受け入れる。照合コードの確認はない。
+  - 信頼は Nostr 署名の検証と資源上限による。
+- 画面を閉じても、画面消灯中も中継を続ける。
+  - `START_STICKY` なので、OS がプロセスを回収した場合は再起動される。
+  - 中継を有効にしたまま端末を再起動すると、自動で再開する。
+  - 強制停止後や省電力制限下の動作は保証しない（mndt §3.5）。
+- インターネットに接続できるときは、保持中の全イベントを元の署名のまま、既定リレー（`wss://relay.damus.io`、`wss://nos.lol`）と追加したリレーへ順に送る。リレーから取得したイベントは表示専用で、メッシュには投入しない（mndt §6）。
+- 画像などのメディアは送らない（0003 §9.4 で延期）。1イベントの CBOR payload の上限は 32 KiB（Bundle はローカル上限 24,000 bytes）。
+- 旧形式（`org.mndt.experimental.v2` タグ・`mesh-state.aesgcm`）は読まない。初回起動時に旧状態を削除し、鍵を新しく生成する。
+
+## SDK として組み込む場合
+
+初期化時に `MeshCoordinator.get(context)` を呼ぶ。中継は `MeshService.start/stop(context)` で開始・停止する（権限は `MeshPermissions`）。投稿は `publish`、リレーは `addRelay` / `removeRelay` / `setOnlineEnabled` で操作する。Activity の `onStart` / `onStop` から `setOnlineForeground(true/false)` を通知する。UI は `state` を購読する。
+
+## 署名と復元の境界
+
+- Nostr: NIP-01 + BIP-340。`content` は本文そのもの。
+- atproto: v3 commit を別の secp256k1 鍵で low-S ECDSA 署名し、`mosimo.oriom.dev:commit` に padding なし Base64 で載せる。PLC 管理鍵も別に生成する。
+- `AtRepository.restore(event, atprotoPubkey?)` はタグからレコードと commit を再構成する。
+  - 公開鍵を渡した場合は commit 署名も検証する。この公開鍵は本来 DID document から得る。
+  - DID 認証と MST 包含検証は行わない（PDS 側の段階）。
+- record key と `rev` は同じ TID を使う（0012 §2.1.1 は一致を要求しないので、受信側は一致を前提にしない）。TID の clock ID は repository ごとの乱数で、永続化する。
+- DID はオフラインで導出したもので、PLC 登録はしない。既定の PDS は `.invalid`。
+
+## 未実装・範囲外
+
+- 削除（NIP-09）、訂正などの制御形式。
+- 地理・身元証明の拡張 UI。
+- PLC の代理登録。
+- 鍵対応宣言の配送。
+- Nearby への経路切替。
+- mDNS が届かない網向けの手動アドレス指定。
+- BPSec。
+- メディア。
+- iOS。

@@ -364,3 +364,44 @@ Nostr リレーの受理は、全メッシュ端末への到達や、PDS・AppVi
 - [RFC 9171 — Bundle Protocol Version 7](https://www.rfc-editor.org/rfc/rfc9171.html)
 - [RFC 8949 — CBOR](https://www.rfc-editor.org/rfc/rfc8949.html)
 - [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md)
+
+## 9. Android 実装の暫定値（提案・未採用）
+
+本節は `apps/android` の実験実装が未確定事項を埋めるために使っている値の記録であり、合意済み事項ではない。相互運用規約として固定する場合は別途合意する。§1〜§7 の合意事項を変更しない。
+
+### 9.1 BLE GATT リンク
+
+| 項目 | 暫定値 |
+|---|---|
+| Service UUID | `b5e89a01-f9da-45c2-9111-2de7a7441d24` |
+| RX characteristic（central → peripheral、write with response） | `483c3867-c832-4c60-9a96-7018059eaf74` |
+| TX characteristic（peripheral → central、notify。CCCD あり） | `49d60590-c23f-4a0a-a58e-f2f2f606f94d` |
+| 広告 | legacy。広告データに 128-bit Service UUID 一覧、scan response に 128-bit Service Data（AD type `0x21`）= Service UUID + node ID 8 バイト + flags 1 バイト（bit0 = peripheral 専用）。scan は Service UUID で絞り込む（128-bit Service Data だけの絞り込みは実機 OPPO CPH2797 で一致しなかった） |
+| 役割選択 | 各端末が GATT server・広告と scan・central を兼ねる。相手が peripheral 専用、または自 node ID < 相手 node ID（16進小文字の辞書順）のとき central として接続する。片方向にしか見えない場合に備え、相手を10秒見続けても接続されなければ node ID が大きい側からも接続する（重複リンクは event ID の重複排除で無害） |
+| 分割 | MTU 517 を要求し、min(MTU − 3, 512) バイトごとに分割（属性値の上限は512バイト）。1チャンクずつ write 応答・notify 完了を待つ |
+
+node ID はプロセス起動ごとの乱数であり、身元・著者・端末の識別子ではない。
+
+### 9.2 LAN リンク
+
+接続済み LAN 上で DNS-SD のサービス種別 `_mosimo._tcp`、インスタンス名 = node ID を広告・探索し、node ID の小さい側が TCP 接続する。TLS は使わない（運ぶのは公開の署名済みイベントであり、通信路保護は別途検討）。NICT NerveNet 等の IP 網も、mDNS が届く範囲ではこの経路で扱う。mDNS が届かない網向けの手動アドレス指定は未実装。
+
+### 9.3 フレームと接触時交換
+
+GATT・TCP とも、4 バイト big-endian の長さ（1〜32,768）に続けて1フレームを送る。フレーム先頭が `{` なら制御メッセージ、`0x9f` なら BPv7 Bundle とする。制御メッセージは JSON で、`v: 1` と `type` を持つ。
+
+| type | フィールド | 用途（§3 の段階） |
+|---|---|---|
+| `hello` | `node`（16進16文字）、`max`（受信可能な最大フレームバイト数） | 接続・能力共有。未知フィールドは無視 |
+| `inventory` | `ids`（転送対象の Nostr event ID、最大128） | 所持情報の交換 |
+| `want` | `ids` | 転送要求 |
+| `ack` | `ids`（1件） | 署名検証・保存の応答。経路証明・配送完了の証明ではない |
+
+接続は自動で受け入れる。保護は Nostr 署名の検証と資源上限による。Nearby への切替（§3.3）は未実装。
+
+### 9.4 Bundle と保持
+
+- destination EID は `dtn://mosimo.oriom.dev/~post`（non-singleton）とする。source EID は `dtn://n<著者公開鍵の先頭32桁>/post` を仮置きする。
+- Hop Count の上限は 8（ローカル方針。著者署名の対象外）。Lifetime は最大24時間。配送期限は `mosimo.oriom.dev:delivery-expires-at` から読む。
+- 保存は128件まで。満杯時は、転送対象外かつリレー受理済み → 転送対象外 → 最古受信の順に1件を退避する。
+- 搬出先は同梱の一般リレー（`wss://relay.damus.io`、`wss://nos.lol`）と利用者の追加分で、全リレーへ順に元イベントを送る。

@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">MNDT メッシュ実験</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#155E75</item>
+    </style>
+</resources>
