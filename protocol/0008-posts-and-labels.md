@@ -29,6 +29,22 @@
 
 具体的な発行者、署名する主体、鍵構成、Label 値、注釈レコードとの対応、複数注釈の集約と撤回、サービス発見・配信は未決定である。既存 AppView・クライアントが自動的にすべての Label を収集・表示するとは保証しない。
 
+### 3.1 集約配信と発行元選択の調査
+
+2026-10-17 に、atproto リポジトリの commit `11ce369ebf05fa533a46080f1b42eded6fa5f71f` のスキーマと AppView ソースを確認した。接続・配送の集約と、発行元への信頼・表示対象の選択は別である。
+
+- [`subscribeLabels` スキーマ](https://github.com/bluesky-social/atproto/blob/11ce369ebf05fa533a46080f1b42eded6fa5f71f/lexicons/com/atproto/label/subscribeLabels.json) は `seq` と Label 配列を持つイベントを配信し、Label の `src` が一つに限られるというスキーマ制約はない。したがって複数発行元を一つの stream で運ぶデータ構造は表現できる。ただし全ての既存サービスが集約 stream の取り込みに対応する保証ではない。
+- [`queryLabels` スキーマ](https://github.com/bluesky-social/atproto/blob/11ce369ebf05fa533a46080f1b42eded6fa5f71f/lexicons/com/atproto/label/queryLabels.json) は対象 URI と、任意の発行元 DID リスト `sources` を指定できる。
+- 一方、確認した [Bluesky AppView の queryLabels 実装](https://github.com/bluesky-social/atproto/blob/11ce369ebf05fa533a46080f1b42eded6fa5f71f/packages/bsky/src/api/com/atproto/label/queryLabels.ts) は空の `sources` を拒否する。スキーマで任意でも、その実装が全発行元の一括取得を提供するとは限らない。
+- [Label hydration](https://github.com/bluesky-social/atproto/blob/11ce369ebf05fa533a46080f1b42eded6fa5f71f/packages/bsky/src/hydration/label.ts) は選択された Labeler DID を `issuers` に渡し、[取得側](https://github.com/bluesky-social/atproto/blob/11ce369ebf05fa533a46080f1b42eded6fa5f71f/packages/bsky/src/data-plane/server/routes/labels.ts) は `src` で絞り込む。一つのサーバーを選択すれば、その配信する任意の `src` が自動的に表示対象になるとは扱えない。
+
+設計上の選択肢（未合意）:
+
+1. **本人を Label の `src` とする。** 元の発行者・署名を維持し、対応 AppView が複数 source の発見・検証・選択を代行する。ユーザーごとの接続は不要にできるが、既存クライアントへの表示互換性や大量の発行者管理は別途必要となる。
+2. **グループ等の Labeler を `src` とする。** 本人署名付きの注釈レコードを収集・検証し、サービスが自身の DID・鍵で標準 Label を発行する。閲覧者は少数の Labeler を選べるが、Label 自体はサービスの判断・証言となる。元の注釈著者はレコード等で維持し、本人発行の Label と偽らない。
+
+今回の静的調査で、配信の集約だけでは発行元選択の負担が自動的に解消しないことを確認した。構成の採否と runtime 相互運用は未決定・未検証である。Label の生成元を少数に集約しても、誰でも注釈を投稿できるという方針とは両立し得る。
+
 ## 4. 削除との区別
 
 MST から削除するのは対象レコードの path → CID エントリであり、commit オブジェクトではない。端末は削除後の MST root を参照する新しい commit に署名する。削除対象に応じた NIP-09 の `kind: 5` 削除要求も発行する。
