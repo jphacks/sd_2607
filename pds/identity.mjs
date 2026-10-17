@@ -19,7 +19,7 @@ export function createIdentityResolver(config, getJson = fetchJson) {
     const [data, didDoc] = await Promise.all([
       getJson(`${origin}/${did}/data`), getJson(`${origin}/${did}`),
     ]);
-    const key = data.signingKeys?.atproto;
+    const key = data.verificationMethods?.atproto;
     const service = data.services?.atproto_pds;
     if (data.did !== did || didDoc.id !== did || !key?.startsWith('did:key:')
       || service?.type !== 'AtprotoPersonalDataServer') throw new Error('Invalid PLC identity');
