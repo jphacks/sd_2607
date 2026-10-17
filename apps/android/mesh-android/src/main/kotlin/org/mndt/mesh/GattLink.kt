@@ -55,7 +55,7 @@ internal fun shouldConnect(myNode: String, peer: GattAdvert) =
  * (1 len + 1 type 0x21 + 16 UUID + 8 node id + 1 flags = 27 bytes). A filter on 128-bit Service Data alone
  * matched nothing on a real phone (OPPO CPH2797, Android 16), so it is not used.
  *
- * Bytes on either direction are [Frames.encode] streams cut into (MTU - 3) chunks: central writes RX with
+ * Bytes on either direction are [Frames.encode] streams cut into min(MTU - 3, 512) chunks: central writes RX with
  * response, server notifies TX; one chunk in flight per peer. Peer handles are "c:ADDR" (we are central)
  * and "p:ADDR" (we are server). Listener calls go through one executor, never under [lock].
  */
@@ -63,7 +63,7 @@ internal fun shouldConnect(myNode: String, peer: GattAdvert) =
 internal class GattLink(private val context: Context) : Link {
     override val name = "ble"
 
-    private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, val node: String?) {
+    private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, var node: String?) {
         var connected = false
         var mtu = 23
         val reader = FrameReader()
@@ -136,6 +136,11 @@ internal class GattLink(private val context: Context) : Link {
         }
     }
 
+    // Inbound (p:) links only learn their node here; without it we would also dial that node after the wait.
+    override fun identified(peer: String, node: String) {
+        synchronized(lock) { peers[peer]?.node = node }
+    }
+
     override fun disconnect(peer: String) {
         safe(Unit) { synchronized(lock) { peers[peer]?.let { drop(it) } } }
     }
@@ -191,9 +196,10 @@ internal class GattLink(private val context: Context) : Link {
     private fun pump(p: Peer) {
         if (p.inFlight != 0 || !p.connected) return
         val frame = p.out.firstOrNull() ?: return
-        val chunk = frame.copyOfRange(p.offset, minOf(frame.size, p.offset + p.mtu - 3))
+        // An attribute value is at most 512 bytes even when the MTU is 517 (MTU - 3 = 514 throws).
+        val chunk = frame.copyOfRange(p.offset, minOf(frame.size, p.offset + minOf(p.mtu - 3, MAX_ATTRIBUTE)))
         p.inFlight = chunk.size
-        if (!write(p, chunk)) drop(p)
+        if (!(try { write(p, chunk) } catch (_: IllegalArgumentException) { false })) { Log.w(TAG, "write failed on ${p.handle}"); drop(p) }
     }
 
     /** Forgets [p] and closes its connection; onDisconnected only if onConnected was sent. */
@@ -393,6 +399,7 @@ internal class GattLink(private val context: Context) : Link {
         const val MAX_QUEUE = 64
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val ASYMMETRIC_FALLBACK_MS = 10_000L
+        const val MAX_ATTRIBUTE = 512
         private val BACKOFF_MS = longArrayOf(5_000, 30_000, 120_000)
         private const val TAG = "GattLink"
     }

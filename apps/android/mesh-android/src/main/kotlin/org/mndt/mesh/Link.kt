@@ -21,6 +21,8 @@ internal interface Link {
     /** Queues one whole frame of at most [Frames.MAX_FRAME] bytes; false when the peer is gone or backlogged. */
     fun send(peer: String, frame: ByteArray): Boolean
     fun disconnect(peer: String)
+    /** The peer's HELLO named [node]; a link may use it to avoid opening a second connection to the same node. */
+    fun identified(peer: String, node: String) {}
 }
 
 /** Provisional framing (protocol/mndt.md §9): 4-byte big-endian length, then the frame, on any byte stream. */

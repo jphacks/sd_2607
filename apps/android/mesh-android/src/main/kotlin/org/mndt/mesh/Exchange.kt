@@ -1,5 +1,6 @@
 package org.mndt.mesh
 
+import android.util.Log
 import org.mndt.core.AtRepository
 import org.mndt.core.MeshEngine
 import org.mndt.core.MeshPolicy
@@ -49,7 +50,8 @@ internal class Exchange(
                 0x9f -> bundle(s, bytes)
                 else -> error("Unknown frame")
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            log("reject frame from ${s.handle}: ${e.message}")
             note("不正・制限超過フレームを拒否")
             if (s.peerNode == null) drop(s)
         }
@@ -67,6 +69,8 @@ internal class Exchange(
             require(s.peerNode == null) { "Duplicate HELLO" }
             if (c.node == node) { drop(s); return }
             s.peerNode = c.node; s.peerMax = c.max
+            s.link.identified(s.handle, c.node)
+            log("hello from ${c.node} on ${s.link.name}:${s.handle}")
             inventory(s)
             return
         }
@@ -75,11 +79,13 @@ internal class Exchange(
             "inventory" -> {
                 val owned = engine.entries().map { it.event.id }.toSet()
                 val missing = c.ids.filterNot(owned::contains)
+                log("inventory ${c.ids.size} from ${s.peerNode}, want ${missing.size}")
                 if (missing.isNotEmpty()) send(s, Wire.encode(Control("want", missing)))
                 s.sent.keys.removeAll(c.ids.toSet())
             }
             "want" -> {
                 val wanted = c.ids.toSet()
+                log("want ${c.ids.size} from ${s.peerNode}")
                 val eligible = engine.inventory(now(), elapsed()).toSet()
                 engine.entries().filter { it.event.id in eligible && it.event.id in wanted }
                     .sortedWith(compareBy<StoredBundle> { AtRepository.deliveryExpiresAt(it.event) }.thenBy { it.bytes.size })
@@ -87,7 +93,9 @@ internal class Exchange(
                         val id = entry.event.id
                         if (elapsed() - (s.sent[id] ?: -30_000L) < 10_000) return@forEach
                         val bundle = engine.forward(id, now(), elapsed()) ?: return@forEach
-                        if (bundle.size <= s.peerMax && send(s, bundle)) s.sent[id] = elapsed()
+                        val ok = bundle.size <= s.peerMax && send(s, bundle)
+                        log("bundle ${id.take(8)} ${bundle.size}B to ${s.peerNode}: ${if (ok) "queued" else "NOT sent"}")
+                        if (ok) s.sent[id] = elapsed()
                     }
             }
             "ack" -> s.sent.remove(c.ids.single())
@@ -97,6 +105,7 @@ internal class Exchange(
     private fun bundle(s: Session, bytes: ByteArray) {
         require(s.peerNode != null) { "HELLO required" }
         val entry = engine.accept(bytes, now(), elapsed())
+        log("bundle ${bytes.size}B from ${s.peerNode}: ${if (entry == null) "duplicate" else "accepted ${entry.event.id.take(8)}"}")
         if (entry == null) { inventory(s); return }
         send(s, Wire.encode(Control("ack", listOf(entry.event.id))))
         note("署名検証・保存 ${entry.event.id.take(8)} / 観測 hop ${entry.hop}")
@@ -104,6 +113,8 @@ internal class Exchange(
         broadcastInventory()
     }
 
+    // android.util.Log throws "not mocked" in JVM unit tests; runCatching keeps Exchange testable there.
+    private fun log(text: String) { runCatching { Log.i("Exchange", text) } }
     private fun inventory(s: Session) { send(s, Wire.encode(Control("inventory", engine.inventory(now(), elapsed()).takeLast(128)))) }
     private fun send(s: Session, frame: ByteArray): Boolean = s.link.send(s.handle, frame)
     private fun drop(s: Session) { sessions.remove(s.link to s.handle); s.link.disconnect(s.handle) }
