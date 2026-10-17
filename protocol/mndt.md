@@ -1,7 +1,10 @@
 # MNDT draft-00
 ## Nostr Mesh Delay-Tolerant Transport Protocol
 
-**状態:** 草案  
+**状態:** 初期提案（参考資料・未確定）
+
+> 本文は初期の配送プロファイル案を保存したものです。現在の全体像は [仕様群の索引](README.md) と [全体概要](0000-overview.md) を参照してください。本文のタグ、CDDL、EID、hop 規則、ブロック番号等はまだ採用・標準適合性を確認していません。特に atproto 復元情報、配送同値による重複抑制、削除・訂正、双方向配送は今後の改訂対象です。合意済み事項と矛盾する場合は [リポジトリ正本モデル](0001-repository-model.md) を優先します。
+
 **対象:** Bluetooth、孤立 Wi-Fi 等の低速・断続ネットワークにおいて、署名済み Nostr event を BPv7 で配送し、Gateway から通常の Nostr Relay 網へ投入する仕組み。
 
 ## 1. 目的
