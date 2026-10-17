@@ -1,0 +1,25 @@
+{
+  "name": "@mosimo/pds",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node main.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@atproto/crypto": "0.4.5",
+    "@atproto/repo": "0.10.3",
+    "@ipld/dag-cbor": "9.2.5",
+    "multiformats": "13.4.1",
+    "nostr-tools": "2.23.3",
+    "pg": "8.16.3",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.14"
+  }
+}

@@ -1,0 +1,6 @@
+# Build context is pds/. Only dependency manifests and runtime modules belong in it.
+*
+!package.json
+!package-lock.json
+!*.mjs
+*.test.mjs
