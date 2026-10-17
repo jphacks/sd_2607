@@ -1,6 +1,6 @@
 # 0011: 著者署名付き拡張ブロック
 
-状態: draft-01 — 拡張の意味は既存合意に基づく。共通型・フィールド名・例は提案であり、登録済み wire 仕様ではない。
+状態: draft-01 — 拡張を Lexicon の open union の要素として表す方式は合意済み。正式な型識別子・版管理・個別フィールドは未確定。
 
 ## 要旨
 
@@ -17,28 +17,31 @@
 | Nostr タグ／atproto レコードで保持 | BPv7 の標準ブロック等で保持 |
 | 未知でも削除・書換えしない | BPv7 の処理フラグ等に従う |
 
-## 2. 共通型（提案）
+## 2. 共通構造（合意済み）
+
+投稿の `extensions` は、Lexicon の open union を要素とする配列とする。各要素は `$type` で型を識別するオブジェクトであり、拡張固有のフィールドをそのオブジェクトへ直接格納する。拡張本体を一律に CBOR bytes へ包む方式や、`{ type, version, value }` の共通の包みは採用しない。
 
 ```ts
-type Extension<T = DataObject> = {
-  type: string;
-  version: integer;
-  value: T;
-};
+// 説明用の型。未知の型も許容するため、既知型だけの閉じた集合ではない。
+type Extension = KnownExtension | UnknownExtension;
+type KnownExtension = OriginExtension | AreaExtension | ValidityExtension
+  | AnnotationExtension | SourceExtension | PublicInformationExtension;
+type UnknownExtension = { $type: string; [field: string]: DataValue };
 ```
 
-`DataObject` は atproto データモデルの値からなる文字列キーのオブジェクトであり、任意の JavaScript object ではない。float や未定義値を含めない。`Text`・`Timestamp`・`Decimal`・`Bytes`・`Cid` 等は [0010](0010-core.md) の型を使う。
+`DataValue` は atproto データモデルの値であり、float や未定義値を含めない。未知拡張もそのモデルに適合するオブジェクトとして保持する。`Text`・`Timestamp`・`Decimal`・`Bytes`・`Cid` 等は [0010](0010-core.md) の型を使う。身元証明の型は内容が定まり次第、既知型へ追加できる。
 
-- `type` は拡張の意味を識別する。以下の短い名前は説明用で、最終識別子・名前空間は未決定。
-- `version` はその拡張の構造の版であり、基本プロトコル版や原情報の版とは別。例の `1` は提案値。
-- `value` は拡張固有の型を持つ。入れ子構造の具体的な Lexicon への表現は [0012](0012-bindings.md) に分離する。
+- `$type` は完全修飾の Lexicon 型参照（NSID、必要なら `#定義名`）を持つ。以下の短い `area` 等は説明用名称である。例の `org.example.disaster.defs#area` 等は架空の識別子で、正式な名前空間の採用を意味しない。
+- 個別型の例にある `$type: string` は説明用であり、正式なスキーマでは各型を区別する特定の参照になる。
+- 旧案の共通 `version` フィールドは置かない。拡張の版管理・互換性を壊す変更の識別方法は未決定で、基本プロトコル版や原情報の版とは別に決める。
+- 拡張は投稿内の入れ子のオブジェクトであり、別レコード・別 Nostr イベントにはしない。
 - 拡張一覧は配列として保持し、中継時に並べ替えない。型ごとの多重出現・重複時の扱いはスキーマ確定時に固定し、受信順による勝手な上書き規則は作らない。
 
-未知の `type` や拡張の版は解釈せず、元の署名対象表現を保持する。これは未知の基本プロトコル版まで対応済みとする意味ではない。署名後に未知フィールドを落としたり、解析済みの既知項目だけで作り直したりしない。
+未知の `$type` や既知型の未知フィールドも元の署名対象表現を保持する。保持・中継用の元オブジェクトと、表示用に読み取った既知フィールドを区別し、既知項目だけで元データを作り直さない。これは未知の基本プロトコル版まで対応済みとする意味ではない。
 
 ## 3. 拡張の一覧
 
-| 説明用 type | 用途 | 未対応・省略時 | 詳細 |
+| 拡張の説明用名称 | 用途 | 未対応・省略時 | 詳細 |
 |---|---|---|---|
 | `origin` | 発信端末が任意公開する発信地点 | 位置不明。本文は利用可能 | §4 |
 | `area` | 内容の影響範囲 | 地域不明。全世界対象にはしない | §5、[0004](0004-geography.md) |
@@ -53,7 +56,8 @@ type Extension<T = DataObject> = {
 ## 4. 発信地点 `origin`（型案）
 
 ```ts
-type OriginValue = {
+type OriginExtension = {
+  $type: string;
   latitude: Decimal;
   longitude: Decimal;
   accuracyMeters?: Decimal;
@@ -75,21 +79,18 @@ type Circle = {
   radiusMeters: Decimal;
 };
 type GeohashCell = { shape: "geohash"; hash: string };
-type AreaValue = { regions: (Circle | GeohashCell)[] };
+type AreaExtension = { $type: string; regions: (Circle | GeohashCell)[] };
 ```
 
 `regions` の意味は和集合である。円とセルを混在できる。中心座標は WGS 84 の度、半径はメートル。行政区域コード・多角形・除外領域は初期の共通範囲型に含めない。
 
 ```json
 {
-  "type": "area",
-  "version": 1,
-  "value": {
-    "regions": [
-      { "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" },
-      { "shape": "geohash", "hash": "xn76" }
-    ]
-  }
+  "$type": "org.example.disaster.defs#area",
+  "regions": [
+    { "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" },
+    { "shape": "geohash", "hash": "xn76" }
+  ]
 }
 ```
 
@@ -102,7 +103,8 @@ type AreaValue = { regions: (Circle | GeohashCell)[] };
 ## 6. 情報の有効期間 `validity`（型案）
 
 ```ts
-type ValidityValue = {
+type ValidityExtension = {
+  $type: string;
   startsAt?: Timestamp;
   endsAt?: Timestamp;
 };
@@ -119,7 +121,8 @@ type PostReference =
   | { network: "atproto"; uri: AtUri; cid?: Cid }
   | { network: "nostr"; eventId: NostrEventId };
 
-type AnnotationValue = {
+type AnnotationExtension = {
+  $type: string;
   relation: "correction" | "supplement" | "endorsement";
   target: PostReference;
 };
@@ -140,3 +143,7 @@ type AnnotationValue = {
 新しい拡張は目的・型・版・省略時の意味・単位・本文へのフォールバックを文書化する。既存拡張の意味を変える場合は同じ版のまま運用しない。公開登録の手続き・名前空間・互換な版変更の規則は未決定である。
 
 著者拡張の正本は署名付き投稿の一部である。BPv7 独自ブロックにだけ格納すると Nostr 搬出時に失われるため、そのような配置を著者情報の唯一の保存先にはしない。検索用タグは署名時点で含める補助情報であり、中継者が付け足すものではない。
+
+## 10. 参照
+
+- [atproto Lexicon — union・When to use `$type`・Lexicon Evolution](https://atproto.com/specs/lexicon)（2026-10-17 確認）

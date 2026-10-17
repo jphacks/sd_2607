@@ -36,7 +36,9 @@ type PostRecord = {
 };
 ```
 
-これは論理構造である。正式 Lexicon では既知の拡張に型を割り当て、未知拡張の保持方法を含めて定義する。任意のオブジェクトをそのまま Lexicon の固定スキーマへ記述できると仮定しない。拡張一覧を open union にするか、拡張本体を bytes にして別スキーマとするかは未確定。
+拡張一覧 `extensions` は、Lexicon の open union を要素とする配列とする方式を採用済み。各要素は `$type` 付きオブジェクトとし、既知の拡張は参照先の型として定義し、未知の型もそのまま保持する。Lexicon の `union.closed` は `false`（省略時も open）とする。拡張本体を一律に bytes に包む方式は採用しない。
+
+個別の型識別子・名前空間・版管理・フィールド・上限は未確定である。型付き表示データを再出力して未知の型・フィールドを落とさず、元データを保持する。具体例は [0011](0011-extensions.md) に示す。
 
 レコードを標準の atproto CBOR で符号化して record CID を得る。repository path は `<独自collection>/<record-key>`。本文投稿ごとに新しい path へ追加し、既存投稿の更新には使わない。NSID・record key の生成方式・上限は未決定である。
 
@@ -179,6 +181,7 @@ flowchart TD
 
 - [atproto Data Model](https://atproto.com/specs/data-model)（2026-10-17 確認）
 - [atproto Repository](https://atproto.com/specs/repository)（2026-10-17 確認）
+- [atproto Lexicon](https://atproto.com/specs/lexicon)（2026-10-17 確認）
 - [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md)（2026-10-17 確認）
 - [RFC 8949 — CBOR](https://www.rfc-editor.org/rfc/rfc8949.html)
 - [RFC 4648 — Base Encodings](https://www.rfc-editor.org/rfc/rfc4648.html)
