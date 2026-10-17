@@ -8,7 +8,7 @@ const key = await Secp256k1Keypair.create();
 function fixture({ data = {}, doc = {}, config = {} } = {}) {
   const calls = [];
   const didDoc = { id: did, service: [{ serviceEndpoint: 'http://169.254.169.254/latest/meta-data/' }], ...doc };
-  const plcData = { did, signingKeys: { atproto: key.did() },
+  const plcData = { did, verificationMethods: { atproto: key.did() },
     services: { atproto_pds: { type: 'AtprotoPersonalDataServer', endpoint: 'https://PDS.example:443/' } },
     alsoKnownAs: ['https://ignored.example', 'at://alice.example'], ...data };
   const resolve = createIdentityResolver({ plcUrl: 'https://PLC.example:443/ignored?ignored=1', ...config }, async url => {
@@ -47,7 +47,8 @@ test('rejects unsupported or URL-shaped identifiers before making any request', 
 test('rejects mismatched identity, absent signing key, and wrong PDS service type', async () => {
   for (const options of [
     { data: { did: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa' } }, { doc: { id: 'did:web:other.example' } },
-    { data: { signingKeys: {} } }, { data: { signingKeys: { atproto: 'not-a-did-key' } } },
+    { data: { verificationMethods: {} } }, { data: { verificationMethods: { atproto: 'not-a-did-key' } } },
+        { data: { verificationMethods: undefined, signingKeys: { atproto: key.did() } } },
     { data: { services: {} } },
     { data: { services: { atproto_pds: { type: 'OtherService', endpoint: 'https://pds.example' } } } },
   ]) await assert.rejects(fixture(options).resolve(did), /Invalid PLC identity/);
