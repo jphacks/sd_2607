@@ -11,7 +11,7 @@
 | [0010: 基本プロトコル](0010-core.md) | 基本仕様 | 投稿単位、基本型、作成から配送・公開まで |
 | [0011: 著者署名付き拡張ブロック](0011-extensions.md) | 拡張仕様 | 位置・影響範囲・有効期間・注釈等の型と意味 |
 | [0012: atproto・Nostr・CBOR のデータ表現](0012-bindings.md) | 形式ごとの対応 | 本文・レコード・path・commit の配置とサイズ削減案 |
-| [MNDT: BPv7 メッシュ配送](mndt.md) | 配送仕様 | payload と可変な配送状態、接触・中継・ゲートウェイ |
+| [MNDT: BPv7 メッシュ配送](mndt.md) | 配送仕様 | BLE GATT・接続済み LAN の探索、任意の Nearby 切替、payload と配送状態、保存・中継・ゲートウェイ |
 | [0013: 公的情報の取り込みと出典](0013-public-information.md) | 外部形式との対応 | CAP・EDXL-DE・気象庁 XML のマッピングと具体例、BSAF の AppView 統合 |
 | [0014: 公式名前空間と識別子](0014-namespaces.md) | 名前の割り当て | `mosimo.oriom.dev` に基づく Lexicon・タグの正式な名前 |
 
