@@ -26,7 +26,7 @@ CAP、EDXL、気象庁防災情報XMLから、人が読める本文と任意の�
 ### 2.1 既存合意
 
 - 初期仕様は公開情報のみを対象とし、限定公開・暗号化・個別通信を提供しない。地理情報はアクセス制御ではない。
-- 本プロトコルのatproto表現は独自Lexiconを本体とする。NSID、拡張の登録名、上限、wire配置は未決定。
+- 本プロトコルのatproto表現は独自Lexiconを本体とする。公式 NSID と型名は [0014](0014-namespaces.md) に割り当て済み。上限・個別のwire配置には未決定事項が残る。
 - 通常投稿・訂正等は、1投稿につき1レコード追加・1 commit・1 Nostr投稿イベント。本文投稿は `kind: 1`、`content` は人が読める本文とする。複数投稿のバッチcommitは初期仕様に設けない。
 - 訂正は新しい投稿であり、過去のレコードを上書きしない。取消の通知、期限切れ、著者による削除要求は別の概念である。
 - 通常投稿の署名付き配送期限は必須。情報の有効期間は任意であり、省略は期間不明を意味する。配送期限から有効期間を補わない。
@@ -73,7 +73,7 @@ type Post = {
 };
 ```
 
-`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。JSON例の `org.example.disaster.defs#source` 等は架空の Lexicon 型参照である。正式な識別子と版管理は未決定だが、`$type` 付きオブジェクトを open union に格納する方式は合意済みである。
+`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。公式の型参照は [0014](0014-namespaces.md) に従う。例えば出典は `dev.oriom.mosimo.defs#source` とする。版管理・個別のスキーマには未決定事項が残るが、open union と自己完結したタグによる運搬は合意済みである。
 
 本書では、変換投稿の `createdAt` を変換者が新規投稿を作成した時刻とする案を使う。原発表時刻・取得時刻・現象発生時刻を別途保持する。配送期限は運用者が投稿時に絶対時刻として確定し、原情報の `expires` 等と同一視しない。具体的な既定期間や上限値は定めない。
 
@@ -92,7 +92,7 @@ type SourceRef = {
 type Digest = { algorithm: string; value: Bytes };
 
 type SourceExtension = {
-  $type: string;                 // 正式な型識別子は未決定
+  $type: "dev.oriom.mosimo.defs#source";
   document: SourceRef;           // 本文・構造化情報の直接の出典
   containers?: SourceRef[];      // 外側から内側の配布容器。内容の著者とは別
   retrievedFrom: string;         // 実際の取得URL
@@ -116,7 +116,7 @@ type SourceExtension = {
 
 ```ts
 type PublicInformationExtension = {
-  $type: string;           // 正式な型識別子は未決定
+  $type: "dev.oriom.mosimo.defs#publicInformation";
   status: string;          // 実情報・訓練等。原形式の値を保持
   messageType: string;     // 発表・更新・取消等。原形式の値を保持
   scope: string;           // 原形式の公開区分。内部処理では限定・不明も区別
@@ -335,7 +335,7 @@ type BsafAppViewInput = {
   "deliveryExpiresAt": "2026-10-17T04:00:00Z",
   "extensions": [
     {
-      "$type": "org.example.disaster.defs#source",
+      "$type": "dev.oriom.mosimo.defs#source",
       "document": {
         "format": "cap-1.2",
         "senderId": "alerts@example.org",
@@ -361,7 +361,7 @@ type BsafAppViewInput = {
       ]
     },
     {
-      "$type": "org.example.disaster.defs#publicInformation",
+      "$type": "dev.oriom.mosimo.defs#publicInformation",
       "status": "Actual",
       "messageType": "Alert",
       "scope": "Public",
@@ -387,11 +387,11 @@ type BsafAppViewInput = {
       }
     },
     {
-      "$type": "org.example.disaster.defs#area",
+      "$type": "dev.oriom.mosimo.defs#area",
       "regions": [{ "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 }]
     },
     {
-      "$type": "org.example.disaster.defs#validity",
+      "$type": "dev.oriom.mosimo.defs#validity",
       "startsAt": "2026-10-17T03:00:00Z",
       "endsAt": "2026-10-17T06:00:00Z"
     }
@@ -449,7 +449,7 @@ CAP・DEの多角形、気象庁やBSAFの地域コードは、そのまま共�
 ## 9. 残る重要な判断
 
 1. **変換プロファイルの固定:** 入力仕様の版、気象庁の電文種別、CAPの言語・対象別分割、本文生成、原電文ID・版の対応、変換規則の公開方法。
-2. **拡張とbindings:** `source`・`public-information` の実スキーマ、参照表現、登録名、版、サイズ上限、Bytes 項目・時刻項目のタグ名と署名対象への配置。Bytes の独自タグでの文字列符号化は0012 §3.5の合意に従う。`area`・`validity`・`annotation` との接続。
+2. **拡張とbindings:** `source`・`public-information` の実スキーマ、参照表現、版、サイズ上限、Bytes 項目・時刻項目のタグ名と署名対象への配置。Bytes の独自タグでの文字列符号化は0012 §3.5の合意に従う。`area`・`validity`・`annotation` との接続。
 3. **公開条件の解釈:** DEの自由記述の機密区分・宛先・役割・組織固有プロファイルから公開可否を決める運用。限定内容を取り除いた再編集の可否は自動承認しない。
 4. **原文と取得証言:** 原文の保存場所・保持期間・ハッシュ対象・取得と変換の証言形式。原文全量配送と完全可逆変換は未合意のままとする。
 5. **信頼と同値配送:** 信頼リストの発行・更新・失効、機関鍵の認証、意味正規化、同値キー、異なる変換者の署名・commit・適用元 CID・レコード・path の保持。

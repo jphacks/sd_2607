@@ -1,6 +1,6 @@
 # 0011: 著者署名付き拡張ブロック
 
-状態: draft-01 — 拡張を Lexicon の open union の要素として表す方式は合意済み。正式な型識別子・版管理・個別フィールドは未確定。
+状態: draft-01 — 拡張を Lexicon の open union の要素として表す方式は合意済み。公式の型識別子と共通タグ接頭辞は [0014](0014-namespaces.md) に割り当て済み。版管理・個別フィールドには未決定事項が残る。
 
 ## 要旨
 
@@ -31,8 +31,8 @@ type UnknownExtension = { $type: string; [field: string]: DataValue };
 
 `DataValue` は atproto データモデルの値であり、float や未定義値を含めない。未知拡張もそのモデルに適合するオブジェクトとして保持する。`Text`・`Timestamp`・`Microdegrees`・`Millimeters`・`Bytes`・`Cid` 等は [0010](0010-core.md) の型を使う。身元証明の型は内容が定まり次第、既知型へ追加できる。
 
-- `$type` は完全修飾の Lexicon 型参照（NSID、必要なら `#定義名`）を持つ。以下の短い `area` 等は説明用名称である。例の `org.example.disaster.defs#area` 等は架空の識別子で、正式な名前空間の採用を意味しない。
-- 個別型の例にある `$type: string` は説明用であり、正式なスキーマでは各型を区別する特定の参照になる。
+- `$type` は完全修飾の Lexicon 型参照（NSID、必要なら `#定義名`）を持つ。以下の短い `area` 等は説明用名称である。公式型の名前は [0014](0014-namespaces.md) に従い、影響範囲は `dev.oriom.mosimo.defs#area` 等を使う。
+- 個別型の `$type` は割り当て済みの型参照を使う。個別のフィールド・上限が未確定のため、型名の確定だけでスキーマが公開可能になったとは扱わない。
 - 旧案の共通 `version` フィールドは置かない。拡張の版管理・互換性を壊す変更の識別方法は未決定で、基本プロトコル版や原情報の版とは別に決める。
 - 拡張は投稿内の入れ子のオブジェクトであり、別レコード・別 Nostr イベントにはしない。
 - 拡張一覧は配列として保持し、中継時に並べ替えない。同じ型の複数要素も独立して保持し、運搬時に統合・上書き・重複削除しない。個別の既知型が意味上許す多重性は別途定める。
@@ -57,7 +57,7 @@ type UnknownExtension = { $type: string; [field: string]: DataValue };
 
 ```ts
 type OriginExtension = {
-  $type: string;
+  $type: "dev.oriom.mosimo.defs#origin";
   latitudeMicrodegrees: Microdegrees;
   longitudeMicrodegrees: Microdegrees;
   accuracyMillimeters?: Millimeters;
@@ -79,14 +79,14 @@ type Circle = {
   radiusMillimeters: Millimeters;
 };
 type GeohashCell = { shape: "geohash"; hash: string };
-type AreaExtension = { $type: string; regions: (Circle | GeohashCell)[] };
+type AreaExtension = { $type: "dev.oriom.mosimo.defs#area"; regions: (Circle | GeohashCell)[] };
 ```
 
 `regions` の意味は和集合である。円とセルを混在できる。中心座標は WGS 84 の100万分の1度、半径はミリメートル単位の整数として保存する。行政区域コード・多角形・除外領域は初期の共通範囲型に含めない。
 
 ```json
 {
-  "$type": "org.example.disaster.defs#area",
+  "$type": "dev.oriom.mosimo.defs#area",
   "regions": [
     { "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 },
     { "shape": "geohash", "hash": "xn76" }
@@ -104,7 +104,7 @@ type AreaExtension = { $type: string; regions: (Circle | GeohashCell)[] };
 
 ```ts
 type ValidityExtension = {
-  $type: string;
+  $type: "dev.oriom.mosimo.defs#validity";
   startsAt?: Timestamp;
   endsAt?: Timestamp;
 };
@@ -122,7 +122,7 @@ type PostReference =
   | { network: "nostr"; eventId: NostrEventId };
 
 type AnnotationExtension = {
-  $type: string;
+  $type: "dev.oriom.mosimo.defs#annotation";
   relation: "correction" | "supplement" | "endorsement";
   target: PostReference;
 };
@@ -140,7 +140,7 @@ type AnnotationExtension = {
 
 ## 9. 拡張の追加と配置
 
-Nostr の既定の運び方は、1拡張オブジェクト＝1自己完結タグとする。タグ名は共通接頭辞と完全修飾の `$type`、値は `$type` 以外の全フィールドの atproto CBOR を Base64（paddingなし）にしたものとする。接頭辞・区切りの具体構文は未確定。拡張タグの出現順から `extensions` 配列を構成し、位置番号は要求しない。詳細は [0012 §3.2](0012-bindings.md#32-項目拡張ごとのタグ配置方式合意済み) に従う。
+Nostr の既定の運び方は、1拡張オブジェクト＝1自己完結タグとする。タグ名は共通接頭辞 `mosimo.oriom.dev:ext:` と完全修飾の `$type`、値は `$type` 以外の全フィールドの atproto CBOR を Base64（paddingなし）にしたものとする。接頭辞へ元の `$type` をそのまま連結する。割り当ては [0014](0014-namespaces.md) に従う。拡張タグの出現順から `extensions` 配列を構成し、位置番号は要求しない。詳細は [0012 §3.2](0012-bindings.md#32-項目拡張ごとのタグ配置方式合意済み) に従う。
 
 拡張は任意であり、誰でも自身の衝突しない Lexicon 名前空間で定義できる。共通管理者の承認や、全クライアント・PDS への型一覧・専用コードの追加は要求しない。未知の拡張も共通の運び方だけで保持・再構成でき、意味を利用するアプリだけがその型に対応する。受信時のオンラインスキーマ取得も必須にしない。
 
