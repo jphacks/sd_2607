@@ -47,7 +47,9 @@ data class SecretKeys(val nostr: ByteArray, val atproto: ByteArray, val plc: Byt
     }
 }
 
-data class RepositoryState(val records: Map<String, String> = emptyMap(), val previousCommit: String? = null, val lastRevMicros: Long = 0)
+/** [clockId] is the TID clock identifier, chosen once per repository and persisted with it. */
+data class RepositoryState(val records: Map<String, String> = emptyMap(), val previousCommit: String? = null, val lastRevMicros: Long = 0,
+    val clockId: Int = random.nextInt(1024))
 data class CreatedPost(val event: NostrEvent, val repository: RepositoryState)
 
 /** The ordinary NIP-01 fields; tags are never normalized or sorted. */
@@ -114,6 +116,8 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     val initialOperationJson: String = identity.second
     val nostrPubkey: String = hex(secp.pubkeyCreate(keys.nostr).copyOfRange(1, 33))
     val bindingJson: String = AtRepository.binding(keys, did, nostrPubkey)
+    /** Compressed atproto signing key; what a PDS would read from the DID document. */
+    val atprotoPubkey: ByteArray get() = secp.pubKeyCompress(secp.pubkeyCreate(keys.atproto))
 
     fun createPost(text: String, nowMillis: Long, previous: RepositoryState = RepositoryState(),
         deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400),
@@ -121,12 +125,7 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
         require(nowMillis >= 0 && utf8(text).size <= 16384)
         require(deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L) { "Invalid delivery deadline" }
         val restored = AtRepository.create(keys, did, text, nowMillis, previous, deliveryExpiresAtSeconds, extensions)
-        // TODO(undecided): experimental tag values, EID and lifetime; old signed events are never rewritten.
-        val tags = frozenTags(listOf(
-            listOf("mndt", "1", "dtn://mndt.local/~demo", "8", "1"),
-            listOf("mndt-exp", deliveryExpiresAtSeconds.toString()),
-            listOf("t", "mndt-experimental-v2"),
-        ) + restored.first)
+        val tags = frozenTags(restored.first)
         val digest = sha256(nostrSigningBytes(nostrPubkey, nowMillis / 1000, 1, tags, text))
         val sig = secp.signSchnorr(digest, keys.nostr, ByteArray(32).also(random::nextBytes))
         val event = NostrEvent(hex(digest), nostrPubkey, nowMillis / 1000, 1, tags, text, hex(sig))
@@ -135,11 +134,21 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     }
 }
 
-/** TODO(undecided): provisional MNDT compact wire array from protocol/mndt.md. */
+/** protocol/0012 §4.2 mesh encoding v1: fixed 7-element array with the §4.2 reversible tag-value typing. */
 object EventCodec {
+    private const val COMMIT = AtRepository.TAG_PREFIX + "commit"
+    private const val VERSION = AtRepository.TAG_PREFIX + "version"
+    private fun bytesTag(name: String) = name == COMMIT || name.startsWith(AtRepository.EXT_PREFIX) && name.length > AtRepository.EXT_PREFIX.length
+
     fun encode(event: NostrEvent): ByteArray {
         require(event.verify()) { "Invalid Nostr event" }
-        return CanonicalCbor.encode(listOf(1, unhex(event.pubkey, 32), event.createdAt, event.kind, event.tags, event.content, unhex(event.sig, 64)))
+        val tags = event.tags.map { tag ->
+            if (tag.size != 2) tag
+            else if (bytesTag(tag[0])) listOf(tag[0], B64.decode(tag[1]) ?: tag[1])
+            else if (tag[0] == VERSION && tag[1] == "1") listOf(tag[0], 1L)
+            else tag
+        }
+        return CanonicalCbor.encode(listOf(1, unhex(event.pubkey, 32), event.createdAt, event.kind, tags, event.content, unhex(event.sig, 64)))
     }
     fun decode(bytes: ByteArray): NostrEvent {
         val a = CanonicalCbor.decode(bytes) as? List<*> ?: error("Expected payload array")
@@ -147,7 +156,18 @@ object EventCodec {
         val pubkey = hex((a[1] as? ByteArray ?: error("Expected pubkey bytes")).also { require(it.size == 32) })
         val created = a[2] as? Long ?: error("Expected time integer")
         val kind = a[3] as? Long ?: error("Expected kind integer"); require(kind in 0..65535)
-        val tags = (a[4] as? List<*> ?: error("Expected tags")).map { t -> (t as? List<*> ?: error("Expected tag array")).map { it as? String ?: error("Expected tag string") } }
+        val tags = (a[4] as? List<*> ?: error("Expected tags")).map { t ->
+            val tag = t as? List<*> ?: error("Expected tag array")
+            val name = tag.firstOrNull() as? String ?: error("Expected tag name")
+            tag.mapIndexed { i, v ->
+                when {
+                    v is String -> v
+                    i == 1 && tag.size == 2 && v is ByteArray && bytesTag(name) -> B64.encode(v)
+                    i == 1 && tag.size == 2 && v == 1L && name == VERSION -> "1"
+                    else -> error("Unexpected typed tag value")
+                }
+            }
+        }
         val content = a[5] as? String ?: error("Expected content")
         val sig = hex((a[6] as? ByteArray ?: error("Expected signature bytes")).also { require(it.size == 64) })
         val id = hex(sha256(nostrSigningBytes(pubkey, created, kind.toInt(), tags, content)))

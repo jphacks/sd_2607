@@ -1,5 +1,6 @@
 package org.mndt.mesh
 
+import org.mndt.core.AtRepository
 import org.mndt.core.NostrEvent
 
 internal sealed interface RelayReply {
@@ -14,7 +15,7 @@ internal sealed interface RelayReply {
 internal class RelaySubscription {
     companion object {
         // TODO(undecided): demo retrieval filter and local limits, not a shared relay profile.
-        const val TAG = "mndt-experimental-v2"
+        const val TAG = AtRepository.NAMESPACE
         const val INITIAL_LIMIT = 32
         const val MAX_EVENTS = 64
         const val MAX_BYTES = 2 * 1024 * 1024

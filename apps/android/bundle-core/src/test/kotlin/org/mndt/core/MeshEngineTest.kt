@@ -13,7 +13,7 @@ class MeshEngineTest {
     @Test fun forwardingRemovesReceivedPreviousNodeWithoutChangingStoredBundle() {
         val source = MeshEngine().originate(post(), now, 0)
         val wire = cborUnmarshalBundle(source.bytes)
-            .addBlock(previousNodeBlock(java.net.URI("dtn://mndt.local/old-peer")).crcType(CRCType.CRC32)).cborMarshal()
+            .addBlock(previousNodeBlock(java.net.URI("dtn://old-peer/")).crcType(CRCType.CRC32)).cborMarshal()
         val relay = MeshEngine()
         val received = relay.accept(wire, now, 0)!!
         assertNotNull(cborUnmarshalBundle(received.bytes).getPreviousNodeBlockData())
@@ -22,7 +22,7 @@ class MeshEngineTest {
     }
 
     @Test fun acceptedCompactEventCanExceedNearbyLimitInJson() {
-        val seed = post().copy(content = "\u0001".repeat(16_000), tags = post().tags.filterNot { it[0] == "atproto" })
+        val seed = post().copy(content = "\u0001".repeat(16_000), tags = post().tags)
         val digest = sha256(seed.signingBytes())
         val event = seed.copy(id = hex(digest), sig = hex(secp.signSchnorr(digest, author.keys.nostr, ByteArray(32))))
         val stored = MeshEngine().originate(event, now, 0)
@@ -75,7 +75,7 @@ class MeshEngineTest {
         assertThrows(Exception::class.java) { MeshEngine().accept(entry.bytes + byteArrayOf(0), now, 0) }
         assertThrows(Exception::class.java) { MeshEngine().accept(byteArrayOf(0x5b, 0x7f, -1, -1, -1, -1, -1, -1, -1), now, 0) }
         val changed = cborUnmarshalBundle(entry.bytes)
-        changed.primaryBlock.destination = java.net.URI("dtn://mndt.local/~other")
+        changed.primaryBlock.destination = java.net.URI("dtn://mosimo.oriom.dev/~other")
         assertThrows(Exception::class.java) { MeshEngine().accept(changed.cborMarshal(), now, 0) }
         val crcTamper = entry.bytes.copyOf().also { it[it.lastIndex - 2] = (it[it.lastIndex - 2].toInt() xor 1).toByte() }
         assertThrows(Exception::class.java) { MeshEngine().accept(crcTamper, now, 0) }
@@ -96,12 +96,9 @@ class MeshEngineTest {
         assertThrows(Exception::class.java) { MeshEngine().accept(extended(0x14), now, 0) }
     }
 
-    @Test fun enforcesPerAuthorRateAndPriorityStorageQuota() {
+    @Test fun enforcesPerAuthorRate() {
         val a = MeshEngine()
         repeat(12) { index -> a.originate(post("message $index"), now, 0) }
         assertThrows(Exception::class.java) { a.originate(post("rate limited"), now, 0) }
-        repeat(20) { index -> a.originate(post("later $index"), now + 60_000L * (index / 12 + 1), 60_000L * (index / 12 + 1)) }
-        assertEquals(32, a.entries().size)
-        assertThrows(Exception::class.java) { a.originate(post("priority full"), now + 180_000, 180_000) }
     }
 }

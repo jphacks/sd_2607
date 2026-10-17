@@ -6,21 +6,23 @@ import java.time.Instant
 import java.util.Base64
 import java.util.Collections
 
-data class RepositoryChange(val path: String, val recordBytes: ByteArray, val commitBytes: ByteArray,
-    val applyFromCommit: String?, val atprotoPubkey: String) {
+data class RepositoryChange(val path: String, val recordBytes: ByteArray, val commitBytes: ByteArray, val applyFromCommit: String?) {
     val recordCid: String get() = cid(recordBytes)
     val commitCid: String get() = cid(commitBytes)
 }
 
-/** Standard v3 commits; the surrounding field-by-field MNDT bindings are experimental. */
+/** Standard v3 commits carried in the protocol/0012 §3.2.4 base tags of one kind-1 Nostr event. */
 object AtRepository {
-    // TODO(undecided): local binding version, tag namespace and Lexicon NSID/schema, not shared wire constants.
-    const val VERSION = "2"
-    const val TAG_PREFIX = "org.mndt.experimental.v2."
-    const val COLLECTION = "xxx.disaster.post"
-    const val MAX_RECORDS = 128
+    const val NAMESPACE = "mosimo.oriom.dev"
+    const val TAG_PREFIX = "$NAMESPACE:"
+    const val EXT_PREFIX = "${TAG_PREFIX}ext:"
+    const val COLLECTION = "dev.oriom.mosimo.post"
+    // ponytail: every post rebuilds the MST from all records (O(n)); keep persistent MST nodes if this grows.
+    const val MAX_RECORDS = 10_000
     private val b64 = Base64.getEncoder()
     private val b64url = Base64.getUrlEncoder().withoutPadding()
+    private val timestamp = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z")
+    private val tidPattern = Regex("[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}")
 
     internal fun identity(keys: SecretKeys, endpoint: String): Pair<String, String> {
         // TODO(undecided): demo-only endpoint; the generated DID is NOT registered here.
@@ -51,128 +53,93 @@ object AtRepository {
             "nostrSig" to hex(secp.signSchnorr(hash, keys.nostr, ByteArray(32).also(random::nextBytes)))))
     }
 
+    /** Returns the 0012 §3.2.4 tags (protocol `t` tag included) and the next repository state. */
     internal fun create(keys: SecretKeys, did: String, text: String, nowMillis: Long, previous: RepositoryState,
         deliveryExpiresAtSeconds: Long, extensions: List<Map<String, Any?>>): Pair<List<List<String>>, RepositoryState> {
-        require(previous.records.size < MAX_RECORDS) { "Demo repository limit: $MAX_RECORDS records" }
+        require(previous.records.size < MAX_RECORDS) { "Repository limit: $MAX_RECORDS records" }
         require(previous.lastRevMicros >= 0 && (previous.previousCommit == null) == previous.records.isEmpty()) { "Inconsistent repository state" }
         previous.previousCommit?.let { cidBytes(it) }
         val micros = maxOf(Math.multiplyExact(nowMillis, 1000L), Math.addExact(previous.lastRevMicros, 1))
-        val rev = tid(micros)
+        // rev and record key are separate identifiers (0012 §2.1.1); one monotonic TID may serve both.
+        val rev = tid(micros, previous.clockId)
         val path = "$COLLECTION/$rev"
         require(path !in previous.records) { "Refusing record overwrite" }
+        val createdAt = Instant.ofEpochMilli(nowMillis).toString()
+        val deliveryExpiresAt = Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString()
         // Open unions need free-form data-model objects; do not rebuild them from known display fields.
-        val extensionTags = extensions.mapIndexed { index, extension ->
-            listOf(TAG_PREFIX + "extension:" + extensionType(extension), index.toString(), AtDataJson.encode(extension))
+        val extensionTags = extensions.map { extension ->
+            listOf(EXT_PREFIX + extensionType(extension), B64.encode(CanonicalCbor.encode(extension - "\$type")))
         }
-        // TODO(undecided): field name and UTC timestamp representation follow the draft's placement proposal.
-        val record = CanonicalCbor.encode(mapOf("\$type" to COLLECTION, "text" to text, "createdAt" to Instant.ofEpochMilli(nowMillis).toString(),
-            "deliveryExpiresAt" to Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString(), "extensions" to extensions))
-        val recordCid = cid(record)
-        val records = previous.records + (path to recordCid)
+        val record = CanonicalCbor.encode(mapOf("\$type" to COLLECTION, "text" to text, "createdAt" to createdAt,
+            "deliveryExpiresAt" to deliveryExpiresAt, "extensions" to extensions))
+        val records = previous.records + (path to cid(record))
         val unsigned = linkedMapOf<String, Any?>("did" to did, "version" to 3, "data" to CidLink(mstRoot(records)), "rev" to rev, "prev" to null)
         val signature = secp.sign(sha256(CanonicalCbor.encode(unsigned)), keys.atproto)
         val commit = CanonicalCbor.encode(unsigned + ("sig" to signature))
-        val commitCid = cid(commit)
         // No MST nodes/inclusion proof on this wire: the receiver rebuilds from its saved state.
         val tags = listOf(
-            listOf(TAG_PREFIX + "commit", b64.encodeToString(commit)),
-            listOf(TAG_PREFIX + "recordCid", recordCid),
+            listOf("t", NAMESPACE),
+            listOf(TAG_PREFIX + "version", "1"),
+            listOf(TAG_PREFIX + "commit", B64.encode(commit)),
             listOf(TAG_PREFIX + "base", previous.previousCommit ?: ""),
             listOf(TAG_PREFIX + "path", path),
-            listOf(TAG_PREFIX + "action", "create"),
-            listOf(TAG_PREFIX + "key", hex(compressed(keys.atproto))),
-            listOf(TAG_PREFIX + "type", COLLECTION),
-            listOf(TAG_PREFIX + "createdAt", Instant.ofEpochMilli(nowMillis).toString()),
+            listOf(TAG_PREFIX + "created-at", createdAt),
+            listOf(TAG_PREFIX + "delivery-expires-at", deliveryExpiresAt),
         )
-        return (tags + extensionTags) to RepositoryState(Collections.unmodifiableMap(records), commitCid, micros)
+        return (tags + extensionTags) to previous.copy(records = Collections.unmodifiableMap(records), previousCommit = cid(commit), lastRevMicros = micros)
     }
 
-    /**
-     * Checks Nostr, exact record bytes/CID/body and low-S compact ECDSA commit signature.
-     * The supplied key is NOT DID authentication. This does NOT establish MST inclusion:
-     * a receiver with the applyFromCommit state must separately rebuild and compare data.
-     */
-    fun verifyEnvelope(event: NostrEvent): Boolean = runCatching { restore(event); true }.getOrDefault(false)
+    /** The signed delivery deadline (0012 §3.2.4); null when the event lacks a valid one. */
+    fun deliveryExpiresAt(event: NostrEvent): Instant? = runCatching { Instant.parse(timestampTag(event, "delivery-expires-at")) }.getOrNull()
 
-    /** Restores exact bytes; neither DID authentication nor MST inclusion verification. */
-    fun restore(event: NostrEvent): RepositoryChange {
+    /**
+     * Checks Nostr, record reconstruction and commit shape. With [atprotoPubkey] (from the DID document) it also
+     * checks the low-S ECDSA commit signature. Neither is DID authentication nor MST inclusion.
+     */
+    fun verifyEnvelope(event: NostrEvent, atprotoPubkey: ByteArray? = null): Boolean =
+        runCatching { restore(event, atprotoPubkey); true }.getOrDefault(false)
+
+    /** Rebuilds the exact record/commit bytes from the 0012 §3.2.4 tags. */
+    fun restore(event: NostrEvent, atprotoPubkey: ByteArray? = null): RepositoryChange {
         require(event.verify() && event.kind == 1)
-        val legacy = event.tags.any { it.firstOrNull() == "atproto" }
-        val change = if (legacy) {
-            require(event.tags.none { it.firstOrNull()?.startsWith(TAG_PREFIX) == true }) { "Mixed binding versions" }
-            legacyChange(event)
-        } else {
-            require(event.tags.count { it == listOf("t", "mndt-experimental-v2") } == 1)
-            fun field(name: String): String = event.tags.single { it.firstOrNull() == TAG_PREFIX + name }
-                .also { require(it.size == 2) }[1]
-            require(field("action") == "create")
-            // TODO(undecided): per-type JSON tags with explicit array positions are local v2 bindings.
-            val extensions = event.tags.filter { it.firstOrNull()?.startsWith(TAG_PREFIX + "extension:") == true }.map { tag ->
-                require(tag.size == 3 && tag[1].matches(Regex("0|[1-9][0-9]{0,2}")))
-                val extension = AtDataJson.decode(tag[2]) as? Map<*, *> ?: error("Expected extension object")
-                require(tag[0] == TAG_PREFIX + "extension:" + extensionType(extension)) { "Extension type mismatch" }
-                tag[1].toInt() to extension
-            }.sortedBy { it.first }.mapIndexed { index, (position, extension) ->
-                require(position == index) { "Missing/duplicate extension position" }
-                extension
-            }
-            val record = mutableMapOf<String, Any?>("\$type" to field("type"), "text" to event.content, "createdAt" to field("createdAt"),
-                "deliveryExpiresAt" to Instant.ofEpochSecond(deliveryExpiry(event)).toString(), "extensions" to extensions)
-            for (tag in event.tags.filter { it.firstOrNull()?.startsWith(TAG_PREFIX + "field:") == true }) {
-                require(tag.size == 2)
-                val name = tag[0].removePrefix(TAG_PREFIX + "field:")
-                require(name !in record) { "Duplicate/overridden record field" }
-                record[name] = AtDataJson.decode(tag[1])
-            }
-            RepositoryChange(field("path"), CanonicalCbor.encode(record), decode64(field("commit")), field("base").ifEmpty { null }, field("key"))
-                .also { require(it.recordCid == field("recordCid")) { "Record binding mismatch" } }
+        require(event.tags.count { it == listOf("t", NAMESPACE) } == 1)
+        require(field(event, "version") == "1") { "Unsupported base version" }
+        val extensions = event.tags.filter { it.firstOrNull()?.startsWith(EXT_PREFIX) == true }.map { tag ->
+            require(tag.size == 2)
+            val fields = CanonicalCbor.decode(B64.decode(tag[1]) ?: error("Non-canonical Base64")) as? Map<*, *> ?: error("Expected extension object")
+            require("\$type" !in fields)
+            buildMap<String, Any?> { put("\$type", tag[0].removePrefix(EXT_PREFIX)); fields.forEach { (k, v) -> put(k as String, v) } }
+                .also { extensionType(it) }
         }
-        val record = CanonicalCbor.decode(change.recordBytes) as? Map<*, *> ?: error("Invalid record")
-        require(record.keys.containsAll(setOf("\$type", "text", "createdAt")) && record["\$type"] == COLLECTION && record["text"] == event.content)
-        if (record.containsKey("extensions")) {
-            val extensions = record["extensions"] as? List<*> ?: error("Expected extensions array")
-            extensions.forEach { extensionType(it as? Map<*, *> ?: error("Expected extension object")) }
-        }
-        require(Instant.parse(record["createdAt"] as String).epochSecond == event.createdAt)
-        if (record.containsKey("deliveryExpiresAt")) {
-            require(Instant.parse(record["deliveryExpiresAt"] as String) == Instant.ofEpochSecond(deliveryExpiry(event)))
-        }
+        val path = field(event, "path")
+        require(path.startsWith("$COLLECTION/") && tidPattern.matches(path.removePrefix("$COLLECTION/"))) { "Invalid repository path" }
+        val createdAt = timestampTag(event, "created-at")
+        require(Instant.parse(createdAt).epochSecond == event.createdAt)
+        val record = CanonicalCbor.encode(mapOf("\$type" to COLLECTION, "text" to event.content, "createdAt" to createdAt,
+            "deliveryExpiresAt" to timestampTag(event, "delivery-expires-at"), "extensions" to extensions))
+        val change = RepositoryChange(path, record, B64.decode(field(event, "commit")) ?: error("Non-canonical Base64"),
+            field(event, "base").ifEmpty { null })
         val commit = CanonicalCbor.decode(change.commitBytes) as? Map<*, *> ?: error("Invalid commit")
         require(commit.keys == setOf("did", "version", "data", "rev", "prev", "sig"))
         require(commit["version"] == 3L && commit["prev"] == null && commit["data"] is CidLink)
         cidBytes((commit["data"] as CidLink).value)
-        val did = commit["did"] as? String ?: error("Invalid DID")
-        require(did.matches(Regex("did:plc:[a-z2-7]{24}")))
-        val rev = commit["rev"] as? String ?: error("Invalid revision")
-        require(rev.matches(Regex("[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}")))
-        require(change.path == "$COLLECTION/$rev")
+        require((commit["did"] as? String ?: error("Invalid DID")).matches(Regex("did:plc:[a-z2-7]{24}")))
+        require(tidPattern.matches(commit["rev"] as? String ?: error("Invalid revision")))
         change.applyFromCommit?.let { cidBytes(it) }
-        val pub = unhex(change.atprotoPubkey, 33)
-        require(pub[0] == 2.toByte() || pub[0] == 3.toByte())
         val sig = commit["sig"] as? ByteArray ?: error("Invalid signature")
         require(sig.size == 64 && !secp.signatureNormalize(sig).second) { "Non-low-S signature" }
-        val unsigned = commit.filterKeys { it != "sig" }
-        require(secp.verify(sig, sha256(CanonicalCbor.encode(unsigned)), pub)) { "Invalid commit signature" }
+        if (atprotoPubkey != null) {
+            require(atprotoPubkey.size == 33 && (atprotoPubkey[0] == 2.toByte() || atprotoPubkey[0] == 3.toByte()))
+            require(secp.verify(sig, sha256(CanonicalCbor.encode(commit.filterKeys { it != "sig" })), atprotoPubkey)) { "Invalid commit signature" }
+        }
         return change
     }
 
-    private fun deliveryExpiry(event: NostrEvent): Long = event.tags.single { it.firstOrNull() == "mndt-exp" }
-        .also { require(it.size == 2 && it[1].matches(Regex("[1-9][0-9]{0,14}"))) }[1].toLong()
+    private fun field(event: NostrEvent, name: String): String =
+        event.tags.single { it.firstOrNull() == TAG_PREFIX + name }.also { require(it.size == 2) }[1]
+    private fun timestampTag(event: NostrEvent, name: String): String =
+        field(event, name).also { require(timestamp.matches(it)) { "Timestamp must be UTC with Z" }; Instant.parse(it) }
 
-    private fun legacyChange(event: NostrEvent): RepositoryChange {
-        val tag = event.tags.single { it.firstOrNull() == "atproto" }
-        require(tag.size == 3 && tag[1] == "1")
-        val env = strictJson(String(decode64(tag[2]), Charsets.UTF_8))
-        env.exactFields(setOf("version", "did", "atprotoPubkey", "path", "recordCid", "commitCid", "applyFromCommit", "recordCbor", "commitCbor"))
-        require(env["version"].integer() == 1L)
-        val change = RepositoryChange(env["path"].string(), decode64(env["recordCbor"].string()), decode64(env["commitCbor"].string()),
-            env["applyFromCommit"].takeUnless { it.isNull }?.string(), env["atprotoPubkey"].string())
-        require(change.recordCid == env["recordCid"].string() && change.commitCid == env["commitCid"].string())
-        require((CanonicalCbor.decode(change.commitBytes) as? Map<*, *>)?.get("did") == env["did"].string())
-        return change
-    }
-
-    // ponytail: rebuild all <=128 entries; use persistent MST nodes beyond the demo ceiling.
     internal fun mstRoot(records: Map<String, String>): String {
         require(records.size <= MAX_RECORDS)
         val sorted = records.entries.sortedBy { it.key }
@@ -207,10 +174,10 @@ object AtRepository {
         }
         return zeros
     }
-    private fun tid(micros: Long): String {
-        require(micros in 1..(Long.MAX_VALUE ushr 10)) { "Timestamp outside TID range" }
+    private fun tid(micros: Long, clockId: Int): String {
+        require(micros in 1..(Long.MAX_VALUE ushr 10) && clockId in 0..1023) { "Timestamp outside TID range" }
         val alphabet = "234567abcdefghijklmnopqrstuvwxyz"
-        val value = micros shl 10 // clock ID zero is sufficient for this single-writer installation.
+        val value = (micros shl 10) or clockId.toLong()
         return (12 downTo 0).joinToString("") { alphabet[((value ushr (it * 5)) and 31).toInt()].toString() }
     }
     private fun compressed(key: ByteArray): ByteArray = secp.pubKeyCompress(secp.pubkeyCreate(key))
@@ -222,8 +189,23 @@ object AtRepository {
         while (n.signum() != 0) { val qr = n.divideAndRemainder(BigInteger.valueOf(58)); out.append(alphabet[qr[1].toInt()]); n = qr[0] }
         return "did:key:z" + out.reverse()
     }
-    private fun decode64(s: String): ByteArray {
-        require(s.length <= CanonicalCbor.MAX_BYTES)
-        return Base64.getDecoder().decode(s).also { require(b64.encodeToString(it) == s) { "Non-canonical Base64" } }
+    internal fun extensionType(extension: Map<*, *>): String {
+        val type = extension["\$type"] as? String ?: error("Extension requires a Lexicon type reference")
+        val parts = type.split('#')
+        val nsid = parts[0]
+        require(nsid.length <= 317 && nsid.substringBeforeLast('.').length <= 253)
+        require(nsid.matches(Regex("[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(\\.[a-zA-Z][a-zA-Z0-9]{0,62})")))
+        require(parts.size == 1 || parts.size == 2 && parts[1] != "main" && parts[1].matches(Regex("[a-zA-Z][a-zA-Z0-9_]*")))
+        return type
+    }
+}
+
+/** protocol/0012 §3.5: RFC 4648 standard alphabet, no padding, one canonical spelling. */
+internal object B64 {
+    private val encoder = Base64.getEncoder().withoutPadding()
+    fun encode(bytes: ByteArray): String = encoder.encodeToString(bytes)
+    fun decode(s: String): ByteArray? {
+        if (s.length > CanonicalCbor.MAX_BYTES * 4 / 3 + 4 || !s.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' }) return null
+        return runCatching { Base64.getDecoder().decode(s) }.getOrNull()?.takeIf { encode(it) == s }
     }
 }

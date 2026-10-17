@@ -4,14 +4,13 @@ import io.nodle.dtn.bpv7.*
 import io.nodle.dtn.bpv7.extensions.*
 import java.net.URI
 
-// TODO(undecided): demo-only wire values and local resource policy, not protocol constants.
+// TODO(undecided): local resource policy; DESTINATION is the provisional EID proposed in protocol/mndt.md §9.
 object MeshPolicy {
-    const val DESTINATION = "dtn://mndt.local/~demo"
+    const val DESTINATION = "dtn://mosimo.oriom.dev/~post"
     const val MAX_BUNDLE_BYTES = 24_000
     // Internal snapshots may grow by at most eight bytes as the CBOR Bundle Age integer grows.
     const val MAX_SAVED_BUNDLE_BYTES = MAX_BUNDLE_BYTES + 8
     const val MAX_ENTRIES = 128
-    const val PER_PRIORITY_ENTRIES = 32
     const val MAX_HOPS = 8
     const val MAX_RESIDENCE_MILLIS = 86_400_000L
     const val PER_AUTHOR_PER_MINUTE = 12
@@ -28,7 +27,7 @@ data class StoredBundle(
 enum class ClockConfidence { UNKNOWN, TRUSTED }
 enum class DeliveryDeadline { UNKNOWN, WITHIN_DEADLINE, EXPIRED }
 
-/** Call from one serialized coordinator. Nearby is a link, not a mesh router. */
+/** Call from one serialized coordinator. Links only move bytes; this is the store-carry-forward router. */
 class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN) {
     private val stored = linkedMapOf<String, StoredBundle>()
 
@@ -37,20 +36,21 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
 
     fun originate(event: NostrEvent, nowMillis: Long, elapsedMillis: Long): StoredBundle {
         require(event.verify()) { "invalid author signature" }
-        val policy = policy(event)
+        val expiry = expiry(event)
         require(deadline(event, nowMillis) != DeliveryDeadline.EXPIRED) { "delivery deadline expired" }
         val lifetime = if (clockConfidence == ClockConfidence.TRUSTED)
-            minOf(MeshPolicy.MAX_RESIDENCE_MILLIS, (policy.expirySeconds - nowMillis / 1000).coerceAtMost(86_400) * 1000)
+            (expiry.toEpochMilli() - nowMillis).coerceIn(1, MeshPolicy.MAX_RESIDENCE_MILLIS)
         else MeshPolicy.MAX_RESIDENCE_MILLIS
         val bundle = PrimaryBlock(
-            destination = URI(policy.destination),
-            source = URI("dtn://mndt.local/${event.pubkey}"),
+            destination = URI(MeshPolicy.DESTINATION),
+            // TODO(undecided): originating node EID; the author key prefix stands in for a node ID.
+            source = URI("dtn://n${event.pubkey.take(32)}/post"),
             creationTimestamp = 0,
             // ponytail: 60-bit event-derived sequence; a persistent allocator if bundle-ID collisions matter.
             sequenceNumber = event.id.take(15).toLong(16),
             lifetime = lifetime,
         ).setProcV7Flags(BundleV7Flags.MustNotFragment).makeBundle()
-            .addBlock(hopCountBlockData(policy.maxHops, 0).crcType(CRCType.CRC32))
+            .addBlock(hopCountBlockData(MeshPolicy.MAX_HOPS, 0).crcType(CRCType.CRC32))
             .addBlock(ageBlock(0).crcType(CRCType.CRC32))
             .addBlock(payloadBlock(EventCodec.encode(event)).crcType(CRCType.CRC32))
         return accept(bundle.cborMarshal(), nowMillis, elapsedMillis)
@@ -77,7 +77,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
 
     fun deadline(event: NostrEvent, nowMillis: Long): DeliveryDeadline =
         if (clockConfidence != ClockConfidence.TRUSTED) DeliveryDeadline.UNKNOWN
-        else if (policy(event).expirySeconds > nowMillis / 1000) DeliveryDeadline.WITHIN_DEADLINE else DeliveryDeadline.EXPIRED
+        else if (expiry(event).toEpochMilli() > nowMillis) DeliveryDeadline.WITHIN_DEADLINE else DeliveryDeadline.EXPIRED
 
     /** Snapshot accumulated monotonic age without modifying the stored original or signed event. */
     fun checkpoint(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): StoredBundle {
@@ -130,9 +130,9 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         val age = bundle.getAgeBlockData() ?: error("missing age")
         val event = EventCodec.decode(bundle.getPayloadBlockData().buffer)
         require(event.verify()) { "invalid author signature" }
-        val signed = policy(event)
-        require(bundle.primaryBlock.destination.toString() == signed.destination) { "signed destination mismatch" }
-        require(hop.limit in 1..signed.maxHops && hop.count in 0..minOf(hop.limit, MeshPolicy.MAX_HOPS)) { "hop limit exceeded" }
+        expiry(event)
+        require(bundle.primaryBlock.destination.toString() == MeshPolicy.DESTINATION) { "unknown mesh destination" }
+        require(hop.limit in 1..255 && hop.count in 0..minOf(hop.limit, MeshPolicy.MAX_HOPS)) { "hop limit exceeded" }
         require(bundle.primaryBlock.lifetime in 1..MeshPolicy.MAX_RESIDENCE_MILLIS) { "lifetime exceeds local policy" }
         if (!restoring) {
             require(age.age < bundle.primaryBlock.lifetime) { "bundle lifetime expired" }
@@ -145,7 +145,6 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         bundle.canonicalBlocks.removeAll { it.blockType !in knownTypes && it.procV7flags and 0x10 != 0L }
         if (stored.containsKey(event.id)) return null
         require(stored.size < MeshPolicy.MAX_ENTRIES) { "mesh storage full" }
-        require(stored.values.count { policy(it.event).priority == signed.priority } < MeshPolicy.PER_PRIORITY_ENTRIES) { "priority storage full" }
         if (applyRateLimit) {
             rates.values.forEach { samples -> samples.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it } }
             rates.entries.removeAll { it.value.isEmpty() }
@@ -176,20 +175,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         if (elapsedMillis < entry.receivedElapsedMillis) Long.MAX_VALUE else
             saturatedAdd(parse(entry.bytes, saved = true).getAgeBlockData()!!.age, positiveDifference(elapsedMillis, entry.receivedElapsedMillis))
 
-    private data class SignedPolicy(val destination: String, val maxHops: Int, val priority: Int, val expirySeconds: Long)
-
-    private fun policy(event: NostrEvent): SignedPolicy {
-        val tag = event.tags.singleOrNull { it.firstOrNull() == "mndt" } ?: error("one mndt tag required")
-        require(tag.size == 5 && tag[1] == "1") { "unsupported mesh version" }
-        require(tag[2] == MeshPolicy.DESTINATION) { "unknown mesh destination" }
-        require(tag[3].matches(Regex("[1-9][0-9]{0,2}"))) { "invalid max hops" }
-        val hops = tag[3].toInt()
-        require(hops in 1..255) { "invalid max hops" }
-        require(tag[4] in listOf("0", "1", "2", "3")) { "invalid priority" }
-        val expiry = event.tags.singleOrNull { it.firstOrNull() == "mndt-exp" } ?: error("signed delivery deadline required")
-        require(expiry.size == 2 && expiry[1].matches(Regex("[1-9][0-9]{0,14}"))) { "invalid expiry" }
-        return SignedPolicy(tag[2], hops, tag[4].toInt(), expiry[1].toLong())
-    }
+    private fun expiry(event: NostrEvent) = AtRepository.deliveryExpiresAt(event) ?: error("signed delivery deadline required")
 
     private fun parse(bytes: ByteArray, saved: Boolean = false): Bundle {
         require(bytes.size in 1..if (saved) MeshPolicy.MAX_SAVED_BUNDLE_BYTES else MeshPolicy.MAX_BUNDLE_BYTES) { "bundle size limit" }
