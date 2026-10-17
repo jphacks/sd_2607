@@ -36,7 +36,7 @@ flowchart TD
 
 ## 2. 専門文書と既存の設計記録
 
-従来の番号・リンクは維持します。0010 以降は実装者向けの構造化した入口、以下は詳細方針・合意の根拠です。
+`protocol/` はプロトコル定義書の置き場とし、調査報告・技術比較・作業メモは置きません。調査資料は `docs/research/` に分離し、仕様の採用事項とは区別します。0010 以降は実装者向けの構造化した入口、以下は詳細方針と合意事項です。
 
 | 文書 | 内容 |
 |---|---|
@@ -45,13 +45,12 @@ flowchart TD
 | [0002: 公的情報の取り込みと信頼](0002-ingestion-and-trust.md) | 取り込みサーバーへの信頼と配送同値性 |
 | [0003: 未決事項](0003-open-questions.md) | 今後固定する項目と延期事項 |
 | [0004: 地理情報](0004-geography.md) | 円・Geohash の意味と部分実装 |
-| [0005: PDS・Relay 接続調査](0005-pds-relay-research.md) | 正規公開元・重複・stream の標準上の制約 |
+
 | [0006: 論理 PDS と分散公開](0006-logical-pds.md) | 複数物理 PDS の役割と正規公開 |
 | [0007: Nostr リレープロファイル](0007-nostr-relay-profile.md) | 直接投稿・取得・発見・保持 |
 | [0008: 投稿と注釈・Label](0008-posts-and-labels.md) | 本人の注釈とサービスの集約 Label |
 | [0009: 署名チェーンによる身元証明](0009-identity-attestations.md) | 公式発信者への帰属と信頼の起点 |
-| [0015: Nearby Connections 採用調査](0015-nearby-connections-research.md) | オープン性・異アプリ間接続・無線方式・OS 制約と下位リンクの採用案（未決定） |
-| [0016: マイコン向け下位リンク調査](0016-embedded-mesh-links-research.md) | Nearby の移植負担、BLE GATT・LAN・ESP-NOW・Bluetooth Mesh の比較と共通リンク案（未決定） |
+
 | [用語集](../CONTEXT.md) | 発信者・影響範囲・訂正等の既存用語 |
 
 ## 3. 要件と型案の読み分け

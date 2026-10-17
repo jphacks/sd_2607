@@ -10,7 +10,7 @@
 
 Nearby Connections は、Android・iOS の近接通信を共通 API で扱う初期実装候補として有力である。一方、公開ソースの存在と、独立実装の長期的な wire 互換性を保証する公開標準であることは異なる。
 
-提案は、[MNDT](mndt.md) の接触時交換と BPv7 の下に置く交換可能なリンクとして利用し、Nearby の SDK・service ID・endpoint ID を基本投稿の識別や署名へ組み込まないことである。初期実装の共通リンクに指定するか、Google 非依存のリンクを先に定義するかは未決定。
+提案は、[MNDT](../../protocol/mndt.md) の接触時交換と BPv7 の下に置く交換可能なリンクとして利用し、Nearby の SDK・service ID・endpoint ID を基本投稿の識別や署名へ組み込まないことである。初期実装の共通リンクに指定するか、Google 非依存のリンクを先に定義するかは未決定。
 
 ## 2. オープン性と依存関係
 
@@ -73,7 +73,7 @@ iOS の Bluetooth・ローカルネットワーク・必要時の位置情報や
 
 ## 7. 32 KiB payload と Nearby の転送単位
 
-本プロトコルの32 KiB上限はイベントの CBOR payload 全体であり、BPv7 Bundle はヘッダー等の分だけそれより大きい。[0012 §4.4](0012-bindings.md#44-payload-のサイズ上限合意済み) を変更する必要はない。
+本プロトコルの32 KiB上限はイベントの CBOR payload 全体であり、BPv7 Bundle はヘッダー等の分だけそれより大きい。[0012 §4.4](../../protocol/0012-bindings.md#44-payload-のサイズ上限合意済み) を変更する必要はない。
 
 Nearby の overview は Bytes payload を「32k」と記す一方、確認日の Android `ConnectionsClient.MAX_BYTES_DATA_SIZE` は **1,047,552バイト**である。公式資料間にも差があり、全 OS・全 SDK に共通する32 KiBまたは約1 MiBの保証として扱えない。[S1][S3]
 
