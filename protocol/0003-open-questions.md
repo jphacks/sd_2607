@@ -45,7 +45,7 @@
 
 ## 5. メッシュ配送
 
-- 共通基本経路は BLE GATT とし、BLE 広告・スキャンと接続済み Wi-Fi LAN 上の二経路で探索する方式を採用済み。Wi-Fi は到達可能な LAN 上の探索・IP 転送に限定し、AP なしの直接接続構築はこの経路の対象外。BLE 接続後は双方が対応する場合に Nearby の別接続を試み、同じ相手との対応を確認して転送経路を切り替えられる。Nearby 非対応・失敗時も GATT で交換を完結できる。詳細は [MNDT §3](mndt.md#3-接触時の処理の流れ)。BLE の基本実装は両役対応、制約機器の片役部分実装は許容し、central＝GATT client・peripheral＝GATT server とする方針を採用済み（[MNDT §3.2.1](mndt.md#321-ble-の役割と部分実装合意済み)）。両役の常時同時実行は要求しない。GATT は共通1サービス・方向別2 characteristic（client の書込み用 RX、server の通知用 TX）とし、上位メッセージ種別で各機能を区別する方式を採用済み（[MNDT §3.2.2](mndt.md#322-gatt-サービスと共通送受信経路合意済み)）。BLE のサービス／characteristic の UUID・書込み応答方式・広告形式・役割能力の通知と選択・接続開始競合の整理、LAN の発見方式・サービス名・転送形式、Nearby の共通 service ID・strategy・対象 SDK 版、接続間の相手対応付け・自動受け入れ・切替タイムアウト・再試行制限は未確定。
+- 共通基本経路は BLE GATT とし、BLE 広告・スキャンと接続済み Wi-Fi LAN 上の二経路で探索する方式を採用済み。Wi-Fi は到達可能な LAN 上の探索・IP 転送に限定し、AP なしの直接接続構築はこの経路の対象外。BLE 接続後は双方が対応する場合に Nearby の別接続を試み、同じ相手との対応を確認して転送経路を切り替えられる。Nearby 非対応・失敗時も GATT で交換を完結できる。詳細は [MNDT §3](mndt.md#3-接触時の処理の流れ)。BLE の基本実装は両役対応、制約機器の片役部分実装は許容し、central＝GATT client・peripheral＝GATT server とする方針を採用済み（[MNDT §3.2.1](mndt.md#321-ble-の役割と部分実装合意済み)）。両役の常時同時実行は要求しない。GATT は共通1サービス・方向別2 characteristic（client の書込み用 RX、server の通知用 TX）とし、上位メッセージ種別で各機能を区別する方式を採用済み（[MNDT §3.2.2](mndt.md#322-gatt-サービスと共通送受信経路合意済み)）。RX の Write Without Response・TX の Notification、相手／OS に応じた分割、受信許容量付き連続転送、検査・配送用保存後の Bundle 単位の受理応答を採用済み（[MNDT §3.2.3](mndt.md#323-分割流量制御受理応答合意済み)）。初版は切断をまたぐ途中再開を行わず、未完了 Bundle は先頭から再送する。BLE のサービス／characteristic の UUID・フレーム配置・送信許容量の単位と制御枠・受理／拒否応答の具体形式・広告形式・役割能力の通知と選択・接続開始競合の整理、LAN の発見方式・サービス名・転送形式、Nearby の共通 service ID・strategy・対象 SDK 版、接続間の相手対応付け・自動受け入れ・切替タイムアウト・再試行制限は未確定。
 - OS のバックグラウンド制限と実装可能な接触・転送モデル。
 - BPv7 の endpoint、bundle 構成、フラグ、登録・未登録コードの検証。
 - 接触時の inventory・要求・転送形式と資源制限。
