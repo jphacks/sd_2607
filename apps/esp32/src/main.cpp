@@ -5,6 +5,8 @@ void setup() {
     Serial.begin(115200);
     auto config = M5.config();
     M5.begin(config);
+    M5.Speaker.setVolume(64);
+    Serial.printf("Speaker ready=%d\n", M5.Speaker.begin());
 
     M5.Display.setTextSize(2);
     M5.Display.println("ESP32 ready");
@@ -18,6 +20,12 @@ void loop() {
     if (M5.BtnA.wasPressed()) {
         M5.Display.println("Button A");
         Serial.println("Button A");
+    }
+
+    if (M5.BtnB.wasPressed()) {
+        const bool playing = M5.Speaker.tone(880, 250);
+        M5.Display.println(playing ? "Button B: beep" : "Speaker error");
+        Serial.printf("Button B: tone started=%d\n", playing);
     }
 
     static uint32_t lastHeartbeat = 0;

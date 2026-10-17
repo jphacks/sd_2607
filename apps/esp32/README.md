@@ -34,6 +34,9 @@ uv run pio device monitor --port COM3
 ```
 
 実機の画面に`ESP32 ready`が表示され、Aボタンを押すと画面とログに`Button A`が表示されることを手動で確認する。
+Bボタン（中央）を押すと内蔵スピーカーで880 Hzの音を250 ms再生する。音量は64/255。
+画面に`Button B: beep`、ログに`Button B: tone started=1`が出ることと、実際に音が鳴ることを手動で確認する。
+起動ログの`Speaker ready=1`はスピーカー初期化の成功を示すが、実際の発音確認の代わりにはならない。
 
 ## 初期動作確認結果
 
