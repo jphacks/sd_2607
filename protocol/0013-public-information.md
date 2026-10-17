@@ -73,7 +73,7 @@ type Post = {
 };
 ```
 
-`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。公式の型参照は [0014](0014-namespaces.md) に従う。例えば出典は `dev.oriom.mosimo.defs#source` とする。版管理・個別のスキーマには未決定事項が残るが、open union と自己完結したタグによる運搬は合意済みである。
+`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。公式の型参照は [0014](0014-namespaces.md) に従う。例えば出典は `dev.oriom.mosimo.defs#source` とする。三層の独立した版管理は [0010 §3.3](0010-core.md#33-三層の独立した版管理合意済み) に従う。版の具体表記・個別のスキーマには未決定事項が残るが、open union と自己完結したタグによる運搬は合意済みである。
 
 本書では、変換投稿の `createdAt` を変換者が新規投稿を作成した時刻とする案を使う。原発表時刻・取得時刻・現象発生時刻を別途保持する。配送期限は運用者が投稿時に絶対時刻として確定し、原情報の `expires` 等と同一視しない。具体的な既定期間や上限値は定めない。
 
