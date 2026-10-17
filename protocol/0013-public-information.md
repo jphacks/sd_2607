@@ -31,7 +31,7 @@ CAP、EDXL、気象庁防災情報XMLから、人が読める本文と任意の�
 - 訂正は新しい投稿であり、過去のレコードを上書きしない。取消の通知、期限切れ、著者による削除要求は別の概念である。
 - 通常投稿の署名付き配送期限は必須。情報の有効期間は任意であり、省略は期間不明を意味する。配送期限から有効期間を補わない。
 - 影響範囲は円・Geohashセルの和集合。WGS 84の度、円の半径はメートル。行政区域コードと多角形は初期の共通領域表現に含めない。
-- 未対応の署名付き拡張を削って中継しない。本文は拡張の非対応だけを理由に拒否しない。
+- 拡張一覧は Lexicon の open union とし、各要素は `$type` と拡張固有フィールドを持つ。共通の `type`・`version`・`value` の包みは用いない。未対応の署名付き拡張を削って中継しない。本文は拡張の非対応だけを理由に拒否しない。
 - 受信者が信頼する複数の取り込みサーバーを用意し、既定ではそのうち1者の有効な署名で受理できる。複数者の一致は追加の確認であり必須ではない。
 - 原情報の同値性と署名付きイベントの識別を分離する。変換者が違えば、Nostr event ID・署名、record CID・commitは別物として保持する。
 - AppViewは既存BSAF投稿を別入力として収集する。元著者・出典・識別子を保持し、元投稿の変更や署名の捏造をしない。BSAFからNostr・meshへの再配信は未決定。
@@ -61,11 +61,8 @@ type Timestamp = string; // UTCのRFC 3339文字列を提案。例: 2026-10-17T0
 type Bytes = Uint8Array; // 生バイト列。Base64文字列そのものではない
 type Decimal = string; // 十進文字列。例: "35.0"、"500"。浮動小数点数ではない
 
-type Extension = {
-  type: string;
-  version: integer;
-  value: object;
-};
+// 0011で定義するopen union。未知の$typeも保持する。
+type Extension = KnownExtension | UnknownExtension;
 
 type Post = {
   text: string;
@@ -75,7 +72,7 @@ type Post = {
 };
 ```
 
-`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は概念上のローカル名であり、登録済み識別子ではない。JSON例の `version: 1` も説明用であり、初期wire版の確定値ではない。
+`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。JSON例の `org.example.disaster.defs#source` 等は架空の Lexicon 型参照である。正式な識別子と版管理は未決定だが、`$type` 付きオブジェクトを open union に格納する方式は合意済みである。
 
 本書では、変換投稿の `createdAt` を変換者が新規投稿を作成した時刻とする案を使う。原発表時刻・取得時刻・現象発生時刻を別途保持する。配送期限は運用者が投稿時に絶対時刻として確定し、原情報の `expires` 等と同一視しない。具体的な既定期間や上限値は定めない。
 
@@ -93,7 +90,8 @@ type SourceRef = {
 
 type Digest = { algorithm: string; value: Bytes };
 
-type SourceValue = {
+type SourceExtension = {
+  $type: string;                 // 正式な型識別子は未決定
   document: SourceRef;           // 本文・構造化情報の直接の出典
   containers?: SourceRef[];      // 外側から内側の配布容器。内容の著者とは別
   retrievedFrom: string;         // 実際の取得URL
@@ -111,12 +109,13 @@ type SourceValue = {
 
 `originalDigest` の対象は、ここではHTTP等から取得した原文ファイルの全バイト列とする案であり、XMLの再直列化後のバイト列ではない。改行・文字コード・属性順序の違いを吸収する正規化ハッシュとは別物である。HTTPの符号化解除等を含む正確な取得バイト境界とアルゴリズムの採用は未決定。
 
-型上の `Bytes` をJSONで説明するときは、例えば `{"algorithm":"sha-256","value":{"encoding":"base64","data":"AQID"}}` のように符号化を明示する。これは3バイトの表現例であって、有効なSHA-256ダイジェストの例ではない。Base64の採用やアルゴリズムの登録を意味せず、実際のwire符号化はbindings側で定める。後述の変換例では架空のダイジェストを作らず、この任意項目を省略する。
+型上の `Bytes` を atproto JSON で説明するときは、例えば `{"algorithm":"sha-256","value":{"$bytes":"AQID"}}` のように標準の bytes 表現を用いる。これは3バイトの表現例であって、有効なSHA-256ダイジェストの例ではない。CBOR 内では byte string とする。ハッシュアルゴリズムの採用や Nostr タグ全体の符号化は別途定める。後述の変換例では架空のダイジェストを作らず、この任意項目を省略する。
 
 ### 4.3 `public-information`: 原情報の意味（提案）
 
 ```ts
-type PublicInformationValue = {
+type PublicInformationExtension = {
+  $type: string;           // 正式な型識別子は未決定
   status: string;          // 実情報・訓練等。原形式の値を保持
   messageType: string;     // 発表・更新・取消等。原形式の値を保持
   scope: string;           // 原形式の公開区分。内部処理では限定・不明も区別
@@ -136,7 +135,7 @@ type PublicInformationValue = {
 
 原情報参照は `public-information.references`、本プロトコル内の対象投稿への参照は `annotation` が担う。原電文IDをNostr event IDやatURIの代わりに使わない。原情報から派生した投稿への対応索引は取り込み側・AppViewで持ち、対象投稿が判明した場合は [0011 §7](0011-extensions.md#7-注釈-annotation型案) の参照案と関連付ける。
 
-`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ regions: ({ shape: "circle"; latitude: Decimal; longitude: Decimal; radiusMeters: Decimal } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
+`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitude: Decimal; longitude: Decimal; radiusMeters: Decimal } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
 
 ## 5. 共通の処理の流れ（提案）
 
@@ -335,77 +334,65 @@ type BsafAppViewInput = {
   "deliveryExpiresAt": "2026-10-17T04:00:00Z",
   "extensions": [
     {
-      "type": "source",
-      "version": 1,
-      "value": {
-        "document": {
-          "format": "cap-1.2",
-          "senderId": "alerts@example.org",
-          "messageId": "alert-001",
+      "$type": "org.example.disaster.defs#source",
+      "document": {
+        "format": "cap-1.2",
+        "senderId": "alerts@example.org",
+        "messageId": "alert-001",
+        "sentAt": "2026-10-17T03:00:00Z",
+        "part": "info[0]"
+      },
+      "containers": [
+        {
+          "format": "edxl-de-1.0",
+          "senderId": "dispatch@example.org",
+          "messageId": "distribution-001",
           "sentAt": "2026-10-17T03:00:00Z",
-          "part": "info[0]"
-        },
-        "containers": [
-          {
-            "format": "edxl-de-1.0",
-            "senderId": "dispatch@example.org",
-            "messageId": "distribution-001",
-            "sentAt": "2026-10-17T03:00:00Z",
-            "part": "contentObject[0]/xmlContent/embeddedXMLContent[0]"
-          }
-        ],
-        "retrievedFrom": "https://example.org/distributions/001.xml",
-        "retrievedAt": "2026-10-17T03:00:05Z",
-        "converter": "did:example:ingester",
-        "conversion": { "rule": "example-de-cap-text", "revision": "draft-a" },
-        "links": [
-          { "url": "https://example.org/shelters.pdf", "mediaType": "application/pdf" }
-        ]
-      }
+          "part": "contentObject[0]/xmlContent/embeddedXMLContent[0]"
+        }
+      ],
+      "retrievedFrom": "https://example.org/distributions/001.xml",
+      "retrievedAt": "2026-10-17T03:00:05Z",
+      "converter": "did:example:ingester",
+      "conversion": { "rule": "example-de-cap-text", "revision": "draft-a" },
+      "links": [
+        { "url": "https://example.org/shelters.pdf", "mediaType": "application/pdf" }
+      ]
     },
     {
-      "type": "public-information",
-      "version": 1,
-      "value": {
-        "status": "Actual",
-        "messageType": "Alert",
-        "scope": "Public",
-        "references": [],
-        "language": "ja",
-        "event": "避難情報",
-        "categories": ["Safety"],
-        "urgency": "Immediate",
-        "severity": "Severe",
-        "certainty": "Observed",
-        "sourceFields": {
-          "senderName": "例市",
-          "headline": "例地区の避難情報",
-          "instruction": "例地区では指定避難所へ避難してください。",
-          "areas": [{ "areaDesc": "例地区", "circle": "35.0,139.0 2.5" }],
-          "distribution": {
-            "distributionStatus": "Actual",
-            "distributionType": "Report",
-            "combinedConfidentiality": "UNCLASSIFIED AND NOT SENSITIVE",
-            "confidentiality": "UNCLASSIFIED AND NOT SENSITIVE",
-            "targetArea": [{ "country": "JP" }]
-          }
+      "$type": "org.example.disaster.defs#publicInformation",
+      "status": "Actual",
+      "messageType": "Alert",
+      "scope": "Public",
+      "references": [],
+      "language": "ja",
+      "event": "避難情報",
+      "categories": ["Safety"],
+      "urgency": "Immediate",
+      "severity": "Severe",
+      "certainty": "Observed",
+      "sourceFields": {
+        "senderName": "例市",
+        "headline": "例地区の避難情報",
+        "instruction": "例地区では指定避難所へ避難してください。",
+        "areas": [{ "areaDesc": "例地区", "circle": "35.0,139.0 2.5" }],
+        "distribution": {
+          "distributionStatus": "Actual",
+          "distributionType": "Report",
+          "combinedConfidentiality": "UNCLASSIFIED AND NOT SENSITIVE",
+          "confidentiality": "UNCLASSIFIED AND NOT SENSITIVE",
+          "targetArea": [{ "country": "JP" }]
         }
       }
     },
     {
-      "type": "area",
-      "version": 1,
-      "value": {
-        "regions": [{ "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" }]
-      }
+      "$type": "org.example.disaster.defs#area",
+      "regions": [{ "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" }]
     },
     {
-      "type": "validity",
-      "version": 1,
-      "value": {
-        "startsAt": "2026-10-17T03:00:00Z",
-        "endsAt": "2026-10-17T06:00:00Z"
-      }
+      "$type": "org.example.disaster.defs#validity",
+      "startsAt": "2026-10-17T03:00:00Z",
+      "endsAt": "2026-10-17T06:00:00Z"
     }
   ]
 }
