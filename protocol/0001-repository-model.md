@@ -12,6 +12,10 @@
 
 異なるアプリ間の相互運用は、共通プロトコルによる投稿の受信・検証・中継で実現する。同じ発信者 ID の共有は前提にしない。他アプリの投稿を中継できることは、その著者として投稿・削除できることを意味しない。
 
+atproto 用と Nostr 用の署名鍵は用途別に分け、同じ秘密鍵を共用しない。1インストール＝1発信者という境界は維持し、その内部で鍵セットとして生成・永続化する。二つの公開鍵の対応は署名付きで示すが、対応付けの具体形式と DID の認証方式は未決定である。
+
+atproto は ECDSA、Nostr は BIP-340 Schnorr を用いる。曲線・鍵生成・保管、独立生成と用途別導出の選択、更新・失効、DID 管理用の鍵の扱いは今後定義する。鍵の分離だけで、同じアプリ全体の侵害から保護されるとは扱わない。
+
 再インストール、OS バックアップ復元、状態の巻き戻りの扱いは別途定義する。
 
 ### 1.2 投稿の単独検証と表示
@@ -146,5 +150,6 @@ commit の署名検証と、レコードがその commit の状態に含まれ�
 ## 4. 参照
 
 - [AT Protocol Repository](https://atproto.com/specs/repository)（2026-10-17 確認）
+- [AT Protocol Cryptography](https://atproto.com/specs/cryptography)（2026-10-17 確認）
 - [NIP-09: Event Deletion Request](https://github.com/nostr-protocol/nips/blob/master/09.md)
 - [BSAF 日本語仕様](https://github.com/osprey74/bsaf-protocol/blob/main/docs/bsaf-spec-ja.md)（2026-10-17 確認。将来、参照リビジョンを固定する）
