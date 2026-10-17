@@ -3,4 +3,6 @@
 !package.json
 !package-lock.json
 !*.mjs
+!*.mts
 *.test.mjs
+*.test.mts

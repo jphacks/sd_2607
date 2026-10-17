@@ -1,4 +1,5 @@
 import { verifyEvent } from 'nostr-tools';
+import { sqliteNow } from './store.mjs';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
@@ -9,6 +10,8 @@ const isPost = event => event.kind === 1 && event.tags.some(tag => tag[0] === 't
 const frame = (type, body) => Buffer.concat([cbor.encode({ op: 1, t: type }), cbor.encode(body)]);
 
 export function createIngestion({ config, store, resolveIdentity }) {
+  const sqlite = store.dialect === 'sqlite';
+  const now = sqlite ? sqliteNow : 'now()';
   async function ingest(input, { forward = true } = {}) {
     // JSON serialization removes nostr-tools' caller-controlled verification cache symbols.
     let event;
@@ -23,7 +26,7 @@ export function createIngestion({ config, store, resolveIdentity }) {
     } catch (error) { return { accepted: false, message: `invalid: ${error.message}` }; }
     return store.transaction(async tx => {
       // Serializing insertion until COMMIT makes arrival a gap-free multi-node poll cursor.
-      await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
+      if (!sqlite) await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
       if (event.kind !== 5 && (await tx.query('SELECT 1 FROM deletions WHERE event_id=$1 AND pubkey=$2', [event.id, event.pubkey])).rowCount) {
         return { accepted: false, message: 'blocked: deleted by author' };
       }
@@ -57,8 +60,8 @@ export function createIngestion({ config, store, resolveIdentity }) {
   async function processOne() {
     return store.transaction(async tx => {
       const job = (await tx.query(`SELECT j.*, e.event FROM jobs j JOIN events e ON e.id=j.event_id
-        WHERE j.status IN ('pending','retry') AND j.next_attempt <= now()
-        ORDER BY j.next_attempt FOR UPDATE OF j SKIP LOCKED LIMIT 1`)).rows[0];
+        WHERE j.status IN ('pending','retry') AND j.next_attempt <= ${now}
+        ORDER BY j.next_attempt ${sqlite ? '' : 'FOR UPDATE OF j SKIP LOCKED'} LIMIT 1`)).rows[0];
       if (!job) return false;
       let decoded;
       try { decoded = await decodePost(job.event); }
@@ -68,10 +71,10 @@ export function createIngestion({ config, store, resolveIdentity }) {
       }
       const { commit, commitCid, base } = decoded;
       // Serialize each DID across workers; group sequencing is separately serialized below.
-      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [commit.did]);
+      if (!sqlite) await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [commit.did]);
       const retry = async message => {
         await tx.query(`UPDATE jobs SET status='retry',error=$2,attempts=attempts+1,
-          next_attempt=now()+make_interval(secs => $3) WHERE event_id=$1`,
+          next_attempt=${sqlite ? "strftime('%Y-%m-%dT%H:%M:%fZ','now','+' || $3 || ' seconds')" : 'now()+make_interval(secs => $3)'} WHERE event_id=$1`,
         [job.event_id, message, Math.min(3600, 2 ** Math.min(job.attempts + 1, 12))]);
       };
       let identity;
@@ -118,7 +121,7 @@ export function createIngestion({ config, store, resolveIdentity }) {
       const group = config.groups.find(group => new URL(group.endpoint).origin === identity.endpoint);
       if (group) {
         await tx.query('INSERT INTO group_sequences(group_id) VALUES($1) ON CONFLICT DO NOTHING', [group.id]);
-        const sequence = (await tx.query('SELECT seq FROM group_sequences WHERE group_id=$1 FOR UPDATE', [group.id])).rows[0];
+        const sequence = (await tx.query(`SELECT seq FROM group_sequences WHERE group_id=$1 ${sqlite ? '' : 'FOR UPDATE'}`, [group.id])).rows[0];
         const head = (await tx.query('SELECT * FROM repos WHERE group_id=$1 AND did=$2', [group.id, commit.did])).rows[0];
         if (head?.head !== commitCid.toString()) {
           if ((head?.head ?? null) !== (base?.toString() ?? null)) {
@@ -149,9 +152,9 @@ export function createIngestion({ config, store, resolveIdentity }) {
       }
       await tx.query("UPDATE jobs SET status='validated',error=NULL WHERE event_id=$1", [job.event_id]);
       // A just-arrived base can unblock a child immediately, regardless of arrival order.
-      await tx.query(`UPDATE jobs SET next_attempt=now() WHERE event_id IN (
+      await tx.query(`UPDATE jobs SET next_attempt=${now} WHERE event_id IN (
         SELECT event_id FROM jobs WHERE status='retry' AND error='Missing verified base commit'
-        FOR UPDATE SKIP LOCKED
+        ${sqlite ? '' : 'FOR UPDATE SKIP LOCKED'}
       )`);
       return true;
     });

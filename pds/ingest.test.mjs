@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, before, beforeEach, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +14,7 @@ import { decodeFirst } from 'cborg';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { finalizeEvent, generateSecretKey, verifyEvent } from 'nostr-tools';
-import { schema } from './store.mjs';
+import { schema, openSqliteStore, sqliteNow } from './store.mjs';
 import { validateConfig } from './config.mjs';
 import { createIngestion } from './ingest.mjs';
 import { createServer } from './server.mjs';
@@ -59,6 +59,7 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
 }
 
+for (const dialect of ['postgres', 'sqlite']) describe(dialect, () => {
 let db, directory, store, config, ingestion;
 let identityEndpoint;
 let resolutionError;
@@ -69,11 +70,17 @@ const resolveIdentity = async identity => {
 };
 
 async function openDatabase() {
-  db = new PGlite(directory);
+  if (dialect === 'sqlite') {
+    store = await openSqliteStore(join(directory, 'pds.sqlite'));
+    db = { close: () => store.close() };
+    return;
+  }
+  db = new PGlite(join(directory, 'postgres'));
   await db.waitReady;
   await db.exec(schema);
   let pending = Promise.resolve();
   store = {
+    dialect,
     async query(sql, values = []) {
       // Tests have one serialized session; PGlite does not implement advisory locks.
       if (/^\s*SELECT pg_advisory_xact_lock\(/i.test(sql)) return { rows: [], rowCount: 1 };
@@ -116,7 +123,13 @@ after(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 beforeEach(async () => {
-  await db.exec('TRUNCATE outbox, streams, group_sequences, repos, blocks, commits, jobs, deletions, events RESTART IDENTITY CASCADE');
+  if (dialect === 'sqlite') {
+      await store.transaction(async tx => {
+        for (const table of ['outbox', 'streams', 'group_sequences', 'repos', 'repo_blocks', 'blocks', 'commits', 'jobs', 'deletions', 'events', 'sqlite_sequence']) {
+          await tx.query(`DELETE FROM ${table}`);
+        }
+      });
+    } else await db.exec('TRUNCATE outbox, streams, group_sequences, repos, blocks, commits, jobs, deletions, events RESTART IDENTITY CASCADE');
   config = validateConfig({ groups: [{ id: 'alpha', endpoint: 'https://alpha.example' },
     { id: 'beta', endpoint: 'https://beta.example' }], peers: [{ url: 'https://peer.example' }] }, { PEER_TOKEN: 'test-only' });
   identityEndpoint = 'https://alpha.example';
@@ -200,7 +213,7 @@ test('initial and chained commits preserve original signatures and complete earl
     assert.deepEqual(Buffer.from(saved.commit_bytes), Buffer.from(source.commitBytes));
     const car = await readCar(saved.car);
     assert.ok(car.roots[0].equals(source.commitCid));
-    assert.deepEqual(car.blocks.get(source.commitCid), source.commitBytes);
+    assert.deepEqual(Buffer.from(car.blocks.get(source.commitCid)), Buffer.from(source.commitBytes));
     for (const entry of source.entries) {
       assert.ok(car.blocks.get(entry.value), `complete CAR includes ${entry.key}`);
       assert.ok((await cidFor(car.blocks.get(entry.value))).equals(entry.value));
@@ -252,7 +265,7 @@ test('identity failures and bad repository signatures retry without canonical st
   assert.deepEqual(await rows('SELECT * FROM repos'), []);
   assert.deepEqual(await rows('SELECT * FROM blocks'), []);
   assert.deepEqual(await rows('SELECT * FROM streams'), []);
-  await store.query("UPDATE jobs SET next_attempt=now() WHERE event_id=$1", [first.event.id]);
+  await store.query(`UPDATE jobs SET next_attempt=${dialect === 'sqlite' ? sqliteNow : 'now()'} WHERE event_id=$1`, [first.event.id]);
   assert.equal(await ingestion.processOne(), true);
   assert.equal((await job(first)).status, 'validated');
 });
@@ -421,6 +434,11 @@ test('real Nostr history SQL applies tag filters and only original-author deleti
   client.send(['REQ', 'initial', filter]);
   assert.deepEqual(await client.next(), ['EVENT', 'initial', envelope(source.event)]);
   assert.deepEqual(await client.next(), ['EOSE', 'initial']);
+  for (const empty of [{ ids: [] }, { authors: [] }, { kinds: [] }, { '#t': [] }, { '#t': [namespace], '#e': ['missing'] }]) {
+    client.send(['REQ', 'no-match', empty]);
+    assert.deepEqual(await client.next(), ['EOSE', 'no-match']);
+  }
+  client.send(['CLOSE', 'no-match']);
   await ingestion.ingest(signEvent({ kind: 5, tags: [['e', source.event.id]] }, otherNostrKey));
   client.send(['REQ', 'foreign-deletion', filter]);
   assert.deepEqual(await client.next(), ['EVENT', 'foreign-deletion', envelope(source.event)]);
@@ -441,8 +459,13 @@ test('real Nostr history SQL applies tag filters and only original-author deleti
 });
 
 test('SQL-backed subscribeRepos replays persisted bytes and maintains independent group sequences', async t => {
-  const first = await fixture();
+  let first = await fixture();
   await process(first);
+  // Cross the decimal boundary to catch accidental text sorting of sequence cursors.
+  for (let index = 1; index <= 9; index++) {
+    first = await fixture({ index, parent: first });
+    await process(first);
+  }
   identityEndpoint = 'https://beta.example';
   const beta = await fixture({ identity: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa', index: 1 });
   await process(beta);
@@ -457,10 +480,10 @@ test('SQL-backed subscribeRepos replays persisted bytes and maintains independen
   const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
   for (const row of saved) assert.deepEqual(await client.next(), Buffer.from(row.frame));
   identityEndpoint = 'https://alpha.example';
-  const second = await fixture({ index: 2, parent: first });
+  const second = await fixture({ index: 12, parent: first });
   await process(second);
   const frame = await client.next();
-  assert.deepEqual(frame, Buffer.from((await rows('SELECT frame FROM streams WHERE group_id=$1 AND seq=4', ['alpha']))[0].frame));
+  assert.deepEqual(frame, Buffer.from((await rows('SELECT frame FROM streams WHERE group_id=$1 AND seq=$2', ['alpha', saved.length + 1]))[0].frame));
   const [header, bodyBytes] = decodeFirst(frame, cbor.decodeOptions);
   assert.deepEqual(header, { op: 1, t: '#commit' });
   assert.ok(cbor.decode(bodyBytes).commit.equals(second.commitCid));
@@ -480,4 +503,5 @@ test('processing errors roll back commit, blocks, streams, head and job status a
   await store.query('UPDATE group_sequences SET seq=0 WHERE group_id=$1', ['alpha']);
   assert.equal(await ingestion.processOne(), true);
   assert.equal((await job(source)).status, 'validated');
+});
 });

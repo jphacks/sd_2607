@@ -4,11 +4,10 @@ ENV NODE_ENV=production PORT=2583 CONFIG_FILE=/etc/mosimo/config.json
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY *.mjs ./
+COPY *.mjs *.mts ./
 RUN test -f main.mjs
 
 USER node
 EXPOSE 2583
-# Validate runtime secrets without baking them into the image or logging their values.
-ENTRYPOINT ["/bin/sh", "-ec", "node --input-type=commonjs -e 'const fs = require(\"node:fs\"); const env = process.env; if (!env.DATABASE_URL || !/^postgres(?:ql)?:\\/\\//.test(env.DATABASE_URL)) throw new Error(\"DATABASE_URL must be a PostgreSQL connection URL\"); const config = JSON.parse(fs.readFileSync(env.CONFIG_FILE, \"utf8\")); if (config.peers?.length) { for (const name of new Set([\"PEER_TOKEN\", ...config.peers.map(p => p.tokenEnv || \"PEER_TOKEN\")])) { if (!env[name]?.trim()) throw new Error(\"Missing peer token environment variable\"); } }'; exec \"$@\"", "--"]
+
 CMD ["node", "main.mjs"]
