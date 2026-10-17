@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import android.provider.Settings
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import kotlinx.coroutines.*
@@ -17,25 +18,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString
 import org.mndt.core.Author
+import org.mndt.core.ClockConfidence
+import org.mndt.core.DeliveryDeadline
 import org.mndt.core.MeshEngine
 import org.mndt.core.SecretKeys
-import java.io.IOException
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** UI snapshots contain public information only, never the private author or key set. */
 data class Neighbor(val endpoint: String, val name: String, val status: String, val code: String? = null)
-data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int, val relayAccepted: Boolean)
+data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
+    val sourceRelay: String? = null, val volatile: Boolean = false,
+    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN)
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relay: String = "", val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
     val posts: List<PostView> = emptyList(), val diagnostics: List<String> = emptyList(),
-    val error: String? = null, val lastPublishedId: String? = null, val publishAttempt: Long = 0
+    val error: String? = null, val lastPublishedId: String? = null, val publishAttempt: Long = 0,
+    val clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN,
+    val onlineEnabled: Boolean = false, val onlineActive: Boolean = false, val onlineBackgroundActive: Boolean = false
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -50,9 +54,13 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val store = EncryptedStore(context)
     private var disk: DiskState? = null
     private var engine = MeshEngine()
+    private val bootCount = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }
+        .getOrNull()?.takeIf { it >= 0 }
     private var author: Author? = null
     private var fatal = false
     private var running = false
+    private var activityVisible = false
+    private var onlineServiceActive = false
     private var generation = 0L
     private var advertiseActive = false
     private var discoveryActive = false
@@ -74,6 +82,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var socket: WebSocket? = null
     private var socketGeneration = 0L
     private var socketOpen = false
+    private val relaySubscription = RelaySubscription()
+    private var relayReadDeadline = 0L
     private var relayPendingId: String? = null
     private var relayDeadline = 0L
     private var relayRetryAt = 0L
@@ -83,6 +93,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var registrationBusy = false
     private var registrationRetryAt = 0L
     private var registrationFailures = 0
+    // Historical genesis confirmation is persisted; current authority is an online observation only.
+    private var plcObservation = PlcObservation()
     private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
     // TODO(undecided): no production PDS/PLC policy is selected. Configure metadata before first install.
     private val pds = metadata?.getString("mndt.pds.endpoint") ?: "https://pds.invalid"
@@ -118,7 +130,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                 val saved = store.load() ?: DiskState(SecretKeys.generate(), pdsEndpoint = pds).also { store.save(it, emptyList()) }
                 disk = saved
                 author = Author(saved.keys, saved.pdsEndpoint)
-                saved.bundles.forEach { engine.restore(it.bytes, it.receivedAtMillis, now(), elapsed()) }
+                val wall = now()
+                val monotonic = elapsed()
+                saved.bundles.forEach { engine.restore(it.bytes, it.receivedAtMillis, wall, monotonic, it.downtime(bootCount, monotonic)) }
                 // Re-save restored bundle ages and keep ACKs scoped to retained entries.
                 persist(saved)
                 note("インストール固有の3鍵・DIDを準備済み")
@@ -141,16 +155,25 @@ class MeshCoordinator private constructor(private val context: Context) {
     private fun issue(text: String) { mutableState.value = mutableState.value.copy(error = text); note(text) }
     fun clearError() = enqueue { mutableState.value = mutableState.value.copy(error = null) }
     fun reportError(text: String) = enqueue { issue(text.take(160)) }
+    /** Local operator policy, not clock synchronization or network consensus. Defaults to UNKNOWN on restart. */
+    fun setClockConfidence(value: ClockConfidence) = enqueue {
+        engine.clockConfidence = value
+        broadcastInventory()
+    }
     private fun refresh() {
         val data = disk
         mutableState.value = mutableState.value.copy(
-            ready = author != null && !fatal, running = running,
+            ready = author != null && !fatal, running = running, clockConfidence = engine.clockConfidence,
+            onlineEnabled = data?.onlineEnabled == true, onlineActive = onlineAllowed(),
+            onlineBackgroundActive = onlineServiceActive && onlineAllowed(),
             did = author?.did ?: "", publicKey = author?.nostrPubkey ?: "", relay = data?.relay ?: "",
-            registration = when {
-                data?.plcRegistered == true -> "PLC 初期操作登録確認済み / PDS 公開は未確認"
-                registrationBusy -> "PLC 登録確認中 / PDS 公開は未確認"
-                else -> "PLC 未登録 / PDS 公開未確認（本番設定・登録方針が必要）"
-            },
+            registration = (if (data?.plcRegistered == true) "PLC 初期操作登録確認済み" else "PLC 初期操作登録未確認") +
+                " / " + when (plcObservation.current) {
+                    PlcCurrentState.CHECKED -> "Directory 現在鍵・PDS設定一致（確認時刻 ${plcObservation.checkedAtMillis}）"
+                    PlcCurrentState.CHANGED -> "Directory 鍵・PDS設定変更あり（確認時刻 ${plcObservation.checkedAtMillis}）"
+                    PlcCurrentState.TOMBSTONED -> "Directory 無効化操作あり（確認時刻 ${plcObservation.checkedAtMillis}）"
+                    PlcCurrentState.UNKNOWN -> if (registrationBusy) "現在状態確認中" else "現在状態不明（オフライン・未設定・未確認）"
+                } + " / PDS 受入・公開未確認",
             neighbors = peers.map { (id, peer) -> Neighbor(id, peer.name, when {
                 peer.code.isBlank() -> "接続要求中"
                 !peer.approved -> "確認待ち"
@@ -158,8 +181,11 @@ class MeshCoordinator private constructor(private val context: Context) {
                 !peer.handshake.ready -> "HELLO 待ち"
                 else -> "同期中"
             }, peer.code.takeUnless { peer.approved || it.isBlank() }) },
-            posts = (if (fatal) emptyList() else engine.entries()).asReversed().map { PostView(it.event.id, it.event.pubkey, it.event.content, it.hop,
-                data?.relayAccepted?.get(data.relay)?.contains(it.event.id) == true) }
+            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().map {
+                PostView(it.event.id, it.event.pubkey, it.event.content, it.hop,
+                    data?.relayAccepted?.get(data.relay)?.contains(it.event.id) == true,
+                    deliveryDeadline = engine.deadline(it.event, now()))
+            }, relaySubscription.events(), data?.relay.orEmpty())
         )
     }
     private fun persist(next: DiskState) {
@@ -167,7 +193,9 @@ class MeshCoordinator private constructor(private val context: Context) {
         val entries = engine.entries()
         val ids = entries.map { it.event.id }.toSet()
         val clean = next.copy(relayAccepted = next.relayAccepted.mapValues { (_, accepted) -> accepted.intersect(ids) })
-        try { store.save(clean, entries); disk = clean }
+        val wall = now()
+        val monotonic = elapsed()
+        try { store.save(clean, entries.map { engine.checkpoint(it, wall, monotonic) }, bootCount); disk = clean }
         catch (e: Exception) {
             fatal = true
             stopInternal(stopService = true)
@@ -205,15 +233,44 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
         val current = checkNotNull(disk)
         require(value.isEmpty() || value in current.relayAccepted || current.relayAccepted.size < 8)
-        persist(current.copy(relay = value, relayAccepted = if (value.isEmpty()) current.relayAccepted else current.relayAccepted + (value to (current.relayAccepted[value] ?: emptySet()))))
+        persist(current.copy(relay = value, onlineEnabled = value.isNotEmpty(),
+            relayAccepted = if (value.isEmpty()) current.relayAccepted else current.relayAccepted + (value to (current.relayAccepted[value] ?: emptySet()))))
         closeRelay()
         relayRetryAt = 0
+        relaySubscription.clear()
         relayFailures = 0
         relayDeferred.clear()
         relayLastAttempt = null
+        if (value.isEmpty()) stopOnlineService()
         note(if (value.isEmpty()) "リレー送信を無効化" else "明示設定したリレーへの送信を有効化")
         drainRelay()
     }
+    /** Activity visibility permits foreground IO; an OnlineService keeps IO alive after onStop. */
+    fun setOnlineForeground(visible: Boolean) = enqueue {
+        activityVisible = visible
+        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() } else drainRelay()
+    }
+    fun setOnlineEnabled(enabled: Boolean) = enqueue {
+        check(!fatal)
+        val current = checkNotNull(disk)
+        require(!enabled || current.relay.isNotEmpty())
+        persist(current.copy(onlineEnabled = enabled))
+        if (!enabled) stopOnlineService()
+        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() } else drainRelay()
+        note(if (enabled) "オンライン通信を有効化" else "オンライン通信を停止。搬出待ちは保持")
+    }
+    internal fun setOnlineServiceActive(active: Boolean) = enqueue {
+        onlineServiceActive = active
+        if (active && !onlineAllowed()) stopOnlineService()
+        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() } else drainRelay()
+    }
+    private fun stopOnlineService() {
+        onlineServiceActive = false
+        context.stopService(Intent(context, OnlineService::class.java))
+    }
+    private fun onlineAllowed(): Boolean = disk?.let {
+        onlineRelayAllowed(it.onlineEnabled, activityVisible, fatal, overloaded.get(), it.relay, onlineServiceActive)
+    } == true
     fun start() = enqueue {
         if (fatal || author == null) {
             issue("発信者の初期化が完了していないため開始できません")
@@ -235,9 +292,12 @@ class MeshCoordinator private constructor(private val context: Context) {
         runCatching { nearby.stopAllEndpoints() }
         advertiseActive = false; discoveryActive = false; advertiseBusy = false; discoveryBusy = false
         peers.clear(); candidates.clear(); transport.clear()
-        closeRelay()
-        if (stopService) context.stopService(Intent(context, MeshService::class.java))
-        note("メッシュ・ゲートウェイ停止。保存済み投稿は保持")
+        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() }
+        if (stopService) {
+            stopOnlineService()
+            context.stopService(Intent(context, MeshService::class.java))
+        }
+        note("Nearby 停止。保存済み投稿と独立したオンライン通信設定は保持")
     }
     fun confirm(endpoint: String, accepted: Boolean) = enqueue {
         val peer = peers[endpoint] ?: return@enqueue
@@ -386,33 +446,48 @@ class MeshCoordinator private constructor(private val context: Context) {
         val caps = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
-    private fun closeRelay() {
+    private fun closeRelayRead() {
+        relaySubscription.close()?.let { if (socketOpen && socket?.send(it) != true) relayFailure() }
+        relayReadDeadline = 0
+    }
+    private fun closeRelay(graceful: Boolean = true) {
+        if (graceful) closeRelayRead()
+        relaySubscription.disconnect()
+        relayReadDeadline = 0
         socketGeneration++
-        socket?.cancel(); socket = null; socketOpen = false; relayPendingId = null; relayDeadline = 0
+        val old = socket
+        if (!graceful || !socketOpen || old?.close(1000, null) != true) old?.cancel()
+        socket = null; socketOpen = false; relayPendingId = null; relayDeadline = 0
     }
     private fun relayFailure() {
         relayPendingId?.let { relayDeferred[it] = elapsed() + backoff(relayFailures + 1) }
-        closeRelay()
+        closeRelay(graceful = false)
         relayRetryAt = elapsed() + backoff(++relayFailures)
         note("リレー未受理。暗号化キューを保持し再試行")
     }
     private fun drainRelay() {
         val current = disk ?: return
-        if (!running || fatal || overloaded.get() || current.relay.isEmpty() || elapsed() < relayRetryAt) return
+        if (!onlineAllowed() || elapsed() < relayRetryAt) return
         // Endpoint reachability, not public-Internet validation, decides local shelter relay access.
-        val pending = engine.entries().filter { it.event.id !in current.relayAccepted[current.relay].orEmpty() }
-        val nextId = nextRelayId(pending.map { it.event.id }, relayLastAttempt, relayDeferred, elapsed()) ?: return
-        val next = pending.first { it.event.id == nextId }
         if (socket == null) {
             val gen = ++socketGeneration
             relayDeadline = elapsed() + 20_000
             val request = Request.Builder().url(current.relay).build()
             socket = http.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) = enqueue {
-                    if (gen == socketGeneration && running) { socketOpen = true; relayDeadline = 0; drainRelay() } else webSocket.cancel()
+                    if (gen == socketGeneration && onlineAllowed()) {
+                        socketOpen = true; relayDeadline = 0
+                        val req = relaySubscription.open(gen)
+                        if (req != null) {
+                            relayReadDeadline = elapsed() + 20_000
+                            if (!webSocket.send(req)) { relayFailure(); return@enqueue }
+                            note("リレー REQ（kind 1 / #t / 初期32件・揮発表示のみ）")
+                        }
+                        drainRelay()
+                    } else webSocket.cancel()
                 }
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    if (text.length > Wire.MAX_BYTES || text.toByteArray(Charsets.UTF_8).size > Wire.MAX_BYTES) {
+                    if (text.length > RelaySubscription.MAX_FRAME_BYTES || text.toByteArray(Charsets.UTF_8).size > RelaySubscription.MAX_FRAME_BYTES) {
                         enqueue { if (gen == socketGeneration) relayFailure() }; return
                     }
                     enqueue { if (gen == socketGeneration) relayMessage(text) }
@@ -420,10 +495,15 @@ class MeshCoordinator private constructor(private val context: Context) {
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) = enqueue { if (gen == socketGeneration) relayFailure() }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = enqueue { if (gen == socketGeneration) relayFailure() }
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = enqueue { if (gen == socketGeneration) relayFailure() }
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = enqueue {
+                    if (gen == socketGeneration) { webSocket.close(code, null); relayFailure() } else webSocket.cancel()
+                }
             })
             return
         }
+        val pending = engine.entries().filter { it.event.id !in current.relayAccepted[current.relay].orEmpty() }
+        val nextId = nextRelayId(pending.map { it.event.id }, relayLastAttempt, relayDeferred, elapsed()) ?: return
+        val next = pending.first { it.event.id == nextId }
         if (socketOpen && relayPendingId == null) {
             require(next.event.verify())
             // Forward the signed original; never re-author or add mutable route tags.
@@ -440,11 +520,26 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
     }
     private fun relayMessage(text: String) {
-        val frame = runCatching { json.readTree(text) }.getOrNull() ?: return
-        if (!frame.isArray || frame.size() != 4 || frame[0].textValue() != "OK" || !frame[1].isTextual || !frame[2].isBoolean || !frame[3].isTextual) return
+        val reply = try {
+            relaySubscription.receive(socketGeneration, text, elapsed(), engine.entries().map { it.event.id }.toSet())
+        } catch (_: Exception) { relayFailure(); return }
+        when (reply) {
+            is RelayReply.Event -> {
+                // Importer trust/equivalence and hop/age reset rules are undecided. No mesh ingress.
+                note("リレー取得・署名検証済み ${reply.event.id.take(8)}（揮発表示・メッシュ投入なし）")
+                if (relaySubscription.atCapacity) closeRelayRead()
+            }
+            RelayReply.Full -> { closeRelayRead(); note("リレー取得の表示容量上限。保存・メッシュ投入せず購読を終了") }
+            RelayReply.Eose -> { relayReadDeadline = 0; note("リレー EOSE（履歴取得終了・新着購読は継続）") }
+            RelayReply.Closed -> { relayReadDeadline = 0; note("リレー CLOSED（取得購読のみ終了・投稿経路は維持）") }
+            is RelayReply.Ok -> relayOk(reply)
+            null -> Unit
+        }
+    }
+    private fun relayOk(reply: RelayReply.Ok) {
         val id = relayPendingId ?: return
-        if (frame[1].textValue() != id) return
-        if (!frame[2].booleanValue()) {
+        if (reply.id != id) return
+        if (!reply.accepted) {
             relayDeferred[id] = elapsed() + backoff(++relayFailures)
             relayPendingId = null; relayDeadline = 0
             note("リレー拒否 ${id.take(8)}。投稿は保持し、他の保留投稿を先に試行")
@@ -464,48 +559,46 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private fun registerIfConfigured() {
         val current = disk ?: return
-        if (fatal || current.plcRegistered || registrationBusy || !allowRegistration || configuredHttps(current.pdsEndpoint) == null || elapsed() < registrationRetryAt || !validatedInternet()) return
-        val directory = configuredHttps(plcDirectory) ?: return
+        val directory = configuredHttps(plcDirectory)
+        if (fatal || configuredHttps(current.pdsEndpoint) == null || directory == null || !validatedInternet()) {
+            plcObservation = PlcObservation(current.plcRegistered)
+            return
+        }
+        if (registrationBusy || elapsed() < registrationRetryAt) return
         val identity = author ?: return
         registrationBusy = true
-        val request = Request.Builder().url(directory.newBuilder().addPathSegment(identity.did).build())
-            .post(identity.initialOperationJson.toRequestBody("application/json".toMediaType())).build()
-        http.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) = enqueue { registrationFailed() }
-            override fun onResponse(call: Call, response: Response) {
-                response.close()
-                // Confirm the initial operation at the exact DID, not just an HTTP submission response.
-                val verify = Request.Builder().url(directory.newBuilder().addPathSegment(identity.did).addPathSegment("log").build()).build()
-                http.newCall(verify).enqueue(object : Callback {
-                    override fun onFailure(call: Call, e: IOException) = enqueue { registrationFailed() }
-                    override fun onResponse(call: Call, response: Response) {
-                        val body = response.use { r ->
-                            if (!r.isSuccessful) null else runCatching { r.body?.byteStream()?.readBounded(262144) }.getOrNull()
-                        }
-                        enqueue {
-                            val log = body?.let { runCatching { json.readTree(it) }.getOrNull() }
-                            val expected = json.readTree(identity.initialOperationJson)
-                            if (log?.isArray == true && log.size() > 0 && log[0] == expected) {
-                                persist(checkNotNull(disk).copy(plcRegistered = true)); registrationBusy = false
-                                note("PLC 初期操作の公開登録を確認。PDS 受入・現在鍵状態は未確認")
-                            } else registrationFailed()
-                        }
-                    }
-                })
+        plcObservation = PlcObservation(current.plcRegistered)
+        scope.launch {
+            val result = PlcDirectory(http).check(directory, identity.did, identity.initialOperationJson, current.plcRegistered, allowRegistration)
+            enqueue {
+                registrationBusy = false
+                if (fatal) return@enqueue
+                val latest = checkNotNull(disk)
+                if (result.genesisConfirmed && !latest.plcRegistered) persist(latest.copy(plcRegistered = true))
+                plcObservation = if (validatedInternet()) result else PlcObservation(result.genesisConfirmed)
+                if (plcObservation.current == PlcCurrentState.UNKNOWN) registrationFailed() else {
+                    registrationFailures = 0
+                    // ponytail: local observation throttle, not a common protocol retry policy.
+                    registrationRetryAt = elapsed() + 60_000
+                    note("PLC Directory 状態 ${plcObservation.current}。保存済み鍵・DIDは変更せず、PDS受入は未確認")
+                }
             }
-        })
+        }
     }
     private fun registrationFailed() {
         registrationBusy = false
         registrationRetryAt = elapsed() + backoff(++registrationFailures)
-        note("PLC 登録未確認。署名済み初期操作を保持")
+        note("PLC 現在状態不明。保存済み鍵・DID・署名済み初期操作を保持")
     }
     private fun tick() {
         if (fatal || disk == null) return
         registerIfConfigured()
+        val clock = elapsed()
+        if (relayDeadline > 0 && clock >= relayDeadline) relayFailure()
+        if (relayReadDeadline > 0 && clock >= relayReadDeadline) { closeRelayRead(); note("リレー履歴取得を20秒で打ち切り（投稿は継続）") }
+        drainRelay()
         if (!running) return
         startRadios()
-        val clock = elapsed()
         peers.filterValues { (!it.connected || !it.handshake.ready) && clock - it.began > 60_000 }.keys.toList().forEach { nearby.disconnectFromEndpoint(it); dropPeer(it) }
         candidates.forEach { (id, candidate) ->
             if (id !in peers && peers.size < 8 && candidate.attempts < 6 && clock >= candidate.retryAt) {
@@ -516,8 +609,6 @@ class MeshCoordinator private constructor(private val context: Context) {
             }
         }
         if (clock - lastSync >= 10_000) { lastSync = clock; broadcastInventory() }
-        if (relayDeadline > 0 && clock >= relayDeadline) relayFailure()
-        drainRelay()
     }
     companion object {
         @Volatile private var instance: MeshCoordinator? = null

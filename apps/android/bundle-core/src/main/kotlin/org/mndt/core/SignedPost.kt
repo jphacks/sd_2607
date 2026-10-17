@@ -115,16 +115,18 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     val nostrPubkey: String = hex(secp.pubkeyCreate(keys.nostr).copyOfRange(1, 33))
     val bindingJson: String = AtRepository.binding(keys, did, nostrPubkey)
 
-    fun createPost(text: String, nowMillis: Long, previous: RepositoryState = RepositoryState()): CreatedPost {
+    fun createPost(text: String, nowMillis: Long, previous: RepositoryState = RepositoryState(),
+        deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400),
+        extensions: List<Map<String, Any?>> = emptyList()): CreatedPost {
         require(nowMillis >= 0 && utf8(text).size <= 16384)
-        val restored = AtRepository.create(keys, did, text, nowMillis, previous)
-        // TODO(undecided): experimental tag values, restore-envelope format, EID and lifetime.
+        require(deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L) { "Invalid delivery deadline" }
+        val restored = AtRepository.create(keys, did, text, nowMillis, previous, deliveryExpiresAtSeconds, extensions)
+        // TODO(undecided): experimental tag values, EID and lifetime; old signed events are never rewritten.
         val tags = frozenTags(listOf(
             listOf("mndt", "1", "dtn://mndt.local/~demo", "8", "1"),
-            listOf("mndt-exp", (nowMillis / 1000 + 86400).toString()),
-            listOf("t", "mndt-experimental-v1"),
-            listOf("atproto", AtRepository.VERSION, restored.first)
-        ))
+            listOf("mndt-exp", deliveryExpiresAtSeconds.toString()),
+            listOf("t", "mndt-experimental-v2"),
+        ) + restored.first)
         val digest = sha256(nostrSigningBytes(nostrPubkey, nowMillis / 1000, 1, tags, text))
         val sig = secp.signSchnorr(digest, keys.nostr, ByteArray(32).also(random::nextBytes))
         val event = NostrEvent(hex(digest), nostrPubkey, nowMillis / 1000, 1, tags, text, hex(sig))

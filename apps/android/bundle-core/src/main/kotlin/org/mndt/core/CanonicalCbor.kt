@@ -6,7 +6,7 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 
-internal data class CidLink(val value: String)
+data class CidLink(val value: String)
 
 /** Bounded deterministic CBOR subset: no floats, indefinite lengths, or arbitrary tags. */
 object CanonicalCbor {
@@ -37,7 +37,7 @@ object CanonicalCbor {
                 is Long -> head(if (v >= 0) 0 else 1, if (v >= 0) v else -1 - v)
                 is ByteArray -> { head(2, v.size.toLong()); out.write(v) }
                 is String -> { val b = utf8(v); head(3, b.size.toLong()); out.write(b) }
-                is CidLink -> { head(6, 42); write(byteArrayOf(0) + cidBytes(v.value), depth + 1) }
+                is CidLink -> { head(6, 42); write(byteArrayOf(0) + cidBytes(v.value, allowRaw = true), depth + 1) }
                 is List<*> -> { head(4, v.size.toLong()); v.forEach { write(it, depth + 1) } }
                 is Map<*, *> -> {
                     require(v.keys.all { it is String }) { "CBOR map keys must be strings" }
@@ -95,7 +95,7 @@ object CanonicalCbor {
                     val b = read(depth + 1) as? ByteArray ?: error("Invalid CID link")
                     require(b.size == 37 && b[0] == 0.toByte())
                     val cid = "b" + base32(b.copyOfRange(1, b.size))
-                    cidBytes(cid)
+                    cidBytes(cid, allowRaw = true)
                     CidLink(cid)
                 }
                 else -> error("Unknown CBOR type")
@@ -129,11 +129,12 @@ internal fun base32(bytes: ByteArray): String = buildString {
     if (bits > 0) append(B32[(acc shl (5 - bits)) and 31])
 }
 internal fun cid(bytes: ByteArray): String = "b" + base32(byteArrayOf(1, 0x71, 0x12, 0x20) + sha256(bytes))
-internal fun cidBytes(s: String): ByteArray {
-    require(s.length == 59 && s[0] == 'b') { "Expected CIDv1 dag-cbor sha256" }
+internal fun cidBytes(s: String, allowRaw: Boolean = false): ByteArray {
+    require(s.length == 59 && s[0] == 'b') { "Expected CIDv1 base32 sha256" }
     val out = ByteArrayOutputStream(); var acc = 0; var bits = 0
     for (c in s.drop(1)) { val n = B32.indexOf(c); require(n >= 0); acc = (acc shl 5) or n; bits += 5; if (bits >= 8) { bits -= 8; out.write(acc ushr bits) } }
     val b = out.toByteArray()
-    require(b.size == 36 && b.copyOfRange(0, 4).contentEquals(byteArrayOf(1, 0x71, 0x12, 0x20)) && "b" + base32(b) == s) { "Invalid CID" }
+    require(b.size == 36 && b[0] == 1.toByte() && (b[1] == 0x71.toByte() || allowRaw && b[1] == 0x55.toByte()) &&
+        b[2] == 0x12.toByte() && b[3] == 0x20.toByte() && "b" + base32(b) == s) { "Invalid CID" }
     return b
 }

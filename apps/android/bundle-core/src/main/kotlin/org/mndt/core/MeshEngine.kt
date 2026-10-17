@@ -8,6 +8,8 @@ import java.net.URI
 object MeshPolicy {
     const val DESTINATION = "dtn://mndt.local/~demo"
     const val MAX_BUNDLE_BYTES = 24_000
+    // Internal snapshots may grow by at most eight bytes as the CBOR Bundle Age integer grows.
+    const val MAX_SAVED_BUNDLE_BYTES = MAX_BUNDLE_BYTES + 8
     const val MAX_ENTRIES = 128
     const val PER_PRIORITY_ENTRIES = 32
     const val MAX_HOPS = 8
@@ -23,8 +25,11 @@ data class StoredBundle(
     val receivedElapsedMillis: Long,
 )
 
+enum class ClockConfidence { UNKNOWN, TRUSTED }
+enum class DeliveryDeadline { UNKNOWN, WITHIN_DEADLINE, EXPIRED }
+
 /** Call from one serialized coordinator. Nearby is a link, not a mesh router. */
-class MeshEngine {
+class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN) {
     private val stored = linkedMapOf<String, StoredBundle>()
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
@@ -33,8 +38,10 @@ class MeshEngine {
     fun originate(event: NostrEvent, nowMillis: Long, elapsedMillis: Long): StoredBundle {
         require(event.verify()) { "invalid author signature" }
         val policy = policy(event)
-        require(policy.expirySeconds > nowMillis / 1000) { "delivery deadline expired" }
-        val lifetime = minOf(MeshPolicy.MAX_RESIDENCE_MILLIS, (policy.expirySeconds - nowMillis / 1000).coerceAtMost(86_400) * 1000)
+        require(deadline(event, nowMillis) != DeliveryDeadline.EXPIRED) { "delivery deadline expired" }
+        val lifetime = if (clockConfidence == ClockConfidence.TRUSTED)
+            minOf(MeshPolicy.MAX_RESIDENCE_MILLIS, (policy.expirySeconds - nowMillis / 1000).coerceAtMost(86_400) * 1000)
+        else MeshPolicy.MAX_RESIDENCE_MILLIS
         val bundle = PrimaryBlock(
             destination = URI(policy.destination),
             source = URI("dtn://mndt.local/${event.pubkey}"),
@@ -53,16 +60,32 @@ class MeshEngine {
     fun accept(bytes: ByteArray, nowMillis: Long, elapsedMillis: Long): StoredBundle? =
         insert(bytes, nowMillis, elapsedMillis, applyRateLimit = true)
 
-    /** Restore the original age plus downtime, not a freshly wrapped event. */
-    fun restore(bytes: ByteArray, receivedAtMillis: Long, nowMillis: Long, elapsedMillis: Long): StoredBundle? {
-        val bundle = parse(bytes)
+    /** Unknown downtime exhausts mesh residence, but retains the signed event for relay backlog. */
+    fun restore(bytes: ByteArray, receivedAtMillis: Long, nowMillis: Long, elapsedMillis: Long,
+                downtimeMillis: Long? = null): StoredBundle? {
+        val bundle = parse(bytes, saved = true)
         val age = bundle.getAgeBlockData() ?: error("missing bundle age")
-        age.age = saturatedAdd(age.age, positiveDifference(nowMillis, receivedAtMillis))
+        require(downtimeMillis == null || downtimeMillis >= 0)
+        val downtime = downtimeMillis ?: if (clockConfidence == ClockConfidence.TRUSTED && nowMillis >= receivedAtMillis)
+            positiveDifference(nowMillis, receivedAtMillis) else bundle.primaryBlock.lifetime
+        age.age = saturatedAdd(age.age, downtime)
         // Expired entries remain available to the relay backlog, but never to mesh forwarding.
         return insert(bundle.cborMarshal(), nowMillis, elapsedMillis, applyRateLimit = false, restoring = true)
     }
 
     fun entries(): List<StoredBundle> = stored.values.toList()
+
+    fun deadline(event: NostrEvent, nowMillis: Long): DeliveryDeadline =
+        if (clockConfidence != ClockConfidence.TRUSTED) DeliveryDeadline.UNKNOWN
+        else if (policy(event).expirySeconds > nowMillis / 1000) DeliveryDeadline.WITHIN_DEADLINE else DeliveryDeadline.EXPIRED
+
+    /** Snapshot accumulated monotonic age without modifying the stored original or signed event. */
+    fun checkpoint(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): StoredBundle {
+        val bundle = parse(entry.bytes, saved = true)
+        bundle.getAgeBlockData()!!.age = currentAge(entry, elapsedMillis)
+        val bytes = bundle.cborMarshal().also { require(it.size <= MeshPolicy.MAX_SAVED_BUNDLE_BYTES) }
+        return entry.copy(bytes = bytes, receivedAtMillis = nowMillis, receivedElapsedMillis = elapsedMillis)
+    }
 
     fun inventory(nowMillis: Long, elapsedMillis: Long): List<String> =
         stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { it.event.id }
@@ -75,11 +98,11 @@ class MeshEngine {
         sent.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it }
         if (sent.size >= 36) return null
         sent.add(elapsedMillis)
-        val bundle = parse(entry.bytes)
+        val bundle = parse(entry.bytes, saved = true)
         bundle.canonicalBlocks.removeAll { it.blockType == BlockType.PreviousNodeBlock.code }
         bundle.getHopCountBlockData()!!.count++
         bundle.getAgeBlockData()!!.age = currentAge(entry, elapsedMillis)
-        return bundle.cborMarshal().also { require(it.size <= MeshPolicy.MAX_BUNDLE_BYTES) }
+        return bundle.cborMarshal().takeIf { it.size <= MeshPolicy.MAX_BUNDLE_BYTES }
     }
 
     private fun insert(
@@ -89,7 +112,7 @@ class MeshEngine {
         applyRateLimit: Boolean,
         restoring: Boolean = false,
     ): StoredBundle? {
-        val bundle = parse(bytes)
+        val bundle = parse(bytes, saved = restoring)
         // Library checkValid() uses wall clock and rejects expired bundles. Offline restore
         // needs those for the relay queue, so validate structure separately here.
         bundle.checkValidPrimaryBlock()
@@ -113,8 +136,8 @@ class MeshEngine {
         require(bundle.primaryBlock.lifetime in 1..MeshPolicy.MAX_RESIDENCE_MILLIS) { "lifetime exceeds local policy" }
         if (!restoring) {
             require(age.age < bundle.primaryBlock.lifetime) { "bundle lifetime expired" }
-            require(signed.expirySeconds > nowMillis / 1000) { "delivery deadline expired" }
-            if (bundle.primaryBlock.creationTimestamp != 0L) require(!bundle.isExpired()) { "bundle expired" }
+            require(deadline(event, nowMillis) != DeliveryDeadline.EXPIRED) { "delivery deadline expired" }
+            require(creationTimeEligible(bundle, nowMillis)) { "bundle expired" }
         }
         val knownTypes = setOf(1, 6, 7, 10)
         val unknown = bundle.canonicalBlocks.filter { it.blockType !in knownTypes }
@@ -137,17 +160,21 @@ class MeshEngine {
     }
 
     private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {
-        val signed = policy(entry.event)
-        val bundle = parse(entry.bytes)
+        val bundle = parse(entry.bytes, saved = true)
         val hop = bundle.getHopCountBlockData()!!
-        return signed.expirySeconds > nowMillis / 1000 &&
+        return deadline(entry.event, nowMillis) != DeliveryDeadline.EXPIRED &&
             hop.count < minOf(hop.limit, MeshPolicy.MAX_HOPS) &&
             currentAge(entry, elapsedMillis) < bundle.primaryBlock.lifetime &&
-            (bundle.primaryBlock.creationTimestamp == 0L || !bundle.isExpired())
+            creationTimeEligible(bundle, nowMillis)
     }
 
+    private fun creationTimeEligible(bundle: Bundle, nowMillis: Long): Boolean =
+        clockConfidence != ClockConfidence.TRUSTED || bundle.primaryBlock.creationTimestamp == 0L ||
+            !bundle.isExpired(dtnTimeFromUnixMsec(nowMillis))
+
     private fun currentAge(entry: StoredBundle, elapsedMillis: Long): Long =
-        saturatedAdd(parse(entry.bytes).getAgeBlockData()!!.age, positiveDifference(elapsedMillis, entry.receivedElapsedMillis))
+        if (elapsedMillis < entry.receivedElapsedMillis) Long.MAX_VALUE else
+            saturatedAdd(parse(entry.bytes, saved = true).getAgeBlockData()!!.age, positiveDifference(elapsedMillis, entry.receivedElapsedMillis))
 
     private data class SignedPolicy(val destination: String, val maxHops: Int, val priority: Int, val expirySeconds: Long)
 
@@ -164,8 +191,8 @@ class MeshEngine {
         return SignedPolicy(tag[2], hops, tag[4].toInt(), expiry[1].toLong())
     }
 
-    private fun parse(bytes: ByteArray): Bundle {
-        require(bytes.size in 1..MeshPolicy.MAX_BUNDLE_BYTES) { "bundle size limit" }
+    private fun parse(bytes: ByteArray, saved: Boolean = false): Bundle {
+        require(bytes.size in 1..if (saved) MeshPolicy.MAX_SAVED_BUNDLE_BYTES else MeshPolicy.MAX_BUNDLE_BYTES) { "bundle size limit" }
         BoundedCbor.check(bytes)
         return cborUnmarshalBundle(bytes)
     }

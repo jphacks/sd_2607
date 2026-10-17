@@ -57,7 +57,7 @@ class MeshEngineTest {
     @Test fun restartConsumesResidenceTimeAndExpiredBacklogNeverReentersMesh() {
         val a = MeshEngine()
         val entry = a.originate(post(), now, 100)
-        val b = MeshEngine()
+        val b = MeshEngine(ClockConfidence.TRUSTED)
         b.restore(entry.bytes, now, now + 30_000, 10)
         assertEquals(30_000, cborUnmarshalBundle(b.forward(entry.event.id, now + 30_000, 10)!!).getAgeBlockData()!!.age)
         val expired = MeshEngine()

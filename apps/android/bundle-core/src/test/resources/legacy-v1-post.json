@@ -1,0 +1,39 @@
+{
+  "event": {
+    "id": "28574a0e81dbf53c8f1b9ec719c5e06161fa8b9d361be21aae915a8dbf0bba97",
+    "pubkey": "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+    "created_at": 1792195200,
+    "kind": 1,
+    "tags": [
+      [
+        "mndt",
+        "1",
+        "dtn://mndt.local/~demo",
+        "8",
+        "1"
+      ],
+      [
+        "mndt-exp",
+        "1792281600"
+      ],
+      [
+        "t",
+        "mndt-experimental-v1"
+      ],
+      [
+        "atproto",
+        "1",
+        "eyJ2ZXJzaW9uIjoxLCJkaWQiOiJkaWQ6cGxjOm5kZ3ljY2x5Y3A0d2ticGRtczV4aGhhMyIsImF0cHJvdG9QdWJrZXkiOiIwMmU0OTNkYmYxYzEwZDgwZjM1ODFlNDkwNDkzMGIxNDA0Y2M2YzEzOTAwZWUwNzU4NDc0ZmE5NGFiZThjNGNkMTMiLCJwYXRoIjoieHh4LmRpc2FzdGVyLnBvc3QvM214enJ2NmJjMjIyMiIsInJlY29yZENpZCI6ImJhZnlyZWllYXp6b3lrZTNsYzVzMzdkMmlhdHlhYWxuZXU3NTI2a3h6YndwZHVlNzJ3aWZwNnFvY3plIiwiY29tbWl0Q2lkIjoiYmFmeXJlaWhkb3ZqbnUzNHZwaG9ibGF1NGZ4cTI1MzVvaXJ3aGJleGt3aDVxYmlvcWp4bTRjeGlkN20iLCJhcHBseUZyb21Db21taXQiOm51bGwsInJlY29yZENib3IiOiJvMlIwWlhoMGVDTHBnYi9wbTZQbWlZQkI0NEd2NlphTDZLaXQ1cmlJNDRHLzQ0R240NEdaNDRDQ1pTUjBlWEJsY1hoNGVDNWthWE5oYzNSbGNpNXdiM04wYVdOeVpXRjBaV1JCZEhReU1ESTJMVEV3TFRFM1ZEQXdPakF3T2pBd1dnPT0iLCJjb21taXRDYm9yIjoicG1Oa2FXUjRJR1JwWkRwd2JHTTZibVJuZVdOamJIbGpjRFIzYTJKd1pHMXpOWGhvYUdFelkzSmxkbTB6YlhoNmNuWTJZbU15TWpJeVkzTnBaMWhBODR3UzZodjBKUnNRTlgzbW53cFJwbEVxQ1FOUXNmUS9uaGFIdW1sUTVxNGpGNVZIcmNGb1RHbkpaalBjWHdUaFNxV3h4UllVQmt2amJYME1LS2xSSVdSa1lYUmgyQ3BZSlFBQmNSSWczSStqaXkvN3BraDEvWUZ5Q0R5TFh6SVpyVmw1MlFyNm5aM0swOElDWG9Ga2NISmxkdlpuZG1WeWMybHZiZ009In0="
+      ]
+    ],
+    "content": "避難所Aは開設済みです。",
+    "sig": "1cd16223be67ab828333d3e7090172e55209f896e133beb6095cbe8554bd82076803ff8d0fa46cd0168fcf7c777bebe2ae4cbd6094712837cf3aec929beae613"
+  },
+  "repository": {
+    "records": {
+      "xxx.disaster.post/3mxzrv6bc2222": "bafyreieazzoyke3lc5s37d2iatyaalneu7526kxzbwpdue72wifp6qocze"
+    },
+    "previousCommit": "bafyreihdovjnu34vphoblau4fxq2535oirwhbexkwh5qbioqjxm4cxid7m",
+    "lastRevMicros": 1792195200000000
+  }
+}

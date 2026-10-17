@@ -28,6 +28,10 @@ internal fun nextRelayId(ids: List<String>, lastAttempt: String?, deferred: Map<
     return (ids.drop(start) + ids.take(start)).firstOrNull { now >= (deferred[it] ?: 0L) }
 }
 
+internal fun onlineRelayAllowed(enabled: Boolean, foreground: Boolean, fatal: Boolean, overloaded: Boolean, relay: String,
+    serviceRunning: Boolean = false): Boolean =
+    enabled && (foreground || serviceRunning) && !fatal && !overloaded && relay.isNotEmpty()
+
 internal object Wire {
     const val SERVICE_ID = "org.mndt.mesh.experimental.v1"
     // TODO(undecided): experimental single deployment group, not a standardized EID.

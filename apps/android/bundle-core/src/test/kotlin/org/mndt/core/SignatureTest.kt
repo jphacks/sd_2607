@@ -10,7 +10,14 @@ class SignatureTest {
     private fun key(n: Int) = ByteArray(32).also { it[31] = n.toByte() }
     private fun author() = Author(SecretKeys(key(3), key(4), key(5)), "https://pds.invalid")
     private val now = 1792195200000L
-    private fun envelope(e: NostrEvent) = strictJson(String(Base64.getDecoder().decode(e.tags.single { it[0] == "atproto" }[2]), Charsets.UTF_8))
+    private fun envelope(e: NostrEvent): com.fasterxml.jackson.databind.JsonNode {
+        val change = AtRepository.restore(e)
+        val commit = CanonicalCbor.decode(change.commitBytes) as Map<*, *>
+        return jsonMapper.valueToTree(mapOf("version" to 1, "did" to commit["did"], "path" to change.path,
+            "atprotoPubkey" to change.atprotoPubkey, "recordCid" to change.recordCid, "commitCid" to change.commitCid,
+            "applyFromCommit" to change.applyFromCommit, "recordCbor" to Base64.getEncoder().encodeToString(change.recordBytes),
+            "commitCbor" to Base64.getEncoder().encodeToString(change.commitBytes)))
+    }
     private fun resigned(e: NostrEvent): NostrEvent {
         val hash = sha256(e.signingBytes())
         return e.copy(id = hex(hash), sig = hex(secp.signSchnorr(hash, key(3), ByteArray(32))))
@@ -20,7 +27,132 @@ class SignatureTest {
         val map = jsonMapper.convertValue(node, Map::class.java).entries.associate { it.key as String to it.value }.toMutableMap()
         change(map)
         val payload = Base64.getEncoder().encodeToString(utf8(jsonMapper.writeValueAsString(map)))
-        return resigned(e.copy(tags = e.tags.map { if (it[0] == "atproto") listOf("atproto", "1", payload) else it }))
+        val tags = e.tags.filterNot { it[0].startsWith(AtRepository.TAG_PREFIX) || it[0] == "atproto" }
+            .map { if (it[0] == "t") listOf("t", "mndt-experimental-v1") else it }
+        return resigned(e.copy(tags = tags + listOf(listOf("atproto", "1", payload))))
+    }
+
+    private fun withRecord(e: NostrEvent, record: Map<String, Any?>, extraTags: List<List<String>>): NostrEvent {
+        val original = AtRepository.restore(e)
+        val recordBytes = CanonicalCbor.encode(record)
+        val commit = CanonicalCbor.decode(original.commitBytes) as Map<*, *>
+        val unsigned = commit.filterKeys { it != "sig" } + ("data" to CidLink(AtRepository.mstRoot(mapOf(original.path to cid(recordBytes)))))
+        val signed = CanonicalCbor.encode(unsigned + ("sig" to secp.sign(sha256(CanonicalCbor.encode(unsigned)), key(4))))
+        val tags = e.tags.map {
+            when (it[0]) {
+                AtRepository.TAG_PREFIX + "recordCid" -> listOf(it[0], cid(recordBytes))
+                AtRepository.TAG_PREFIX + "commit" -> listOf(it[0], Base64.getEncoder().encodeToString(signed))
+                else -> it
+            }
+        }
+        return resigned(e.copy(tags = tags + extraTags))
+    }
+
+    @Test fun unknownOpenUnionExtensionRestoresWithoutLosingData() {
+        val event = author().createPost("拡張未対応でも読める本文", now).event
+        val type = "org.example.audit.defs#unknown"
+        val link = cid(byteArrayOf(1, 2, 3))
+        val extension = mapOf("\$type" to type, "extra" to listOf(null, false, emptyList<Any>(), 9007199254740993L),
+            "bytes" to byteArrayOf(0, -1), "ref" to CidLink(link))
+        val json = jsonMapper.writeValueAsString(extension + mapOf("bytes" to mapOf("\$bytes" to "AP8="), "ref" to mapOf("\$link" to link)))
+        val record = (CanonicalCbor.decode(AtRepository.restore(event).recordBytes) as Map<*, *>).entries
+            .associate { it.key as String to it.value } + ("extensions" to listOf(extension))
+        val signed = withRecord(event, record, listOf(listOf(AtRepository.TAG_PREFIX + "extension:" + type, "0", json)))
+        assertTrue(signed.verify())
+        assertTrue("Unknown extension must not invalidate repository restoration", AtRepository.verifyEnvelope(signed))
+        assertArrayEquals(CanonicalCbor.encode(record), AtRepository.restore(signed).recordBytes)
+        val mesh = MeshEngine()
+        mesh.originate(signed, now, 0)
+        assertEquals(signed, MeshEngine().accept(mesh.forward(signed.id, now, 0)!!, now, 0)!!.event)
+    }
+
+    @Test fun authorCreatesIndependentExtensionTags() {
+        val first = mapOf("\$type" to "org.example.audit.defs#origin", "latitude" to "35.0", "future" to null)
+        val second = mapOf("\$type" to "org.example.audit.defs#area", "regions" to emptyList<Any>())
+        val created = author().createPost("本文", now, extensions = listOf(first, second, first), deliveryExpiresAtSeconds = now / 1000 + 3600)
+        val event = created.event
+        val change = AtRepository.restore(event)
+        val record = CanonicalCbor.decode(change.recordBytes) as Map<*, *>
+        assertArrayEquals(CanonicalCbor.encode(listOf(first, second, first)), CanonicalCbor.encode(record["extensions"]))
+        val tags = event.tags.filter { it[0].startsWith(AtRepository.TAG_PREFIX + "extension:") }
+        assertEquals(listOf("0", "1", "2"), tags.map { it[1] })
+        tags.forEach { assertTrue(it[2].startsWith("{")); assertTrue(strictJson(it[2]).has("\$type")) }
+        assertEquals(listOf("mndt-exp", (now / 1000 + 3600).toString()), event.tags.single { it[0] == "mndt-exp" })
+        val commit = CanonicalCbor.decode(change.commitBytes) as Map<*, *>
+        assertEquals(CidLink(AtRepository.mstRoot(created.repository.records)), commit["data"])
+    }
+
+    @Test fun unknownRecordFieldsArePreserved() {
+        val event = author().createPost("本文", now).event
+        val record = (CanonicalCbor.decode(AtRepository.restore(event).recordBytes) as Map<*, *>).entries
+            .associate { it.key as String to it.value } + ("futureField" to mapOf("nullable" to null, "nested" to listOf(1, 2)))
+        val tag = listOf(AtRepository.TAG_PREFIX + "field:futureField", "{\"nullable\":null,\"nested\":[1,2]}")
+        val signed = withRecord(event, record, listOf(tag))
+        assertTrue("Unknown record fields must not be dropped", AtRepository.verifyEnvelope(signed))
+        assertArrayEquals(CanonicalCbor.encode(record), AtRepository.restore(signed).recordBytes)
+        assertFalse(AtRepository.verifyEnvelope(resigned(signed.copy(tags = signed.tags + listOf(tag)))))
+    }
+
+    @Test fun rawCidInUnknownExtensionIsPreserved() {
+        val link = CidLink("b" + base32(byteArrayOf(1, 0x55, 0x12, 0x20) + sha256(byteArrayOf(7))))
+        val extension = mapOf("\$type" to "org.example.audit.defs#unknown", "ref" to link)
+        val created = runCatching { author().createPost("本文", now, extensions = listOf(extension)) }
+        assertTrue("Standard raw CID link must be supported: ${created.exceptionOrNull()?.message}", created.isSuccess)
+        val record = CanonicalCbor.decode(AtRepository.restore(created.getOrThrow().event).recordBytes) as Map<*, *>
+        assertArrayEquals(CanonicalCbor.encode(listOf(extension)), CanonicalCbor.encode(record["extensions"]))
+        assertThrows(Exception::class.java) { AtRepository.mstRoot(mapOf("xxx.disaster.post/key" to link.value)) }
+    }
+
+    @Test fun extraNostrTopicsDoNotBlockRepositoryRestoration() {
+        val original = author().createPost("本文", now).event
+        val event = resigned(original.copy(tags = original.tags + listOf(listOf("t", "another-topic"), listOf("unknown", "keep"))))
+        assertTrue("Protocol identification must not reject other topic tags", AtRepository.verifyEnvelope(event))
+        assertArrayEquals(AtRepository.restore(original).recordBytes, AtRepository.restore(event).recordBytes)
+    }
+
+    @Test fun legacySignedEventAndRepositoryHeadRemainUnchanged() {
+        val fixture = javaClass.getResourceAsStream("/legacy-v1-post.json")!!.use { strictJson(String(it.readBytes(), Charsets.UTF_8)) }
+        val event = NostrEvent.fromJson(jsonMapper.writeValueAsString(fixture["event"]))
+        assertTrue(AtRepository.verifyEnvelope(event))
+        val oldEnvelope = strictJson(String(Base64.getDecoder().decode(event.tags.single { it[0] == "atproto" }[2]), Charsets.UTF_8))
+        assertArrayEquals(Base64.getDecoder().decode(oldEnvelope["recordCbor"].string()), AtRepository.restore(event).recordBytes)
+        assertArrayEquals(Base64.getDecoder().decode(oldEnvelope["commitCbor"].string()), AtRepository.restore(event).commitBytes)
+        val stored = MeshEngine().originate(event, now, 0)
+        val restarted = MeshEngine()
+        assertEquals(event, restarted.restore(stored.bytes, now, now + 1000, 0)!!.event)
+        val repository = fixture["repository"]
+        val previous = RepositoryState(repository["records"].properties().associate { it.key to it.value.string() },
+            repository["previousCommit"].string(), repository["lastRevMicros"].integer())
+        val next = author().createPost("新形式で追記", now + 1000, previous)
+        assertEquals(previous.previousCommit, AtRepository.restore(next.event).applyFromCommit)
+        assertTrue(next.repository.records.entries.containsAll(previous.records.entries))
+        assertEquals(event, EventCodec.decode(EventCodec.encode(event)))
+    }
+
+    @Test fun invalidBindingDataIsRejectedWithoutDroppingUnknownFields() {
+        val extension = mapOf("\$type" to "org.example.audit.defs#unknown", "value" to null)
+        val event = author().createPost("本文", now, extensions = listOf(extension)).event
+        val tag = event.tags.single { it[0].startsWith(AtRepository.TAG_PREFIX + "extension:") }
+        val badTags = listOf(
+            listOf(tag[0], "1", tag[2]), listOf(tag[0], "00", tag[2]),
+            listOf(tag[0] + "Other", "0", tag[2]),
+            listOf(tag[0], "0", "{\"\$type\":\"org.example.audit.defs#unknown\",\"value\":0.5}"),
+            listOf(tag[0], "0", "{\"\$type\":\"org.example.audit.defs#unknown\",\"value\":1,\"value\":2}"),
+            listOf(tag[0], "0", "{\"\$type\":\"org.example.audit.defs#unknown\",\"value\":9223372036854775808}"),
+        )
+        for (bad in badTags) assertFalse(AtRepository.verifyEnvelope(resigned(event.copy(tags = event.tags.map { if (it === tag) bad else it }))))
+        assertFalse(AtRepository.verifyEnvelope(resigned(event.copy(tags = event.tags + listOf(tag)))))
+        assertFalse(AtRepository.verifyEnvelope(resigned(event.copy(tags = event.tags.filterNot { it[0] == AtRepository.TAG_PREFIX + "base" }))))
+        assertFalse(AtRepository.verifyEnvelope(resigned(event.copy(tags = event.tags + listOf(event.tags.single { it[0] == AtRepository.TAG_PREFIX + "commit" })))))
+        assertFalse(AtRepository.verifyEnvelope(resigned(event.copy(tags = event.tags.map { if (it[0] == "mndt-exp") listOf("mndt-exp", (now / 1000 + 1).toString()) else it }))))
+        assertThrows(Exception::class.java) { author().createPost("本文", now, deliveryExpiresAtSeconds = now / 1000) }
+        assertThrows(Exception::class.java) { author().createPost("本文", now, extensions = listOf(mapOf("\$type" to "not-a-type"))) }
+        for (bad in listOf("{\"\$bytes\":true}", "{\"\$bytes\":\"__8\"}", "{\"\$bytes\":\"AB==\"}", "{\"\$link\":\"not-a-cid\"}", "{\"\$bytes\":\"AQ==\",\"extra\":1}")) {
+            assertThrows(Exception::class.java) { AtDataJson.decode(bad) }
+        }
+        assertArrayEquals(byteArrayOf(0, -1), AtDataJson.decode("{\"\$bytes\":\"AP8\"}") as ByteArray)
+        val extremes = listOf(Long.MIN_VALUE, Long.MAX_VALUE)
+        assertEquals(extremes, AtDataJson.decode(AtDataJson.encode(extremes)))
     }
 
     @Test fun bip340OfficialVectorZero() {
@@ -83,6 +215,26 @@ class SignatureTest {
         }
     }
 
+    @Test fun repositoryFieldsHaveIndependentTags() {
+        val event = author().createPost("本文", now).event
+        assertFalse("Opaque legacy envelope must not be generated", event.tags.any { it[0] == "atproto" })
+        for (field in listOf("commit", "recordCid", "base", "path", "action", "key", "type", "createdAt")) {
+            assertEquals(field, 1, event.tags.count { it[0] == "org.mndt.experimental.v2.$field" })
+        }
+        assertEquals("本文", event.content)
+        assertEquals(1, event.tags.count { it[0] == "mndt-exp" })
+    }
+
+    @Test fun deliveryDeadlineIsPreservedInSignedRecord() {
+        val event = author().createPost("本文", now).event
+        val bytes = Base64.getDecoder().decode(envelope(event)["recordCbor"].string())
+        val record = CanonicalCbor.decode(bytes) as Map<*, *>
+        val expiry = event.tags.single { it[0] == "mndt-exp" }[1].toLong()
+        // TODO(undecided): provisional field name and timestamp representation.
+        assertEquals(java.time.Instant.ofEpochSecond(expiry).toString(), record["deliveryExpiresAt"])
+        assertTrue(AtRepository.verifyEnvelope(event))
+    }
+
     @Test fun authorPreservesPreviousStateAndSignedCommitBytes() {
         val a = author()
         val first = a.createPost("避難所Aは開設済みです。", now)
@@ -96,7 +248,7 @@ class SignatureTest {
         assertEquals(first.repository.previousCommit, envelope(second.event)["applyFromCommit"].string())
         assertEquals(listOf("mndt", "1", "dtn://mndt.local/~demo", "8", "1"), first.event.tags[0])
         assertEquals(listOf("mndt-exp", (now / 1000 + 86400).toString()), first.event.tags[1])
-        assertEquals(listOf("t", "mndt-experimental-v1"), first.event.tags[2])
+        assertEquals(listOf("t", "mndt-experimental-v2"), first.event.tags[2])
         for (post in listOf(first, second)) {
             val env = envelope(post.event)
             val bytes = Base64.getDecoder().decode(env["commitCbor"].string())
@@ -110,8 +262,19 @@ class SignatureTest {
         assertEquals(first.event, EventCodec.decode(EventCodec.encode(first.event)))
         // Optional independent-interoperability export; never includes private keys.
         System.getenv("MNDT_FIXTURE_DIR")?.let { dir ->
+            val third = a.createPost("未知拡張の独立照合", now + 1000, second.repository, extensions = listOf(
+                mapOf("\$type" to "org.example.audit.defs#unknown", "bytes" to byteArrayOf(0, -1),
+                    "ref" to CidLink("b" + base32(byteArrayOf(1, 0x55, 0x12, 0x20) + sha256(byteArrayOf(7)))),
+                    "values" to listOf(null, false, emptyList<Any>(), 9007199254740993L, Long.MIN_VALUE, Long.MAX_VALUE)),
+                mapOf("\$type" to "org.example.audit.defs#unknown", "nullable" to null)
+            ))
             val fixture = mapOf("did" to a.did, "initialOperation" to strictJson(a.initialOperationJson), "binding" to strictJson(a.bindingJson),
-                "posts" to listOf(first, second).map { mapOf("event" to strictJson(it.event.toJson()), "repository" to it.repository) })
+                "posts" to listOf(first, second, third).map {
+                    val change = AtRepository.restore(it.event)
+                    mapOf("event" to strictJson(it.event.toJson()), "repository" to it.repository,
+                        "recordCbor" to Base64.getEncoder().encodeToString(change.recordBytes),
+                        "commitCbor" to Base64.getEncoder().encodeToString(change.commitBytes))
+                })
             File(dir).mkdirs(); File(dir, "kotlin-fixture.json").writeText(jsonMapper.writeValueAsString(fixture))
         }
     }

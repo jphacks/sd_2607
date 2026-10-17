@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import org.mndt.core.RepositoryState
+import org.mndt.core.MeshPolicy
 import org.mndt.core.SecretKeys
 import org.mndt.core.StoredBundle
 import java.io.File
@@ -15,15 +16,22 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-internal data class SavedBundle(val bytes: ByteArray, val receivedAtMillis: Long)
+internal data class SavedBundle(val bytes: ByteArray, val receivedAtMillis: Long,
+    val savedElapsedMillis: Long? = null, val bootCount: Int? = null) {
+    fun downtime(currentBoot: Int?, elapsed: Long): Long? =
+        if (bootCount != null && bootCount == currentBoot && savedElapsedMillis != null && elapsed >= savedElapsedMillis)
+            elapsed - savedElapsedMillis else null
+}
 internal data class DiskState(
     val keys: SecretKeys,
     val repository: RepositoryState = RepositoryState(),
     val bundles: List<SavedBundle> = emptyList(),
     val relay: String = "",
     val relayAccepted: Map<String, Set<String>> = emptyMap(),
+    // Historical matching-genesis observation only; never restores current authority/PDS acceptance.
     val plcRegistered: Boolean = false,
-    val pdsEndpoint: String = "https://pds.invalid"
+    val pdsEndpoint: String = "https://pds.invalid",
+    val onlineEnabled: Boolean = false
 )
 
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
@@ -64,8 +72,10 @@ internal class EncryptedStore(context: Context) {
             require(bundles.isArray && bundles.size() <= 128)
             val saved = bundles.map {
                 val bytes = Base64.getDecoder().decode(it.path("bytes").textValue())
-                require(bytes.size in 1..24_000 && it.path("received").isIntegralNumber)
-                SavedBundle(bytes, it["received"].longValue())
+                require(bytes.size in 1..MeshPolicy.MAX_SAVED_BUNDLE_BYTES && it.path("received").isIntegralNumber)
+                val elapsed = it["elapsed"]?.takeUnless { n -> n.isNull }?.also { n -> require(n.isIntegralNumber && n.canConvertToLong() && n.longValue() >= 0) }?.longValue()
+                val boot = it["boot"]?.takeUnless { n -> n.isNull }?.also { n -> require(n.isIntegralNumber && n.canConvertToInt() && n.intValue() >= 0) }?.intValue()
+                SavedBundle(bytes, it["received"].longValue(), elapsed, boot)
             }
             val accepted = node.path("accepted")
             require(accepted.isObject && accepted.size() <= 8)
@@ -74,18 +84,22 @@ internal class EncryptedStore(context: Context) {
                 entry.key to entry.value.map { require(it.isTextual && it.textValue().matches(Regex("[0-9a-f]{64}"))); it.textValue() }.toSet()
             }
             return DiskState(keys, RepositoryState(records, node["previous"]?.takeUnless { it.isNull }?.textValue(),
-                node.path("lastRev").longValue()), saved, node.path("relay").asText(""), acks, node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"))
+                node.path("lastRev").longValue()), saved, node.path("relay").asText(""), acks, node.path("plcRegistered").asBoolean(false),
+                node.path("pdsEndpoint").asText("https://pds.invalid"), node.path("onlineEnabled").asBoolean(node.path("relay").asText("").isNotEmpty()))
         } finally { plain.fill(0) }
     }
-    fun save(state: DiskState, entries: List<StoredBundle>) {
+    fun save(state: DiskState, entries: List<StoredBundle>, bootCount: Int? = null) {
         val node = json.createObjectNode().put("v", 1)
             .put("nostr", base64.encodeToString(state.keys.nostr))
             .put("atproto", base64.encodeToString(state.keys.atproto))
             .put("plc", base64.encodeToString(state.keys.plc))
-            .put("relay", state.relay).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
+            .put("relay", state.relay).put("onlineEnabled", state.onlineEnabled).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
             .put("previous", state.repository.previousCommit).put("lastRev", state.repository.lastRevMicros)
         node.putObject("records").also { records -> state.repository.records.forEach { (k, v) -> records.put(k, v) } }
-        node.putArray("bundles").also { a -> entries.forEach { a.addObject().put("bytes", base64.encodeToString(it.bytes)).put("received", it.receivedAtMillis) } }
+        node.putArray("bundles").also { a -> entries.forEach {
+            a.addObject().put("bytes", base64.encodeToString(it.bytes)).put("received", it.receivedAtMillis)
+                .put("elapsed", it.receivedElapsedMillis).put("boot", bootCount)
+        } }
         node.putObject("accepted").also { a -> state.relayAccepted.forEach { (url, ids) -> a.putArray(url).also { list -> ids.forEach(list::add) } } }
         val plain = json.writeValueAsBytes(node)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

@@ -3,4 +3,7 @@
     <string name="mesh_notification_title">MNDT メッシュ稼働中</string>
     <string name="mesh_notification_body">署名済み投稿を近隣端末と交換しています</string>
     <string name="mesh_stop">停止</string>
+    <string name="online_channel">オンライン通信</string>
+    <string name="online_notification_title">MNDT オンライン通信有効</string>
+    <string name="online_notification_body">設定先リレーへ投稿を送信・新着を購読しています</string>
 </resources>
