@@ -30,7 +30,7 @@ CAP、EDXL、気象庁防災情報XMLから、人が読める本文と任意の�
 - 通常投稿・訂正等は、1投稿につき1レコード追加・1 commit・1 Nostr投稿イベント。本文投稿は `kind: 1`、`content` は人が読める本文とする。複数投稿のバッチcommitは初期仕様に設けない。
 - 訂正は新しい投稿であり、過去のレコードを上書きしない。取消の通知、期限切れ、著者による削除要求は別の概念である。
 - 通常投稿の署名付き配送期限は必須。情報の有効期間は任意であり、省略は期間不明を意味する。配送期限から有効期間を補わない。
-- 影響範囲は円・Geohashセルの和集合。WGS 84の度、円の半径はメートル。行政区域コードと多角形は初期の共通領域表現に含めない。
+- 影響範囲は円・Geohashセルの和集合。保存は固定単位の整数とし、WGS 84の座標は100万分の1度、円の半径・測位精度はミリメートルを1とする。行政区域コードと多角形は初期の共通領域表現に含めない。
 - 拡張一覧は Lexicon の open union とし、各要素は `$type` と拡張固有フィールドを持つ。共通の `type`・`version`・`value` の包みは用いない。未対応の署名付き拡張を削って中継しない。本文は拡張の非対応だけを理由に拒否しない。
 - 受信者が信頼する複数の取り込みサーバーを用意し、既定ではそのうち1者の有効な署名で受理できる。複数者の一致は追加の確認であり必須ではない。
 - 原情報の同値性と署名付きイベントの識別を分離する。変換者が違えば、Nostr event ID・署名、record CID・commitは別物として保持する。
@@ -59,7 +59,8 @@ EDXL（Emergency Data Exchange Language）は緊急情報交換の仕様群で�
 type integer = number; // 整数を意味する説明用表記
 type Timestamp = string; // 合意済み: atproto datetimeに適合するUTC・末尾Z。例: 2026-10-17T03:00:00Z
 type Bytes = Uint8Array; // 生バイト列。Base64文字列そのものではない
-type Decimal = string; // 十進文字列。例: "35.0"、"500"。浮動小数点数ではない
+type Microdegrees = integer; // 合意済み: WGS 84の100万分の1度
+type Millimeters = integer; // 合意済み: 距離のミリメートル単位
 
 // 0011で定義するopen union。未知の$typeも保持する。
 type Extension = KnownExtension | UnknownExtension;
@@ -131,11 +132,11 @@ type PublicInformationExtension = {
 };
 ```
 
-`document.format` に従って `status` 等の語彙を読む。CAPの `Actual` と気象庁の「通常」を、共通の登録値として同一視する規則はここでは設けない。`sourceFields` は原文XMLを丸ごとJSON化する袋ではなく、以下のマッピングに必要な項目を保持する場所とする。任意のJSON objectではなく、入れ子を含めてatprotoデータモデル [A] に適合する値だけを格納し、浮動小数点数を含めない。元のXML数値は文字列で保持し、緯度・経度・半径・精度等の論理型 `Decimal` も十進文字列とする。項目別のスキーマ・サイズ上限は未決定。
+`document.format` に従って `status` 等の語彙を読む。CAPの `Actual` と気象庁の「通常」を、共通の登録値として同一視する規則はここでは設けない。`sourceFields` は原文XMLを丸ごとJSON化する袋ではなく、以下のマッピングに必要な項目を保持する場所とする。任意のJSON objectではなく、入れ子を含めてatprotoデータモデル [A] に適合する値だけを格納し、浮動小数点数を含めない。原形式側に残すXML数値は文字列で保持する。一方、共通の発信地点・円の座標は `Microdegrees`、半径・測位精度は `Millimeters` の整数へ変換する。原値の文字列と変換後の整数を混同しない。項目別のスキーマ・サイズ上限は未決定。
 
 原情報参照は `public-information.references`、本プロトコル内の対象投稿への参照は `annotation` が担う。原電文IDをNostr event IDやatURIの代わりに使わない。原情報から派生した投稿への対応索引は取り込み側・AppViewで持ち、対象投稿が判明した場合は [0011 §7](0011-extensions.md#7-注釈-annotation型案) の参照案と関連付ける。
 
-`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitude: Decimal; longitude: Decimal; radiusMeters: Decimal } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
+`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitudeMicrodegrees: Microdegrees; longitudeMicrodegrees: Microdegrees; radiusMillimeters: Millimeters } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
 
 ## 5. 共通の処理の流れ（提案）
 
@@ -164,7 +165,7 @@ HTTPSは取得時の通信保護・サーバー認証であり、持ち運んだ
 | 各 `info` の `language`・`headline`・`description`・`instruction` | 情報単位ごとの言語と本文。指示を省いて意味を変えない |
 | `category`・`event`・`urgency`・`severity`・`certainty` | 原語彙を保持。ローカル配送優先度への直結はしない |
 | `effective`・`onset`・`expires` | 内容の有効開始・現象開始・終了を区別。共通 `validity` への対応は選択した `info` ごと |
-| `area` の `circle` | 緯度・経度を読み、半径kmをmに変換して `area` の候補にする |
+| `area` の `circle` | 緯度・経度を100万分の1度、半径kmをミリメートル単位の整数に変換して `area` の候補にする。丸め・誤差の規則は別途定める |
 | `polygon`・`geocode`・`areaDesc`、高度条件 | 原形式側に保持。共通領域への変換・近似は別途規則が必要 |
 | `resource`・`web` | リンク等を保持できるが、画像・音声・添付データ本体のmesh配送を要求しない |
 
@@ -387,7 +388,7 @@ type BsafAppViewInput = {
     },
     {
       "$type": "org.example.disaster.defs#area",
-      "regions": [{ "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" }]
+      "regions": [{ "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 }]
     },
     {
       "$type": "org.example.disaster.defs#validity",
@@ -398,7 +399,7 @@ type BsafAppViewInput = {
 }
 ```
 
-`area`・`validity` は0011と共通の説明用形に合わせている。`Decimal` は十進文字列、`validity` の `startsAt`・`endsAt` はそれぞれ任意であり、不明な端点を補わない。確定wire仕様を意味しない。`did:example:ingester`、URL、変換規則名、期限は架空の例示であり、実運用DID method・登録名・既定時間の採用ではない。外部標準の版番号や半径の単位換算と、本プロトコルの未決の上限値は区別する。
+`area`・`validity` は0011と共通の説明用形に合わせている。共通の座標は100万分の1度、距離はミリメートル単位の整数とする。例の数値は丸めなしで変換できる。`validity` の `startsAt`・`endsAt` はそれぞれ任意であり、不明な端点を補わない。確定wire仕様を意味しない。`did:example:ingester`、URL、変換規則名、期限は架空の例示であり、実運用DID method・登録名・既定時間の採用ではない。外部標準の版番号や半径の単位換算と、本プロトコルの未決の上限値は区別する。
 
 ### 7.3 マッピングと処理結果
 
@@ -414,7 +415,7 @@ type BsafAppViewInput = {
 | 取得・投稿生成 | `retrievedAt = 03:00:05Z`、`createdAt = 03:00:10Z` |
 | `effective`・`expires` | `validity` の `03:00:00Z`〜`06:00:00Z` |
 | 運用者の配送判断 | `deliveryExpiresAt = 04:00:00Z`。内容の終了時刻ではない |
-| CAPの半径 `2.5` km | `radiusMeters = "2500"`（十進文字列）。CAP文字列も原形式側に保持 |
+| CAPの座標 `35.0,139.0` と半径 `2.5` km | `latitudeMicrodegrees = 35000000`、`longitudeMicrodegrees = 139000000`、`radiusMillimeters = 2500000`。CAP文字列も原形式側に保持 |
 | `contentObject[1]` のPDF参照 | 本文・出典の関連リンク。添付本体の配送や別の警報投稿は生成しない |
 | `references` なし | 新規発表として空配列。訂正対象を推測しない |
 | 生成された一件の `Post` | 1レコード・1 commit・1 Nostr `kind: 1`。`content` に `text` |
@@ -461,7 +462,7 @@ CAP・DEの多角形、気象庁やBSAFの地域コードは、そのまま共�
 
 | 記号 | 一次資料 | 今回確認した範囲と限界 |
 |---|---|---|
-| A | [atproto Data Model](https://atproto.com/specs/data-model) | Data Types、Why No Floats?、JSON Representationを確認。浮動小数点数は不可、整数は符号付き64 bit。十進文字列への対応は本書と0011の設計案であり、外部標準の専用Decimal型ではない |
+| A | [atproto Data Model](https://atproto.com/specs/data-model) | Data Types、Why No Floats?、JSON Representationを確認。浮動小数点数は不可、整数は符号付き64 bit。共通の座標・距離は0010の合意済み固定単位の整数を使う。原形式の数値文字列の保持とは別であり、外部標準の専用座標型ではない |
 | C | [OASIS CAP 1.2, OASIS Standard, 2010-07-01](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html) | §1.3、§3.2、§3.3、スキーマ、多言語例。`info` の多重性、公開範囲、更新・取消参照、期間、円のkm、時刻、任意のXML署名。国別プロファイルや実発表の運用は未確認 |
 | D | [OASIS EDXL-DE 1.0, OASIS Standard, 2006-05-01](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf) | PDF本文をテキスト抽出し、§1.3、§2、§3.2、付録Aを確認。複数内容、XML/非XML、容器・内容の機密区分、配布地域、参照形式。組織別の公開区分やEDXL仕様群全体は確認対象外 |
 | J1 | [気象庁XML情報提供ページ](https://xml.kishou.go.jp/) | 公開PULL型の案内、技術資料への入口。電文署名・公開鍵の案内は確認できず、全経路についての結論ではない |

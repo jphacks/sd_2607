@@ -29,7 +29,7 @@ type KnownExtension = OriginExtension | AreaExtension | ValidityExtension
 type UnknownExtension = { $type: string; [field: string]: DataValue };
 ```
 
-`DataValue` は atproto データモデルの値であり、float や未定義値を含めない。未知拡張もそのモデルに適合するオブジェクトとして保持する。`Text`・`Timestamp`・`Decimal`・`Bytes`・`Cid` 等は [0010](0010-core.md) の型を使う。身元証明の型は内容が定まり次第、既知型へ追加できる。
+`DataValue` は atproto データモデルの値であり、float や未定義値を含めない。未知拡張もそのモデルに適合するオブジェクトとして保持する。`Text`・`Timestamp`・`Microdegrees`・`Millimeters`・`Bytes`・`Cid` 等は [0010](0010-core.md) の型を使う。身元証明の型は内容が定まり次第、既知型へ追加できる。
 
 - `$type` は完全修飾の Lexicon 型参照（NSID、必要なら `#定義名`）を持つ。以下の短い `area` 等は説明用名称である。例の `org.example.disaster.defs#area` 等は架空の識別子で、正式な名前空間の採用を意味しない。
 - 個別型の例にある `$type: string` は説明用であり、正式なスキーマでは各型を区別する特定の参照になる。
@@ -58,14 +58,14 @@ type UnknownExtension = { $type: string; [field: string]: DataValue };
 ```ts
 type OriginExtension = {
   $type: string;
-  latitude: Decimal;
-  longitude: Decimal;
-  accuracyMeters?: Decimal;
+  latitudeMicrodegrees: Microdegrees;
+  longitudeMicrodegrees: Microdegrees;
+  accuracyMillimeters?: Millimeters;
   measuredAt?: Timestamp;
 };
 ```
 
-緯度・経度は WGS 84 の度、精度の距離はメートル。精度の統計的な定義・数値範囲・量子化は未決定である。公開は任意であり、利用者は精度を落とせる。測位時刻が不明なら現在時刻で補わない。高度を基本の領域判定には使わない。
+緯度・経度は WGS 84 の100万分の1度、精度の距離はミリメートル単位の整数で保存する。表示時は度・メートルへ換算できる。精度の統計的な定義・数値範囲・原値から整数への丸め規則は未決定である。公開は任意であり、利用者は精度を落とせる。測位時刻が不明なら現在時刻で補わない。高度を基本の領域判定には使わない。
 
 公的電文の震源・観測地点や、変換サーバーの所在地を被災現場の発信地点として扱わない。署名された座標は発信者の申告であって GPS の真正性や現地滞在の証明ではない。
 
@@ -74,27 +74,27 @@ type OriginExtension = {
 ```ts
 type Circle = {
   shape: "circle";
-  latitude: Decimal;
-  longitude: Decimal;
-  radiusMeters: Decimal;
+  latitudeMicrodegrees: Microdegrees;
+  longitudeMicrodegrees: Microdegrees;
+  radiusMillimeters: Millimeters;
 };
 type GeohashCell = { shape: "geohash"; hash: string };
 type AreaExtension = { $type: string; regions: (Circle | GeohashCell)[] };
 ```
 
-`regions` の意味は和集合である。円とセルを混在できる。中心座標は WGS 84 の度、半径はメートル。行政区域コード・多角形・除外領域は初期の共通範囲型に含めない。
+`regions` の意味は和集合である。円とセルを混在できる。中心座標は WGS 84 の100万分の1度、半径はミリメートル単位の整数として保存する。行政区域コード・多角形・除外領域は初期の共通範囲型に含めない。
 
 ```json
 {
   "$type": "org.example.disaster.defs#area",
   "regions": [
-    { "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" },
+    { "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 },
     { "shape": "geohash", "hash": "xn76" }
   ]
 }
 ```
 
-この例の二つの領域は同一形状であることを意味しない。Geohash の許容長・要素数・半径上限・十進正規化・地表距離の計算法・空配列の扱いは未決定である。
+この例の二つの領域は同一形状であることを意味しない。Geohash の許容長・要素数・半径上限・原値の丸めと領域誤差・地表距離の計算法・空配列の扱いは未決定である。座標・距離の固定単位は [0010 §3.2](0010-core.md#32-座標距離の整数表現合意済み) に従う。
 
 対応できる要素のいずれかに含まれれば範囲内。それ以外で未知の要素があれば判定不明。全要素を扱えた場合に限り範囲外とできる。元電文の領域の一部しか変換できなかった場合、既知部分だけを完全な範囲として発行しない。現段階の型案では共通 `area` を省略し、原形式側に情報を保持できる。近似領域や未解決部分の表現は未決定である。
 
