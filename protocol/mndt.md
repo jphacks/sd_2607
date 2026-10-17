@@ -85,6 +85,21 @@ BLE の central／peripheral と GATT client／server の役割はリンクの�
 
 両役対応とは両方の役割で動作できることを意味し、広告と探索の常時同時実行、多数の同時接続、背景での常時動作を要求するものではない。両役対応同士の接続開始競合・重複接続の整理、役割の広告・選択・切替の具体形式は別途定める。
 
+### 3.2.2 GATT サービスと共通送受信経路（合意済み）
+
+本プロファイルは、参加アプリ・機器に共通の一つの GATT サービスと、方向別の二つの characteristic を使う。`RX`・`TX` は server 側から見た方向を表す説明用名称であり、UUID の値は別途割り当てる。
+
+| characteristic | 転送方向 | GATT 操作 |
+|---|---|---|
+| RX | central／client → peripheral／server | client からの書込み |
+| TX | peripheral／server → central／client | server からの通知。client は通知を購読する |
+
+能力交換・所持一覧・取得要求・Bundle 転送等は、同じ送受信経路の上位メッセージ種別で区別する。機能・投稿の種類・個別の著者拡張ごとに characteristic を追加する構成は採用しない。GATT 層は上位のメッセージをバイト列として運び、本文や拡張の意味を解釈する条件を設けない。共通の交換メッセージを LAN・Nearby の転送経路でも再利用できるよう、GATT 固有の操作と上位メッセージの意味を分離する。
+
+同じ接続で両方向に送受信し、能力交換や Bundle の送信側を central または peripheral の一方に固定しない。二つの characteristic はサービスのデータ転送用の構成を表し、通知設定等に必要な標準 descriptor を除外するものではない。
+
+書込みの応答方式、転送フレーム・メッセージ境界、MTU に応じた分割、流量制御、受信完了と保存完了の応答は未確定である。GATT 操作の成功だけで Bundle の受信・保存完了を保証した扱いにはしない。
+
 ### 3.3 BLE から Nearby への経路切替（合意済み）
 
 BLE GATT で接続した双方が Nearby Connections に対応し、各機器の制限の範囲で利用可能な場合は、Nearby による別の接続を試み、成立時に転送経路を切り替えられる。既存の独自 GATT 接続をそのまま Nearby 接続へ変換するものではない。Nearby 自身の探索・接続・双方の受け入れを行う。
@@ -116,7 +131,7 @@ BLE で接続した相手のアプリ実体と、Nearby で接続した相手を
 
 ### 3.5 wire 形式と動作範囲の残事項
 
-BLE のサービス UUID・characteristic・広告内容、能力交換・相手の対応付け・所持一覧・要求の具体的なデータ型、各リンクの分割・流量制御・再開方法は未確定である。32 KiB はイベント payload の上限であり、Bundle を一度の GATT 書込みや Nearby Bytes payload に収める要件ではない。下位リンクの分割と BPv7 の Bundle fragmentation は区別する。
+GATT は §3.2.2 の1サービス・方向別2 characteristic とし、サービスと characteristic の UUID・広告内容、能力交換・相手の対応付け・所持一覧・要求の具体的なデータ型、各リンクの分割・流量制御・再開方法は未確定である。32 KiB はイベント payload の上限であり、Bundle を一度の GATT 書込みや Nearby Bytes payload に収める要件ではない。下位リンクの分割と BPv7 の Bundle fragmentation は区別する。
 
 OS が実行を許す間の接触で交換する。背景・画面消灯・強制終了後の常時探索・中継を保証しない。Nostr WebSocket session を透過的にメッシュへ流すものではない。
 
