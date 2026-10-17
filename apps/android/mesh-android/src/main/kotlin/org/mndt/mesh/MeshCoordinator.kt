@@ -128,9 +128,13 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
         scope.launch { while (isActive) { delay(1_000); enqueue { tick() } } }
     }
-    /** Link frames and ticks may be dropped under load; [critical] actions (UI, connection state) wait for space. */
+    /**
+     * Link frames and ticks may be dropped under load; [critical] actions (UI, connection state) wait for space.
+     * Both take the direct path first so a link's connected → frame → disconnected order is kept: a HELLO
+     * overtaking its onConnected was silently dropped and the peer cut 10 s later.
+     */
     private fun enqueue(critical: Boolean = false, action: () -> Unit) {
-        if (critical) scope.launch { inbox.send(action) } else inbox.trySend(action)
+        if (inbox.trySend(action).isFailure && critical) scope.launch { inbox.send(action) }
     }
     private fun now() = System.currentTimeMillis()
     private fun elapsed() = SystemClock.elapsedRealtime()

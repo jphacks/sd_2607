@@ -50,10 +50,10 @@ internal fun shouldConnect(myNode: String, peer: GattAdvert) =
 /**
  * BLE GATT link: every phone is GATT server + advertiser and scanner + central at once.
  *
- * Advertisement (legacy, 31 bytes max): Flags AD added by the stack (3) + 128-bit Service Data AD
- * (1 len + 1 type 0x21 + 16 UUID + 8 node id + 1 flags = 27) = 30 bytes. The UUID is NOT also listed as a
- * 128-bit Service UUID AD (another 18 bytes would overflow), so scanning filters on service data, and no
- * device name / TX power is included.
+ * Advertisement (legacy): Flags (3) + 128-bit Service UUID list (18) = 21 bytes; scanners filter on the UUID,
+ * which controllers offload reliably. The scan response carries the 128-bit Service Data
+ * (1 len + 1 type 0x21 + 16 UUID + 8 node id + 1 flags = 27 bytes). A filter on 128-bit Service Data alone
+ * matched nothing on a real phone (OPPO CPH2797, Android 16), so it is not used.
  *
  * Bytes on either direction are [Frames.encode] streams cut into (MTU - 3) chunks: central writes RX with
  * response, server notifies TX; one chunk in flight per peer. Peer handles are "c:ADDR" (we are central)
@@ -88,6 +88,8 @@ internal class GattLink(private val context: Context) : Link {
     private val serverMtu = HashMap<String, Int>()
     // ponytail: backoff keyed by device address; phones rotate private addresses (~15 min), which resets it.
     private val backoff = HashMap<String, Pair<Int, Long>>()
+    /** First time each node was seen; lets the tie-break loser dial when the winner cannot see us. */
+    private val firstSeen = HashMap<String, Long>()
 
     override fun start(node: String, listener: LinkListener) {
         require(node.matches(Regex("[0-9a-fA-F]{16}"))) { "node must be 16 hex" }
@@ -118,7 +120,7 @@ internal class GattLink(private val context: Context) : Link {
             runCatching { advertiseCb?.let { advertiser?.stopAdvertising(it) } }
             for (p in peers.values.toList()) drop(p)
             runCatching { server?.close() }
-            server = null; scanCb = null; advertiseCb = null; listener = null; serverMtu.clear()
+            server = null; scanCb = null; advertiseCb = null; listener = null; serverMtu.clear(); firstSeen.clear()
         }
     }
 
@@ -146,11 +148,16 @@ internal class GattLink(private val context: Context) : Link {
     }
 
     private fun connect(g: Int, device: BluetoothDevice, ad: GattAdvert) {
-        if (!shouldConnect(node, ad) || peers.size >= MAX_LINKS) return
+        if (ad.node == node || peers.size >= MAX_LINKS) return
+        val now = SystemClock.elapsedRealtime()
+        val waited = now - firstSeen.getOrPut(ad.node) { now } >= ASYMMETRIC_FALLBACK_MS
+        // Visibility can be one-way (one phone's scanner misses the other's advert), so the loser dials too after a wait.
+        if (!shouldConnect(node, ad) && !waited) return
         val addr = device.address
         if (peers.values.any { it.device.address == addr || it.node == ad.node }) return
         if ((backoff[addr]?.second ?: 0) > SystemClock.elapsedRealtime()) return
         val h = "c:$addr"
+        Log.i(TAG, "connecting to node ${ad.node} ($addr)")
         val gatt = device.connectGatt(context, false, clientCallback(g, h), BluetoothDevice.TRANSPORT_LE) ?: return
         val p = Peer(h, device, gatt, ad.node)
         peers[h] = p
@@ -160,6 +167,7 @@ internal class GattLink(private val context: Context) : Link {
     private fun connected(p: Peer) {
         if (p.connected) return
         p.connected = true
+        Log.i(TAG, "connected ${p.handle}")
         backoff.remove(p.device.address)
         emit { it.onConnected(this, p.handle) }
     }
@@ -192,7 +200,9 @@ internal class GattLink(private val context: Context) : Link {
     private fun drop(p: Peer) {
         if (peers[p.handle] !== p) return
         peers.remove(p.handle)
+        Log.i(TAG, "dropped ${p.handle} (connected=${p.connected})")
         runCatching { if (p.gatt != null) { p.gatt.disconnect(); p.gatt.close() } else server?.cancelConnection(p.device) }
+        p.node?.let { firstSeen.remove(it) }
         if (p.connected) emit { it.onDisconnected(this, p.handle) }
         else if (p.gatt != null) {
             val n = (backoff[p.device.address]?.first ?: 0) + 1
@@ -226,6 +236,7 @@ internal class GattLink(private val context: Context) : Link {
         val adv = advertiser ?: return
         val cb = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                Log.i(TAG, "advertising node $node")
                 safe(Unit) { synchronized(lock) { if (g != gen) adv.stopAdvertising(this) } }
             }
             override fun onStartFailure(errorCode: Int) { Log.w(TAG, "advertise failed: $errorCode") }
@@ -233,23 +244,26 @@ internal class GattLink(private val context: Context) : Link {
         val settings = AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM).setConnectable(true).setTimeout(0).build()
         val data = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
+            .addServiceUuid(ParcelUuid(SERVICE_UUID)).build()
+        val response = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
             .addServiceData(ParcelUuid(SERVICE_UUID), gattServiceData(node)).build()
         advertiseCb = cb
-        adv.startAdvertising(settings, data, cb)
+        adv.startAdvertising(settings, data, response, cb)
     }
 
     private fun scan(g: Int) {
         val cb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 locked(g) {
+                    // Results without the scan response lack the node id; the merged one follows.
                     val ad = parseGattAdvert(result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID))) ?: return
                     connect(g, result.device, ad)
                 }
             }
             override fun onScanFailed(errorCode: Int) { Log.w(TAG, "scan failed: $errorCode") }
         }
-        // A filter is required for scanning to continue with the screen off; empty data matches any payload.
-        val filter = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), ByteArray(0)).build()
+        // A filter is required for scanning to continue with the screen off.
+        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
         scanCb = cb
         scanner?.startScan(listOf(filter), settings, cb)
@@ -378,6 +392,7 @@ internal class GattLink(private val context: Context) : Link {
         const val MAX_LINKS = 7
         const val MAX_QUEUE = 64
         const val CONNECT_TIMEOUT_MS = 15_000L
+        const val ASYMMETRIC_FALLBACK_MS = 10_000L
         private val BACKOFF_MS = longArrayOf(5_000, 30_000, 120_000)
         private const val TAG = "GattLink"
     }

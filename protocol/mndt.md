@@ -154,8 +154,8 @@ Nostr リレーの受理は、全メッシュ端末への到達や、PDS・AppVi
 | Service UUID | `b5e89a01-f9da-45c2-9111-2de7a7441d24` |
 | RX characteristic（central → peripheral、write with response） | `483c3867-c832-4c60-9a96-7018059eaf74` |
 | TX characteristic（peripheral → central、notify。CCCD あり） | `49d60590-c23f-4a0a-a58e-f2f2f606f94d` |
-| 広告 | legacy 31 バイト内。128-bit Service Data（AD type `0x21`）= Service UUID + node ID 8 バイト + flags 1 バイト（bit0 = peripheral 専用）。Service UUID 一覧は載せない |
-| 役割選択 | 各端末が GATT server・広告と scan・central を兼ねる。相手が peripheral 専用、または自 node ID < 相手 node ID（16進小文字の辞書順）のときだけ central として接続し、重複リンクを避ける |
+| 広告 | legacy。広告データに 128-bit Service UUID 一覧、scan response に 128-bit Service Data（AD type `0x21`）= Service UUID + node ID 8 バイト + flags 1 バイト（bit0 = peripheral 専用）。scan は Service UUID で絞り込む（128-bit Service Data だけの絞り込みは実機 OPPO CPH2797 で一致しなかった） |
+| 役割選択 | 各端末が GATT server・広告と scan・central を兼ねる。相手が peripheral 専用、または自 node ID < 相手 node ID（16進小文字の辞書順）のとき central として接続する。片方向にしか見えない場合に備え、相手を10秒見続けても接続されなければ node ID が大きい側からも接続する（重複リンクは event ID の重複排除で無害） |
 | 分割 | MTU 517 を要求し、(MTU − 3) バイトごとに分割。1チャンクずつ write 応答・notify 完了を待つ |
 
 node ID はプロセス起動ごとの乱数であり、身元・著者・端末の識別子ではない。
