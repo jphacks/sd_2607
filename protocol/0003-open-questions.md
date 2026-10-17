@@ -51,9 +51,9 @@
 
 - Nostr kind・検索可能なタグ・リレー互換性・保存方針。
 - リレー発見方式、既知 AppView の役割、既定リストの障害耐性。
-- PDS 公開 endpoint と DID の対応、標準 Relay の同期要件。
-- 複数独立サーバーの発見・複製・保存・公開方法。
-- 既存 Relay が重複 commit をどう扱うかの一次仕様・実装確認。
+- PDS 公開 endpoint と DID の対応、初回登録時の PDS 指定。公開構成が決まるまで未指定案の採否は保留。
+- 複数独立サーバーの発見・複製・保存・公開方法。一つの論理 PDS として公開する案は未合意。
+- [PDS・Relay 調査](0005-pds-relay-research.md) で正規ホスト照合・`rev` 重複処理・stream cursor の制約を確認済み。対象 Relay の実デプロイ版・設定と runtime 相互運用、共通ホスト背後の stream 継続性・DNS/TLS/管理権限の障害耐性は未検証。
 - AppView と Nostr の二経路取得時の同一投稿判定。
 
 ## 7. 原情報取り込み
