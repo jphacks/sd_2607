@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,7 +18,7 @@ import androidx.core.content.ContextCompat
 
 object MeshPermissions {
     fun required(): Array<String> = buildList {
-        if (Build.VERSION.SDK_INT <= 32) {
+        if (Build.VERSION.SDK_INT <= 30) {
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
             add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
@@ -26,26 +27,16 @@ object MeshPermissions {
             add(Manifest.permission.BLUETOOTH_ADVERTISE)
             add(Manifest.permission.BLUETOOTH_CONNECT)
         }
-        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
     }.toTypedArray()
     fun granted(context: Context) = required().all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 }
 
+/** One connectedDevice foreground service runs the BLE/LAN mesh and the relay gateway (mndt §3.5: best effort). */
 class MeshService : Service() {
     private val coordinator by lazy { MeshCoordinator.get(this) }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            coordinator.stop()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        if (!MeshPermissions.granted(this)) {
-            coordinator.reportError("Nearby に必要な権限がありません")
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        // startForeground comes first on every path: stopping before it after startForegroundService() crashes the app.
         try {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(CHANNEL, getString(R.string.mesh_channel), NotificationManager.IMPORTANCE_LOW))
@@ -60,19 +51,40 @@ class MeshService : Service() {
             }
             ServiceCompat.startForeground(this, 71, notification.build(),
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0)
-            coordinator.start()
         } catch (_: Exception) {
             coordinator.reportError("前景サービスを開始できません。画面から権限を確認して再試行してください")
             stopSelf()
+            return START_NOT_STICKY
         }
-        return START_NOT_STICKY
+        if (intent?.action == ACTION_STOP || !MeshPermissions.granted(this)) {
+            if (intent?.action != ACTION_STOP) coordinator.reportError("Bluetooth の権限がありません")
+            setEnabled(this, false)
+            coordinator.stop()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        coordinator.start()
+        return START_STICKY
     }
     override fun onDestroy() { coordinator.stop(); super.onDestroy() }
     companion object {
         private const val CHANNEL = "mndt-mesh"
         private const val ACTION_STOP = "org.mndt.mesh.STOP"
-        /** Start only from a visible Activity after Nearby permissions are granted. */
-        fun start(context: Context) = ContextCompat.startForegroundService(context, Intent(context, MeshService::class.java))
-        fun stop(context: Context) { context.stopService(Intent(context, MeshService::class.java)); MeshCoordinator.get(context).stop() }
+        private const val PREFS = "mesh-service"
+        /** Plain flag (readable before the keystore-backed state) so BootReceiver restarts only what the user left on. */
+        internal fun enabled(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
+        private fun setEnabled(context: Context, value: Boolean) =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", value).apply()
+        fun start(context: Context) { setEnabled(context, true); ContextCompat.startForegroundService(context, Intent(context, MeshService::class.java)) }
+        fun stop(context: Context) { setEnabled(context, false); context.stopService(Intent(context, MeshService::class.java)); MeshCoordinator.get(context).stop() }
+    }
+}
+
+/** Resumes the mesh after reboot if it was running; connectedDevice FGS may start from BOOT_COMPLETED. */
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED || !MeshService.enabled(context) || !MeshPermissions.granted(context)) return
+        runCatching { MeshService.start(context) }
     }
 }

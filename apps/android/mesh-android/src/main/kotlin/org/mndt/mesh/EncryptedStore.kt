@@ -26,31 +26,40 @@ internal data class DiskState(
     val keys: SecretKeys,
     val repository: RepositoryState = RepositoryState(),
     val bundles: List<SavedBundle> = emptyList(),
-    val relay: String = "",
+    val relays: List<String> = DEFAULT_RELAYS,
     val relayAccepted: Map<String, Set<String>> = emptyMap(),
     // Historical matching-genesis observation only; never restores current authority/PDS acceptance.
     val plcRegistered: Boolean = false,
     val pdsEndpoint: String = "https://pds.invalid",
-    val onlineEnabled: Boolean = false
-)
+    val onlineEnabled: Boolean = true
+) {
+    companion object {
+        // TODO(undecided): bundled general relays (0007 §5) until a mosimo PDS relay exists.
+        val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
+        const val MAX_RELAYS = 8
+    }
+}
 
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
 internal class EncryptedStore(context: Context) {
-    private val file = AtomicFile(File(context.noBackupFilesDir, "mesh-state.aesgcm"))
-    private val aad = "org.mndt.mesh.state.v1".toByteArray()
+    // Pre-protocol-0012 state (mesh-state.aesgcm) is intentionally not migrated; it is deleted on first load.
+    private val legacy = File(context.noBackupFilesDir, "mesh-state.aesgcm")
+    private val file = AtomicFile(File(context.noBackupFilesDir, "mosimo-state.aesgcm"))
+    private val aad = "dev.oriom.mosimo.state.v1".toByteArray()
     private val base64 = Base64.getEncoder()
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey("mndt-state-v1", null) as? SecretKey)?.let { return it }
+        (store.getKey(ALIAS, null) as? SecretKey)?.let { return it }
         // A missing key with existing state is corruption, never a silent identity reset.
         check(!file.baseFile.exists()) { "Encryption key unavailable" }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(KeyGenParameterSpec.Builder("mndt-state-v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            init(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256).build())
         }.generateKey()
     }
     fun load(): DiskState? {
+        legacy.delete(); File(legacy.path + ".bak").delete()
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
         val encrypted = file.openRead().use { input ->
             input.readBounded(MAX_DISK_BYTES).also { require(it.size in 29..MAX_DISK_BYTES) }
@@ -83,9 +92,14 @@ internal class EncryptedStore(context: Context) {
                 require(entry.value.isArray && entry.value.size() <= 128)
                 entry.key to entry.value.map { require(it.isTextual && it.textValue().matches(Regex("[0-9a-f]{64}"))); it.textValue() }.toSet()
             }
+            val relays = node.path("relays")
+            require(relays.isArray && relays.size() <= DiskState.MAX_RELAYS)
+            val clock = node.path("clockId")
+            require(clock.isIntegralNumber && clock.intValue() in 0..1023)
             return DiskState(keys, RepositoryState(records, node["previous"]?.takeUnless { it.isNull }?.textValue(),
-                node.path("lastRev").longValue()), saved, node.path("relay").asText(""), acks, node.path("plcRegistered").asBoolean(false),
-                node.path("pdsEndpoint").asText("https://pds.invalid"), node.path("onlineEnabled").asBoolean(node.path("relay").asText("").isNotEmpty()))
+                node.path("lastRev").longValue(), clock.intValue()), saved, relays.map { it.textValue() }, acks,
+                node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"),
+                node.path("onlineEnabled").asBoolean(true))
         } finally { plain.fill(0) }
     }
     fun save(state: DiskState, entries: List<StoredBundle>, bootCount: Int? = null) {
@@ -93,8 +107,10 @@ internal class EncryptedStore(context: Context) {
             .put("nostr", base64.encodeToString(state.keys.nostr))
             .put("atproto", base64.encodeToString(state.keys.atproto))
             .put("plc", base64.encodeToString(state.keys.plc))
-            .put("relay", state.relay).put("onlineEnabled", state.onlineEnabled).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
+            .put("onlineEnabled", state.onlineEnabled).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
             .put("previous", state.repository.previousCommit).put("lastRev", state.repository.lastRevMicros)
+            .put("clockId", state.repository.clockId)
+        node.putArray("relays").also { a -> state.relays.forEach(a::add) }
         node.putObject("records").also { records -> state.repository.records.forEach { (k, v) -> records.put(k, v) } }
         node.putArray("bundles").also { a -> entries.forEach {
             a.addObject().put("bytes", base64.encodeToString(it.bytes)).put("received", it.receivedAtMillis)
@@ -111,5 +127,8 @@ internal class EncryptedStore(context: Context) {
         try { output.write(encrypted); file.finishWrite(output) }
         catch (e: Exception) { file.failWrite(output); throw e }
     }
-    companion object { private const val MAX_DISK_BYTES = 16_000_000 }
+    companion object {
+        private const val MAX_DISK_BYTES = 16_000_000
+        private const val ALIAS = "mosimo-state-v1"
+    }
 }

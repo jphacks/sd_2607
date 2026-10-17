@@ -30,6 +30,8 @@ enum class DeliveryDeadline { UNKNOWN, WITHIN_DEADLINE, EXPIRED }
 /** Call from one serialized coordinator. Links only move bytes; this is the store-carry-forward router. */
 class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN) {
     private val stored = linkedMapOf<String, StoredBundle>()
+    /** Event IDs already accepted by an online relay; such entries are evicted first once they stop forwarding. */
+    var relayed: (String) -> Boolean = { false }
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
     private val sendRates = mutableMapOf<String, MutableList<Long>>()
@@ -60,14 +62,14 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     fun accept(bytes: ByteArray, nowMillis: Long, elapsedMillis: Long): StoredBundle? =
         insert(bytes, nowMillis, elapsedMillis, applyRateLimit = true)
 
-    /** Unknown downtime exhausts mesh residence, but retains the signed event for relay backlog. */
+    /** Without a monotonic downtime (reboot) the wall-clock gap counts as residence; a clock going backwards counts as zero. */
     fun restore(bytes: ByteArray, receivedAtMillis: Long, nowMillis: Long, elapsedMillis: Long,
                 downtimeMillis: Long? = null): StoredBundle? {
         val bundle = parse(bytes, saved = true)
         val age = bundle.getAgeBlockData() ?: error("missing bundle age")
         require(downtimeMillis == null || downtimeMillis >= 0)
-        val downtime = downtimeMillis ?: if (clockConfidence == ClockConfidence.TRUSTED && nowMillis >= receivedAtMillis)
-            positiveDifference(nowMillis, receivedAtMillis) else bundle.primaryBlock.lifetime
+        // ponytail: an untrusted wall clock may under-count reboot downtime; MAX_RESIDENCE still bounds uptime.
+        val downtime = downtimeMillis ?: positiveDifference(nowMillis, receivedAtMillis)
         age.age = saturatedAdd(age.age, downtime)
         // Expired entries remain available to the relay backlog, but never to mesh forwarding.
         return insert(bundle.cborMarshal(), nowMillis, elapsedMillis, applyRateLimit = false, restoring = true)
@@ -136,15 +138,14 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         require(bundle.primaryBlock.lifetime in 1..MeshPolicy.MAX_RESIDENCE_MILLIS) { "lifetime exceeds local policy" }
         if (!restoring) {
             require(age.age < bundle.primaryBlock.lifetime) { "bundle lifetime expired" }
-            require(deadline(event, nowMillis) != DeliveryDeadline.EXPIRED) { "delivery deadline expired" }
             require(creationTimeEligible(bundle, nowMillis)) { "bundle expired" }
         }
+        // A past signed deadline only stops forwarding (eligible); the event is still kept for gateway export.
         val knownTypes = setOf(1, 6, 7, 10)
         val unknown = bundle.canonicalBlocks.filter { it.blockType !in knownTypes }
         require(unknown.none { it.procV7flags and 0x04 != 0L }) { "unknown block requires bundle deletion" }
         bundle.canonicalBlocks.removeAll { it.blockType !in knownTypes && it.procV7flags and 0x10 != 0L }
         if (stored.containsKey(event.id)) return null
-        require(stored.size < MeshPolicy.MAX_ENTRIES) { "mesh storage full" }
         if (applyRateLimit) {
             rates.values.forEach { samples -> samples.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it } }
             rates.entries.removeAll { it.value.isEmpty() }
@@ -153,9 +154,16 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
             samples.add(elapsedMillis)
         }
         val entry = StoredBundle(event, bundle.cborMarshal(), hop.count, nowMillis, elapsedMillis)
+        if (stored.size >= MeshPolicy.MAX_ENTRIES) stored.remove(victim(nowMillis, elapsedMillis))
         stored[event.id] = entry
 
         return entry
+    }
+
+    // ponytail: no per-author fairness; the per-author accept rate is the only flood brake.
+    private fun victim(nowMillis: Long, elapsedMillis: Long): String {
+        val dead = stored.values.filterNot { eligible(it, nowMillis, elapsedMillis) }
+        return (dead.firstOrNull { relayed(it.event.id) } ?: dead.firstOrNull() ?: stored.values.first()).event.id
     }
 
     private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {

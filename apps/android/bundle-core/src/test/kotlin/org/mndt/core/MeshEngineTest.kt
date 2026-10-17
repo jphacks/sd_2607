@@ -101,4 +101,21 @@ class MeshEngineTest {
         repeat(12) { index -> a.originate(post("message $index"), now, 0) }
         assertThrows(Exception::class.java) { a.originate(post("rate limited"), now, 0) }
     }
+
+    @Test fun fullStoreEvictsDeadRelayedEntriesFirstThenOldest() {
+        val a = MeshEngine()
+        val authors = List(MeshPolicy.MAX_ENTRIES + 2) { Author(SecretKeys.generate(), "https://pds.invalid") }
+        val events = authors.map { it.createPost("p", now).event }
+        val dead = events[5]
+        val exhausted = cborUnmarshalBundle(MeshEngine().originate(dead, now, 0).bytes).also { it.getHopCountBlockData()!!.count = MeshPolicy.MAX_HOPS }
+        a.accept(exhausted.cborMarshal(), now, 0)
+        events.take(MeshPolicy.MAX_ENTRIES).filter { it != dead }.forEach { a.originate(it, now, 0) }
+        assertEquals(MeshPolicy.MAX_ENTRIES, a.entries().size)
+        a.relayed = { it == dead.id }
+        a.originate(events[MeshPolicy.MAX_ENTRIES], now, 0)
+        assertFalse(a.entries().any { it.event.id == dead.id })
+        a.originate(events[MeshPolicy.MAX_ENTRIES + 1], now, 0)
+        assertEquals(MeshPolicy.MAX_ENTRIES, a.entries().size)
+        assertFalse("oldest live entry goes next", a.entries().any { it.event.id == events[0].id })
+    }
 }

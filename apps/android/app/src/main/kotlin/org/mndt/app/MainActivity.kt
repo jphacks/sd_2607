@@ -21,11 +21,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LifecycleStartEffect
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
-import org.mndt.mesh.OnlineService
 import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
 
@@ -47,17 +45,11 @@ class MainActivity : ComponentActivity() {
 private fun Demo(mesh: MeshCoordinator) {
     val state by mesh.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    LifecycleStartEffect(state.ready, state.onlineEnabled) {
-        if (state.ready && state.onlineEnabled) runCatching { OnlineService.start(context) }
-            .onFailure { mesh.reportError("オンライン前景サービスを開始できません。画面から再試行してください") }
-        onStopOrDispose { /* OnlineService owns background IO; hiding this screen must not stop it. */ }
-    }
     var draft by rememberSaveable { mutableStateOf("") }
     var relay by rememberSaveable { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var seenPublishedId by remember { mutableStateOf(state.lastPublishedId) }
     var permissionNotice by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(state.relay) { relay = state.relay }
     LaunchedEffect(state.lastPublishedId) {
         if (state.lastPublishedId != seenPublishedId) { draft = ""; seenPublishedId = state.lastPublishedId }
     }
@@ -74,15 +66,15 @@ private fun Demo(mesh: MeshCoordinator) {
         runCatching { MeshService.start(context) }.onFailure { mesh.reportError("前景サービス開始失敗。権限とシステム設定を確認してください") }
         requestNotifications()
     }
-    val nearby = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+    val radios = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (MeshPermissions.granted(context)) begin()
-        else permissionNotice = "近隣端末の権限が必要です。拒否が続く場合は Android のアプリ設定を確認してください。"
+        else permissionNotice = "Bluetooth の権限が必要です。拒否が続く場合は Android のアプリ設定を確認してください。"
     }
     Surface(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().safeDrawingPadding().imePadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("MNDT メッシュ実験", style = MaterialTheme.typography.headlineSmall)
-                Text("${context.packageName} / 共通 P2P_CLUSTER", style = MaterialTheme.typography.labelSmall)
+                Text("mosimo メッシュ実験", style = MaterialTheme.typography.headlineSmall)
+                Text("${context.packageName} / BLE GATT・LAN (mDNS)", style = MaterialTheme.typography.labelSmall)
                 Text("実験実装・公開投稿のみ。名前・電話番号・詳しい居場所を投稿しないでください。", color = MaterialTheme.colorScheme.error)
             }
             item {
@@ -102,11 +94,11 @@ private fun Demo(mesh: MeshCoordinator) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = state.ready && !state.running, onClick = {
                         permissionNotice = null
-                        if (MeshPermissions.granted(context)) begin() else nearby.launch(MeshPermissions.required())
-                    }) { Text("Nearby 開始") }
-                    OutlinedButton(enabled = state.running, onClick = { MeshService.stop(context) }) { Text("Nearby 停止") }
+                        if (MeshPermissions.granted(context)) begin() else radios.launch(MeshPermissions.required())
+                    }) { Text("中継開始") }
+                    OutlinedButton(enabled = state.running, onClick = { MeshService.stop(context) }) { Text("中継停止") }
                 }
-                Text(if (state.running) "Nearby 中継中 / Bluetooth・Wi-Fi を有効にしてください" else "Nearby 停止中 / 保存・オンライン通信とは独立")
+                Text(if (state.running) "中継中（画面を閉じても・再起動後も継続）/ Bluetooth・Wi-Fi を有効にしてください" else "中継停止中 / 保存済み投稿は保持")
                 permissionNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
             state.error?.let { error -> item {
@@ -116,22 +108,26 @@ private fun Demo(mesh: MeshCoordinator) {
                 } }
             } }
             item {
-                OutlinedTextField(relay, { relay = it }, Modifier.fillMaxWidth(), label = { Text("リレー URL（未設定なら送信しません）") }, placeholder = { Text("wss://… または明示的なローカル ws://…") }, singleLine = true)
+                Text("オンライン搬出先リレー（接続できたときに保持中の全投稿を送信）", style = MaterialTheme.typography.titleSmall)
+                state.relays.forEach { url ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(url, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(enabled = state.ready, onClick = { mesh.removeRelay(url) }) { Text("削除") }
+                    }
+                }
+                OutlinedTextField(relay, { relay = it }, Modifier.fillMaxWidth(), label = { Text("リレー URL を追加") }, placeholder = { Text("wss://… または避難所 LAN の ws://…") }, singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(enabled = state.ready, onClick = { mesh.configureRelay(relay); if (relay.isNotBlank()) requestNotifications() }) { Text("保存してオンライン通信を有効化") }
-                    TextButton(enabled = state.ready && state.relay.isNotEmpty(), onClick = {
-                        mesh.setOnlineEnabled(!state.onlineEnabled)
-                        if (!state.onlineEnabled) requestNotifications()
-                    }) {
-                        Text(if (state.onlineEnabled) "オンライン停止" else "オンライン再開")
+                    TextButton(enabled = state.ready && relay.isNotBlank(), onClick = { mesh.addRelay(relay); relay = "" }) { Text("追加") }
+                    TextButton(enabled = state.ready, onClick = { mesh.setOnlineEnabled(!state.onlineEnabled) }) {
+                        Text(if (state.onlineEnabled) "オンライン搬出を停止" else "オンライン搬出を再開")
                     }
                 }
                 Text(when {
-                    state.onlineBackgroundActive -> "オンライン通信有効（画面非表示時も継続・Nearby 不要）"
-                    state.onlineActive -> "オンライン通信有効（画面内のみ / 前景サービス開始待ち）"
-                    else -> "オンライン停止 / 搬出待ちは保持"
+                    state.onlineActive -> "オンライン搬出有効（中継中は画面非表示でも継続）"
+                    state.onlineEnabled -> "オンライン搬出有効 / 中継開始または画面表示で接続"
+                    else -> "オンライン搬出停止 / 搬出待ちは保持"
                 }, style = MaterialTheme.typography.bodySmall)
-                Text("通知付き前景サービスで画面非表示時も送信・購読します。Android 15 以降は原則24時間中6時間の上限があり、停止後はアプリを開くと再開します。OS の省電力・強制停止・プロセス終了時の即時配送は保証しません。避難所 LAN でも接続を試みます。ws:// は暗号化されません。", style = MaterialTheme.typography.bodySmall)
+                Text("OS の省電力・強制停止時の即時配送は保証しません。ws:// は暗号化されません。", style = MaterialTheme.typography.bodySmall)
             }
             item {
                 OutlinedTextField(draft, { if (it.toByteArray(Charsets.UTF_8).size <= 2_000) draft = it }, Modifier.fillMaxWidth(), label = { Text("公開する本文（最大 2000 UTF-8 bytes）") }, minLines = 3)
@@ -142,16 +138,8 @@ private fun Demo(mesh: MeshCoordinator) {
             item { Text("近隣端末 ${state.neighbors.size}", style = MaterialTheme.typography.titleMedium) }
             items(state.neighbors, key = { it.endpoint }) { peer ->
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) {
-                    Text("${peer.name}（未認証の表示名）")
+                    Text("node ${peer.name}（未認証）")
                     Text("${peer.endpoint} / ${peer.status}", style = MaterialTheme.typography.bodySmall)
-                    peer.code?.let { code ->
-                        Text("照合コード: $code", style = MaterialTheme.typography.titleLarge)
-                        Text("相手の画面と同じ数字か確認してください。一致しない・知らない相手は拒否。")
-                        Row {
-                            TextButton(onClick = { mesh.confirm(peer.endpoint, true) }) { Text("一致した・許可") }
-                            TextButton(onClick = { mesh.confirm(peer.endpoint, false) }) { Text("拒否") }
-                        }
-                    }
                 } }
             }
             item { Text("署名検証済み投稿 ${state.posts.size}", style = MaterialTheme.typography.titleMedium) }
@@ -169,14 +157,13 @@ private fun Demo(mesh: MeshCoordinator) {
                             DeliveryDeadline.WITHIN_DEADLINE -> "信頼すると指定した端末時計では配送期限内（情報の有効性とは別）"
                             DeliveryDeadline.EXPIRED -> "配送期限切れ / 本文とオンライン搬出待ちは保持"
                         }, style = MaterialTheme.typography.bodySmall)
-                        Text(if (post.relayAccepted) "設定先リレー OK true / PDS・AppView は未確認" else "リレー未受理・未設定 / キュー保持", style = MaterialTheme.typography.bodySmall)
+                        Text(if (post.relayAccepted) "リレー OK true / PDS・AppView は未確認" else "リレー未受理 / キュー保持", style = MaterialTheme.typography.bodySmall)
                     }
                 } }
             }
             item {
                 Text("診断（本文・秘密鍵は出力しません）", style = MaterialTheme.typography.titleMedium)
                 Text(state.diagnostics.joinToString("\n"), style = MaterialTheme.typography.bodySmall)
-                Text("Nearby transport SUCCESS と、相手の保存 ACK と、リレー OK は別の状態です。", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

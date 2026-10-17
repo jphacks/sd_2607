@@ -24,28 +24,26 @@ class WireTest {
         assertEquals("b", nextRelayId(listOf("b", "c"), "a", emptyMap(), 0))
     }
 
-    @Test fun handshakeAndUntrustedInventoryAreBounded() {
-        assertEquals(Control("hello"), Wire.decode(Wire.encode(Control("hello"))))
+    @Test fun helloCarriesCapabilitiesAndControlsAreBounded() {
+        val hello = Control("hello", node = "0123456789abcdef", max = 24_000)
+        assertEquals(hello, Wire.decode(Wire.encode(hello)))
+        assertEquals(hello, Wire.decode("{\"v\":1,\"type\":\"hello\",\"node\":\"0123456789abcdef\",\"max\":24000,\"future\":true}".toByteArray()))
         val id = "a".repeat(64)
         assertEquals(listOf(id), Wire.decode(Wire.encode(Control("inventory", listOf(id)))).ids)
         listOf(
-            "{\"v\":2,\"type\":\"hello\"}",
-            "{\"v\":4294967297,\"type\":\"hello\",\"group\":\"${Wire.GROUP}\"}",
+            "{\"v\":2,\"type\":\"hello\",\"node\":\"0123456789abcdef\",\"max\":1}",
+            "{\"v\":1,\"type\":\"hello\"}",
+            "{\"v\":1,\"type\":\"hello\",\"node\":\"XYZ\",\"max\":1}",
+            "{\"v\":1,\"type\":\"hello\",\"node\":\"0123456789abcdef\",\"max\":40000}",
             "{\"v\":1,\"v\":1,\"type\":\"hello\"}",
             "{\"v\":1,\"type\":\"want\",\"ids\":[\"bad\"]}",
             "{\"v\":1,\"type\":\"ack\",\"ids\":[]}",
-            "{\"v\":1,\"type\":\"hello\"}{}"
+            "{\"v\":1,\"type\":\"inventory\",\"ids\":[]}{}"
         ).forEach { bad ->
             assertTrue(bad, runCatching { Wire.decode(bad.toByteArray()) }.isFailure)
         }
         assertTrue(runCatching { Wire.decode(ByteArray(32769)) }.isFailure)
         assertTrue(runCatching { Wire.encode(Control("inventory", List(129) { id })) }.isFailure)
-        val handshake = Handshake()
-        assertFalse(handshake.ready)
-        assertTrue(runCatching { handshake.receive(Control("want", listOf(id))) }.isFailure)
-        handshake.receive(Control("hello"))
-        assertTrue(handshake.ready)
-        handshake.receive(Control("inventory", listOf(id)))
     }
 
     @Test fun boundedReadsWorkWithoutNewAndroidJavaApis() {

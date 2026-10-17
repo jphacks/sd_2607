@@ -23,12 +23,18 @@ class ClockPolicyTest {
         assertNotNull(relay.forward(original.event.id, now + 2 * 86_400_000L, 1000))
     }
 
-    @Test fun unknownRestartWithoutElapsedEvidenceCannotRejuvenateBundle() {
+    @Test fun rebootDowntimeUsesWallClockGapAndBackwardClockCountsZero() {
         val original = source()
         val relay = MeshEngine()
         assertNotNull(relay.restore(original.bytes, now, now - 86_400_000L, 0))
-        assertNull(relay.forward(original.event.id, now - 86_400_000L, 0))
-        assertEquals(original.event, relay.entries().single().event)
+        assertEquals(0, cborUnmarshalBundle(relay.forward(original.event.id, now - 86_400_000L, 0)!!).getAgeBlockData()!!.age)
+        val later = MeshEngine()
+        later.restore(original.bytes, now, now + 3_600_000L, 0)
+        assertEquals(3_600_000, cborUnmarshalBundle(later.forward(original.event.id, now, 0)!!).getAgeBlockData()!!.age)
+        val gone = MeshEngine()
+        gone.restore(original.bytes, now, now + 86_400_000L, 0)
+        assertNull(gone.forward(original.event.id, now, 0))
+        assertEquals(original.event, gone.entries().single().event)
     }
 
     @Test fun trustedClockEnforcesSignedAbsoluteDeadlineButKeepsBacklog() {
@@ -39,9 +45,9 @@ class ClockPolicyTest {
         assertEquals(DeliveryDeadline.EXPIRED, relay.deadline(original.event, now + 86_400_000))
         assertNull(relay.forward(original.event.id, now + 86_400_000, 1))
         assertEquals(1, relay.entries().size)
-        assertThrows(IllegalArgumentException::class.java) {
-            MeshEngine(ClockConfidence.TRUSTED).accept(original.bytes, now + 86_400_000, 0)
-        }
+        val late = MeshEngine(ClockConfidence.TRUSTED)
+        assertNotNull("expired events are kept for gateway export", late.accept(original.bytes, now + 86_400_000, 0))
+        assertTrue(late.inventory(now + 86_400_000, 0).isEmpty())
     }
 
     @Test fun unknownAheadAndBackwardWallsCannotOverrideMonotonicLifetime() {
@@ -77,12 +83,6 @@ class ClockPolicyTest {
 
     @Test fun missingDowntimeAndRegressedElapsedFailBoundedRatherThanResettingAge() {
         val original = source()
-        val unknown = MeshEngine()
-        unknown.restore(original.bytes, now, now + 1000, 0)
-        assertTrue(unknown.inventory(now, 0).isEmpty())
-        val trusted = MeshEngine(ClockConfidence.TRUSTED)
-        trusted.restore(original.bytes, now, now - 1000, 0)
-        assertNull(trusted.forward(original.event.id, now - 1000, 0))
         val live = MeshEngine()
         live.accept(original.bytes, now, 1000)
         assertNull(live.forward(original.event.id, now, 0))
