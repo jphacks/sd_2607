@@ -50,6 +50,7 @@ flowchart TD
 | [0007: Nostr リレープロファイル](0007-nostr-relay-profile.md) | 直接投稿・取得・発見・保持 |
 | [0008: 投稿と注釈・Label](0008-posts-and-labels.md) | 本人の注釈とサービスの集約 Label |
 | [0009: 署名チェーンによる身元証明](0009-identity-attestations.md) | 公式発信者への帰属と信頼の起点 |
+| [0015: Nearby Connections 採用調査](0015-nearby-connections-research.md) | オープン性・異アプリ間接続・無線方式・OS 制約と下位リンクの採用案（未決定） |
 | [用語集](../CONTEXT.md) | 発信者・影響範囲・訂正等の既存用語 |
 
 ## 3. 要件と型案の読み分け
