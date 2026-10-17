@@ -26,19 +26,19 @@ CAP、EDXL、気象庁防災情報XMLから、人が読める本文と任意の�
 ### 2.1 既存合意
 
 - 初期仕様は公開情報のみを対象とし、限定公開・暗号化・個別通信を提供しない。地理情報はアクセス制御ではない。
-- 本プロトコルのatproto表現は独自Lexiconを本体とする。NSID、拡張の登録名、上限、wire配置は未決定。
+- 本プロトコルのatproto表現は独自Lexiconを本体とする。公式 NSID と型名は [0014](0014-namespaces.md) に割り当て済み。上限・個別のwire配置には未決定事項が残る。
 - 通常投稿・訂正等は、1投稿につき1レコード追加・1 commit・1 Nostr投稿イベント。本文投稿は `kind: 1`、`content` は人が読める本文とする。複数投稿のバッチcommitは初期仕様に設けない。
 - 訂正は新しい投稿であり、過去のレコードを上書きしない。取消の通知、期限切れ、著者による削除要求は別の概念である。
 - 通常投稿の署名付き配送期限は必須。情報の有効期間は任意であり、省略は期間不明を意味する。配送期限から有効期間を補わない。
-- 影響範囲は円・Geohashセルの和集合。WGS 84の度、円の半径はメートル。行政区域コードと多角形は初期の共通領域表現に含めない。
-- 拡張一覧は Lexicon の open union とし、各要素は `$type` と拡張固有フィールドを持つ。共通の `type`・`version`・`value` の包みは用いない。未対応の署名付き拡張を削って中継しない。本文は拡張の非対応だけを理由に拒否しない。
+- 影響範囲は円・Geohashセルの和集合。保存は固定単位の整数とし、WGS 84の座標は100万分の1度、円の半径・測位精度はミリメートルを1とする。行政区域コードと多角形は初期の共通領域表現に含めない。
+- 拡張一覧は Lexicon の open union とし、各要素は `$type` と拡張固有フィールドを持つ。共通の `type`・`version`・`value` の包みは用いない。Nostr では既定で1要素＝1自己完結タグとし、共通の運び方で未知型も保持・再構成する。未対応の署名付き拡張を削って中継しない。本文は拡張の非対応だけを理由に拒否しない。
 - 受信者が信頼する複数の取り込みサーバーを用意し、既定ではそのうち1者の有効な署名で受理できる。複数者の一致は追加の確認であり必須ではない。
 - 原情報の同値性と署名付きイベントの識別を分離する。変換者が違えば、Nostr event ID・署名、record CID・commitは別物として保持する。
 - AppViewは既存BSAF投稿を別入力として収集する。元著者・出典・識別子を保持し、元投稿の変更や署名の捏造をしない。BSAFからNostr・meshへの再配信は未決定。
 
 ### 2.2 本書で新たに提案するもの
 
-以下の説明用型、原情報参照の組、時刻のUTC表現、情報単位への分割、公開可否の判定方針、各形式からのマッピングは新提案である。外部標準のフィールドを記載していることと、その名前を本プロトコルのwireに登録することは同じではない。
+共通時刻型は [0010 §3.1](0010-core.md#31-共通時刻型合意済み) の合意に従う。以下の説明用型の個別フィールド、原情報参照の組、情報単位への分割、公開可否の判定方針、各形式からのマッピングは新提案である。外部標準のフィールドを記載していることと、その名前を本プロトコルのwireに登録することは同じではない。
 
 ## 3. 入力形式の役割
 
@@ -57,9 +57,10 @@ EDXL（Emergency Data Exchange Language）は緊急情報交換の仕様群で�
 
 ```ts
 type integer = number; // 整数を意味する説明用表記
-type Timestamp = string; // UTCのRFC 3339文字列を提案。例: 2026-10-17T03:00:00Z
+type Timestamp = string; // 合意済み: atproto datetimeに適合するUTC・末尾Z。例: 2026-10-17T03:00:00Z
 type Bytes = Uint8Array; // 生バイト列。Base64文字列そのものではない
-type Decimal = string; // 十進文字列。例: "35.0"、"500"。浮動小数点数ではない
+type Microdegrees = integer; // 合意済み: WGS 84の100万分の1度
+type Millimeters = integer; // 合意済み: 距離のミリメートル単位
 
 // 0011で定義するopen union。未知の$typeも保持する。
 type Extension = KnownExtension | UnknownExtension;
@@ -72,7 +73,7 @@ type Post = {
 };
 ```
 
-`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。JSON例の `org.example.disaster.defs#source` 等は架空の Lexicon 型参照である。正式な識別子と版管理は未決定だが、`$type` 付きオブジェクトを open union に格納する方式は合意済みである。
+`origin`、`area`、`validity`、`annotation`、`source`、`public-information`、`identity` は説明用名称であり、登録済み識別子ではない。公式の型参照は [0014](0014-namespaces.md) に従う。例えば出典は `dev.oriom.mosimo.defs#source` とする。三層の独立した版管理は [0010 §3.3](0010-core.md#33-三層の独立した版管理合意済み) に従う。版の具体表記・個別のスキーマには未決定事項が残るが、open union と自己完結したタグによる運搬は合意済みである。
 
 本書では、変換投稿の `createdAt` を変換者が新規投稿を作成した時刻とする案を使う。原発表時刻・取得時刻・現象発生時刻を別途保持する。配送期限は運用者が投稿時に絶対時刻として確定し、原情報の `expires` 等と同一視しない。具体的な既定期間や上限値は定めない。
 
@@ -91,7 +92,7 @@ type SourceRef = {
 type Digest = { algorithm: string; value: Bytes };
 
 type SourceExtension = {
-  $type: string;                 // 正式な型識別子は未決定
+  $type: "dev.oriom.mosimo.defs#source";
   document: SourceRef;           // 本文・構造化情報の直接の出典
   containers?: SourceRef[];      // 外側から内側の配布容器。内容の著者とは別
   retrievedFrom: string;         // 実際の取得URL
@@ -109,13 +110,13 @@ type SourceExtension = {
 
 `originalDigest` の対象は、ここではHTTP等から取得した原文ファイルの全バイト列とする案であり、XMLの再直列化後のバイト列ではない。改行・文字コード・属性順序の違いを吸収する正規化ハッシュとは別物である。HTTPの符号化解除等を含む正確な取得バイト境界とアルゴリズムの採用は未決定。
 
-型上の `Bytes` を atproto JSON で説明するときは、例えば `{"algorithm":"sha-256","value":{"$bytes":"AQID"}}` のように標準の bytes 表現を用いる。これは3バイトの表現例であって、有効なSHA-256ダイジェストの例ではない。CBOR 内では byte string とする。ハッシュアルゴリズムの採用や Nostr タグ全体の符号化は別途定める。後述の変換例では架空のダイジェストを作らず、この任意項目を省略する。
+型上の `Bytes` を atproto JSON で説明するときは、例えば `{"algorithm":"sha-256","value":{"$bytes":"AQID"}}` のように標準の bytes 表現を用いる。これは3バイトの表現例であって、有効なSHA-256ダイジェストの例ではない。CBOR 内では byte string とする。独自 Nostr タグの bytes 項目は [0012 §3.5](0012-bindings.md#35-独自タグのバイト列合意済み) の通常の Base64・paddingなしに従う。ハッシュアルゴリズムと具体的なタグ配置は別途定める。後述の変換例では架空のダイジェストを作らず、この任意項目を省略する。
 
 ### 4.3 `public-information`: 原情報の意味（提案）
 
 ```ts
 type PublicInformationExtension = {
-  $type: string;           // 正式な型識別子は未決定
+  $type: "dev.oriom.mosimo.defs#publicInformation";
   status: string;          // 実情報・訓練等。原形式の値を保持
   messageType: string;     // 発表・更新・取消等。原形式の値を保持
   scope: string;           // 原形式の公開区分。内部処理では限定・不明も区別
@@ -131,11 +132,11 @@ type PublicInformationExtension = {
 };
 ```
 
-`document.format` に従って `status` 等の語彙を読む。CAPの `Actual` と気象庁の「通常」を、共通の登録値として同一視する規則はここでは設けない。`sourceFields` は原文XMLを丸ごとJSON化する袋ではなく、以下のマッピングに必要な項目を保持する場所とする。任意のJSON objectではなく、入れ子を含めてatprotoデータモデル [A] に適合する値だけを格納し、浮動小数点数を含めない。元のXML数値は文字列で保持し、緯度・経度・半径・精度等の論理型 `Decimal` も十進文字列とする。項目別のスキーマ・サイズ上限は未決定。
+`document.format` に従って `status` 等の語彙を読む。CAPの `Actual` と気象庁の「通常」を、共通の登録値として同一視する規則はここでは設けない。`sourceFields` は原文XMLを丸ごとJSON化する袋ではなく、以下のマッピングに必要な項目を保持する場所とする。任意のJSON objectではなく、入れ子を含めてatprotoデータモデル [A] に適合する値だけを格納し、浮動小数点数を含めない。原形式側に残すXML数値は文字列で保持する。一方、共通の発信地点・円の座標は `Microdegrees`、半径・測位精度は `Millimeters` の整数へ変換する。原値の文字列と変換後の整数を混同しない。項目別のスキーマ・サイズ上限は未決定。
 
 原情報参照は `public-information.references`、本プロトコル内の対象投稿への参照は `annotation` が担う。原電文IDをNostr event IDやatURIの代わりに使わない。原情報から派生した投稿への対応索引は取り込み側・AppViewで持ち、対象投稿が判明した場合は [0011 §7](0011-extensions.md#7-注釈-annotation型案) の参照案と関連付ける。
 
-`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitude: Decimal; longitude: Decimal; radiusMeters: Decimal } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
+`area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitudeMicrodegrees: Microdegrees; longitudeMicrodegrees: Microdegrees; radiusMillimeters: Millimeters } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
 
 ## 5. 共通の処理の流れ（提案）
 
@@ -144,7 +145,7 @@ type PublicInformationExtension = {
 3. **公開可否を決める。** 容器・内容・提供元の条件を併せて評価する。限定・私信・解釈不能な制限は公開投稿へ変換しない。訓練・試験・内部制御情報は実災害情報と分け、実情報用の自動投入から外す案とする。
 4. **意味のある情報単位に分ける。** DEの各内容、CAPの言語・対象・期間の違いを保つ。選択箇所と変換規則の版を記録する。非対応の内容を公開警報に見せない。
 5. **本文と拡張を生成する。** 本文だけでも種別、発表元、対象、主要な指示、訂正・取消が分かるようにする。原時刻はUTCへ変換し、元表記や不確実性を必要な範囲で残す。期間・領域が不明なら捏造しない。
-6. **変換者として新規発信する。** 配送期限を確定し、変換者自身のレコードと署名付きイベントを生成する。1件ごとに1レコード・1 commit・1 Nostr `kind: 1` とし、`content = Post.text` にする。署名データの配置は0012側の担当とする。
+6. **変換者として新規発信する。** 配送期限を確定し、変換者自身のレコードと署名付きイベントを生成する。1件ごとに1レコード・1 commit・1 Nostr `kind: 1` とし、`content = Post.text` にする。`source`・`public-information`・`area`・`validity` は、それぞれ [0012 §3.2](0012-bindings.md#32-項目拡張ごとのタグ配置方式合意済み) の自己完結したタグで独立して運ぶ。PDS は各公的情報形式の意味を知らなくても元の拡張オブジェクトへ戻せる。本文・commit 等の配置も0012に従う。
 7. **受信側で取り扱いを決める。** 署名の有効性、変換者への信頼、機関への帰属、内容の真偽を別々に扱う。0002の条件を満たした原情報同値性に限って配送重複を抑制し、通常の本文一致による統合はしない。
 
 HTTPSは取得時の通信保護・サーバー認証であり、持ち運んだ本文に対する発表機関のオフライン署名ではない。取り込みサーバーの署名が証言する取得・変換と、発表機関自身の署名を区別する。原文ハッシュは同じバイト列の照合に役立つが、公式性や意味的同値性をそれだけで証明しない。
@@ -164,7 +165,7 @@ HTTPSは取得時の通信保護・サーバー認証であり、持ち運んだ
 | 各 `info` の `language`・`headline`・`description`・`instruction` | 情報単位ごとの言語と本文。指示を省いて意味を変えない |
 | `category`・`event`・`urgency`・`severity`・`certainty` | 原語彙を保持。ローカル配送優先度への直結はしない |
 | `effective`・`onset`・`expires` | 内容の有効開始・現象開始・終了を区別。共通 `validity` への対応は選択した `info` ごと |
-| `area` の `circle` | 緯度・経度を読み、半径kmをmに変換して `area` の候補にする |
+| `area` の `circle` | 緯度・経度を100万分の1度、半径kmをミリメートル単位の整数に変換して `area` の候補にする。丸め・誤差の規則は別途定める |
 | `polygon`・`geocode`・`areaDesc`、高度条件 | 原形式側に保持。共通領域への変換・近似は別途規則が必要 |
 | `resource`・`web` | リンク等を保持できるが、画像・音声・添付データ本体のmesh配送を要求しない |
 
@@ -334,7 +335,7 @@ type BsafAppViewInput = {
   "deliveryExpiresAt": "2026-10-17T04:00:00Z",
   "extensions": [
     {
-      "$type": "org.example.disaster.defs#source",
+      "$type": "dev.oriom.mosimo.defs#source",
       "document": {
         "format": "cap-1.2",
         "senderId": "alerts@example.org",
@@ -360,7 +361,7 @@ type BsafAppViewInput = {
       ]
     },
     {
-      "$type": "org.example.disaster.defs#publicInformation",
+      "$type": "dev.oriom.mosimo.defs#publicInformation",
       "status": "Actual",
       "messageType": "Alert",
       "scope": "Public",
@@ -386,11 +387,11 @@ type BsafAppViewInput = {
       }
     },
     {
-      "$type": "org.example.disaster.defs#area",
-      "regions": [{ "shape": "circle", "latitude": "35.0", "longitude": "139.0", "radiusMeters": "2500" }]
+      "$type": "dev.oriom.mosimo.defs#area",
+      "regions": [{ "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 }]
     },
     {
-      "$type": "org.example.disaster.defs#validity",
+      "$type": "dev.oriom.mosimo.defs#validity",
       "startsAt": "2026-10-17T03:00:00Z",
       "endsAt": "2026-10-17T06:00:00Z"
     }
@@ -398,7 +399,7 @@ type BsafAppViewInput = {
 }
 ```
 
-`area`・`validity` は0011と共通の説明用形に合わせている。`Decimal` は十進文字列、`validity` の `startsAt`・`endsAt` はそれぞれ任意であり、不明な端点を補わない。確定wire仕様を意味しない。`did:example:ingester`、URL、変換規則名、期限は架空の例示であり、実運用DID method・登録名・既定時間の採用ではない。外部標準の版番号や半径の単位換算と、本プロトコルの未決の上限値は区別する。
+`area`・`validity` は0011と共通の説明用形に合わせている。共通の座標は100万分の1度、距離はミリメートル単位の整数とする。例の数値は丸めなしで変換できる。`validity` の `startsAt`・`endsAt` はそれぞれ任意であり、不明な端点を補わない。確定wire仕様を意味しない。`did:example:ingester`、URL、変換規則名、期限は架空の例示であり、実運用DID method・登録名・既定時間の採用ではない。外部標準の版番号や半径の単位換算と、本プロトコルの未決の上限値は区別する。
 
 ### 7.3 マッピングと処理結果
 
@@ -414,7 +415,7 @@ type BsafAppViewInput = {
 | 取得・投稿生成 | `retrievedAt = 03:00:05Z`、`createdAt = 03:00:10Z` |
 | `effective`・`expires` | `validity` の `03:00:00Z`〜`06:00:00Z` |
 | 運用者の配送判断 | `deliveryExpiresAt = 04:00:00Z`。内容の終了時刻ではない |
-| CAPの半径 `2.5` km | `radiusMeters = "2500"`（十進文字列）。CAP文字列も原形式側に保持 |
+| CAPの座標 `35.0,139.0` と半径 `2.5` km | `latitudeMicrodegrees = 35000000`、`longitudeMicrodegrees = 139000000`、`radiusMillimeters = 2500000`。CAP文字列も原形式側に保持 |
 | `contentObject[1]` のPDF参照 | 本文・出典の関連リンク。添付本体の配送や別の警報投稿は生成しない |
 | `references` なし | 新規発表として空配列。訂正対象を推測しない |
 | 生成された一件の `Post` | 1レコード・1 commit・1 Nostr `kind: 1`。`content` に `text` |
@@ -448,7 +449,7 @@ CAP・DEの多角形、気象庁やBSAFの地域コードは、そのまま共�
 ## 9. 残る重要な判断
 
 1. **変換プロファイルの固定:** 入力仕様の版、気象庁の電文種別、CAPの言語・対象別分割、本文生成、原電文ID・版の対応、変換規則の公開方法。
-2. **拡張とbindings:** `source`・`public-information` の実スキーマ、参照表現、登録名、版、サイズ上限、Bytes・時刻の符号化、署名対象への配置。`area`・`validity`・`annotation` との接続。
+2. **拡張とbindings:** `source`・`public-information` の実スキーマ、参照表現、版、サイズ上限、Bytes 項目・時刻項目のタグ名と署名対象への配置。Bytes の独自タグでの文字列符号化は0012 §3.5の合意に従う。`area`・`validity`・`annotation` との接続。
 3. **公開条件の解釈:** DEの自由記述の機密区分・宛先・役割・組織固有プロファイルから公開可否を決める運用。限定内容を取り除いた再編集の可否は自動承認しない。
 4. **原文と取得証言:** 原文の保存場所・保持期間・ハッシュ対象・取得と変換の証言形式。原文全量配送と完全可逆変換は未合意のままとする。
 5. **信頼と同値配送:** 信頼リストの発行・更新・失効、機関鍵の認証、意味正規化、同値キー、異なる変換者の署名・commit・適用元 CID・レコード・path の保持。
@@ -461,7 +462,7 @@ CAP・DEの多角形、気象庁やBSAFの地域コードは、そのまま共�
 
 | 記号 | 一次資料 | 今回確認した範囲と限界 |
 |---|---|---|
-| A | [atproto Data Model](https://atproto.com/specs/data-model) | Data Types、Why No Floats?、JSON Representationを確認。浮動小数点数は不可、整数は符号付き64 bit。十進文字列への対応は本書と0011の設計案であり、外部標準の専用Decimal型ではない |
+| A | [atproto Data Model](https://atproto.com/specs/data-model) | Data Types、Why No Floats?、JSON Representationを確認。浮動小数点数は不可、整数は符号付き64 bit。共通の座標・距離は0010の合意済み固定単位の整数を使う。原形式の数値文字列の保持とは別であり、外部標準の専用座標型ではない |
 | C | [OASIS CAP 1.2, OASIS Standard, 2010-07-01](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html) | §1.3、§3.2、§3.3、スキーマ、多言語例。`info` の多重性、公開範囲、更新・取消参照、期間、円のkm、時刻、任意のXML署名。国別プロファイルや実発表の運用は未確認 |
 | D | [OASIS EDXL-DE 1.0, OASIS Standard, 2006-05-01](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf) | PDF本文をテキスト抽出し、§1.3、§2、§3.2、付録Aを確認。複数内容、XML/非XML、容器・内容の機密区分、配布地域、参照形式。組織別の公開区分やEDXL仕様群全体は確認対象外 |
 | J1 | [気象庁XML情報提供ページ](https://xml.kishou.go.jp/) | 公開PULL型の案内、技術資料への入口。電文署名・公開鍵の案内は確認できず、全経路についての結論ではない |

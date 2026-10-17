@@ -1,0 +1,40 @@
+{
+  "lexicon": 1,
+  "id": "dev.oriom.mosimo.post",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "公開テキスト投稿。訂正・補足・追認も、拡張を持つ新規投稿として表す。",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["text", "createdAt", "deliveryExpiresAt", "extensions"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "拡張に未対応でも読める本文。署名後に Unicode・改行を正規化しない。"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "投稿の作成時刻。本プロトコルでは UTC・大文字 Z 終端とし、秒未満を含む元の文字列表記を保持する。"
+          },
+          "deliveryExpiresAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "著者が指定するメッシュ配送の絶対期限。情報の有効期間・削除とは別。本プロトコルでは UTC・大文字 Z 終端とする。"
+          },
+          "extensions": {
+            "type": "array",
+            "description": "任意の著者署名付き拡張。各要素の $type・未知フィールド・配列順・同じ型の複数要素を保持する。拡張がなければ空配列。",
+            "items": {
+              "type": "union",
+              "refs": [],
+              "closed": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
