@@ -7,7 +7,7 @@ import { createServer } from './server.mjs';
 import { startNetwork } from './network.mjs';
 
 const config = validateConfig(JSON.parse(await readFile(process.env.CONFIG_FILE, 'utf8')));
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+if (!process.env.DATABASE_PATH && !process.env.DATABASE_URL) throw new Error('DATABASE_PATH or DATABASE_URL is required');
 const port = Number(process.env.PORT ?? 2583);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
 const store = await openStore(process.env.DATABASE_URL);
@@ -25,7 +25,7 @@ async function runWorker() {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 }
-app.server.listen(port, '0.0.0.0', () => console.log(`Mosimo PDS listening on ${port}`));
+app.server.listen(port, process.env.HOST ?? '0.0.0.0', () => console.log(`Mosimo PDS listening on ${port}`));
 worker = runWorker();
 async function shutdown() {
   if (stopping) return;

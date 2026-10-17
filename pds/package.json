@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node main.mjs",
-    "test": "node --test *.test.mjs"
+    "test": "node --test *.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@atproto/crypto": "0.4.5",
@@ -20,6 +21,9 @@
     "ws": "8.21.0"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.3.14"
+    "@electric-sql/pglite": "0.3.14",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "typescript": "~5.9.3"
   }
 }
