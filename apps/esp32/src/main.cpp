@@ -24,6 +24,7 @@ void setup() {
     Serial.printf("Speaker ready=%d\n", M5.Speaker.begin());
 
     M5.Display.setTextSize(2);
+    M5.Display.setTextScroll(true);
     M5.Display.println("ESP32 ready");
     Serial.printf("ESP32 ready chip=%s flash=%u heap=%u\n",
                   ESP.getChipModel(), ESP.getFlashChipSize(), ESP.getFreeHeap());
