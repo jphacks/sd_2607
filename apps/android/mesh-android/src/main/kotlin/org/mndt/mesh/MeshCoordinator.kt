@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.provider.Settings
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString
+import org.mndt.core.AtRepository
 import org.mndt.core.Author
 import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
@@ -29,14 +31,17 @@ import java.util.concurrent.TimeUnit
 data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
-    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN)
+    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList())
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
     val posts: List<PostView> = emptyList(), val diagnostics: List<String> = emptyList(),
     val error: String? = null, val lastPublishedId: String? = null, val publishAttempt: Long = 0,
     val clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN,
-    val onlineEnabled: Boolean = false, val onlineActive: Boolean = false
+    val onlineEnabled: Boolean = false, val onlineActive: Boolean = false,
+    /** Send status: OS default network present, relay socket in use, unsent count per relay, seconds until retry. */
+    val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
+    val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -80,6 +85,9 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val relayDeferred = mutableMapOf<String, MutableMap<String, Long>>()
     private val relayLastAttempt = mutableMapOf<String, String>()
     private var registrationBusy = false
+    // Proxy registration (0001 §1.1.1): did → (failures, next attempt); Long.MAX_VALUE once the genesis is confirmed.
+    private val proxyNext = mutableMapOf<String, Pair<Int, Long>>()
+    private var proxyBusy = false
     private var registrationRetryAt = 0L
     private var registrationFailures = 0
     // Historical genesis confirmation is persisted; current authority is an online observation only.
@@ -132,6 +140,25 @@ class MeshCoordinator private constructor(private val context: Context) {
             }
         }
         scope.launch { while (isActive) { delay(1_000); enqueue { tick() } } }
+        // Offline attempts grow the relay backoff to 60 s; a new network must not wait that out.
+        context.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            // Capabilities change on every bandwidth update; only the first validation per network may skip backoff.
+            private var validated: Network? = null
+            override fun onAvailable(network: Network) = enqueue(critical = true) { networkChanged(fresh = true) }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                if (network == validated || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
+                validated = network
+                enqueue(critical = true) { networkChanged(fresh = false) }
+            }
+            override fun onLost(network: Network) = enqueue(critical = true) { refresh() }
+        })
+    }
+    /** [fresh]: a new default network, so a socket bound to the old one is dropped without counting a failure. */
+    private fun networkChanged(fresh: Boolean) {
+        if (fatal || disk == null || (!fresh && relayFailures.values.none { it > 0 })) return
+        if (fresh && socket != null) closeRelay(graceful = false)
+        relayFailures.clear(); relayRetryAt.clear(); relayDeferred.clear(); relayIndex = 0; registrationRetryAt = 0
+        drainRelay()
     }
     /**
      * Link frames and ticks may be dropped under load; [critical] actions (UI, connection state) wait for space.
@@ -158,6 +185,11 @@ class MeshCoordinator private constructor(private val context: Context) {
         mutableState.update { state -> state.copy(
             ready = author != null && !fatal, running = running, clockConfidence = engine.clockConfidence,
             onlineEnabled = data?.onlineEnabled == true, onlineActive = onlineAllowed(),
+            network = context.getSystemService(ConnectivityManager::class.java).activeNetwork != null,
+            sendingRelay = activeRelay.takeIf { socketOpen }, queued = data?.relays.orEmpty().associateWith { pendingFor(it).size },
+            retryInSeconds = (((data?.relays.orEmpty().filter { pendingFor(it).isNotEmpty() }
+                            .minOfOrNull { relayRetryAt[it] ?: 0L } ?: 0L) - elapsed()) / 1000).coerceAtLeast(0),
+            pdsConfigured = data == null || configuredHttps(data.pdsEndpoint) != null,
             did = author?.did ?: "", publicKey = author?.nostrPubkey ?: "", relays = data?.relays.orEmpty(),
             registration = (if (data?.plcRegistered == true) "PLC 初期操作登録確認済み" else "PLC 初期操作登録未確認") +
                 " / " + when (plcObservation.current) {
@@ -172,9 +204,10 @@ class MeshCoordinator private constructor(private val context: Context) {
                 Neighbor(key, named?.peerNode ?: "?", if (named == null) "HELLO 待ち"
                     else "同期中（${list.filter { it.peerNode != null }.joinToString("・") { it.link.name }}）")
             },
-            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().map {
+            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { !it.event.isPlcGenesis() }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
-                    deliveryDeadline = engine.deadline(it.event, now()))
+                    deliveryDeadline = engine.deadline(it.event, now()),
+                    acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList())
             }, relaySubscription.events(), activeRelay)
         ) }
     }
@@ -297,7 +330,9 @@ class MeshCoordinator private constructor(private val context: Context) {
         relayIndex++
         note("リレー未受理。キューを保持し、次のリレーで再試行")
     }
-    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
+    // Genesis control events stay in the mesh: relays (including the PDS) accept only kinds 1 and 5, and the online
+    // node submits them to the PLC Directory itself.
+    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mndt §6). */
     private fun drainRelay() {
         val current = disk ?: return
@@ -316,7 +351,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             socket = http.newWebSocket(Request.Builder().url(activeRelay).build(), object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) = enqueue(critical = true) {
                     if (gen == socketGeneration && onlineAllowed()) {
-                        socketOpen = true; relayDeadline = 0
+                        socketOpen = true; relayDeadline = 0; relayFailures.remove(activeRelay)
                         val req = relaySubscription.open(gen)
                         if (req != null) {
                             relayReadDeadline = elapsed() + 20_000
@@ -437,10 +472,47 @@ class MeshCoordinator private constructor(private val context: Context) {
         registrationRetryAt = elapsed() + backoff(++registrationFailures)
         note("PLC 現在状態不明。保存済み鍵・DID・署名済み初期操作を保持")
     }
+    /** Unregistered with posts held: carry the signed genesis operation as its own control event (0001 §1.1.1). */
+    private fun originateGenesisIfUnregistered() {
+        val current = disk ?: return
+        val me = author ?: return
+        if (current.plcRegistered || configuredHttps(current.pdsEndpoint) == null) return
+        val own = engine.entries().filter { it.event.pubkey == me.nostrPubkey }
+        if (own.none { it.event.kind == 1 } || own.any { it.event.isPlcGenesis() }) return
+        // A rate-limited or rejected attempt is retried on a later tick.
+        runCatching { engine.originate(me.createPlcGenesisEvent(now()), now(), elapsed()) }.onSuccess {
+            dirty = true
+            note("PLC 未登録のため署名済み初期操作をメッシュで配送（代理登録用）")
+            exchange.broadcastInventory()
+        }
+    }
+    /** Online nodes submit received genesis operations unchanged; PlcDirectory.check never POSTs over an existing log. */
+    private fun proxyRegister() {
+        val directory = configuredHttps(plcDirectory) ?: return
+        if (fatal || !allowRegistration || proxyBusy || !validatedInternet()) return
+        val clock = elapsed()
+        val (did, operation) = engine.entries().asSequence().filter { it.event.isPlcGenesis() && it.event.pubkey != author?.nostrPubkey }
+            .mapNotNull { e -> runCatching { AtRepository.plcDid(e.event.content) to e.event.content }.getOrNull() }
+            .firstOrNull { (did, _) -> clock >= (proxyNext[did]?.second ?: 0) } ?: return
+        proxyBusy = true
+        scope.launch {
+            val confirmed = runCatching { PlcDirectory(http).check(directory, did, operation, false, allowRegistration = true) }
+                .getOrNull()?.genesisConfirmed == true
+            enqueue(critical = true) {
+                proxyBusy = false
+                // ponytail: per-DID retry forever at most once a minute; add a give-up rule once 0003 defines load limits.
+                val failures = if (confirmed) 0 else (proxyNext[did]?.first ?: 0) + 1
+                proxyNext[did] = failures to if (confirmed) Long.MAX_VALUE else elapsed() + backoff(failures)
+                note(if (confirmed) "PLC 代理登録: $did の初期操作をディレクトリで確認" else "PLC 代理登録: $did 未確認。再試行")
+            }
+        }
+    }
     private fun tick() {
         if (fatal || disk == null) return
         if (dirty) persist()
         registerIfConfigured()
+        originateGenesisIfUnregistered()
+        proxyRegister()
         val clock = elapsed()
         if (relayDeadline > 0 && clock >= relayDeadline) relayFailure()
         if (relayReadDeadline > 0 && clock >= relayReadDeadline) closeRelayRead()
@@ -456,3 +528,5 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
     }
 }
+
+private fun org.mndt.core.NostrEvent.isPlcGenesis() = kind == AtRepository.PLC_GENESIS_KIND

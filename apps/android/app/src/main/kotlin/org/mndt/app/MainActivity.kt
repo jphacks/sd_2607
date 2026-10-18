@@ -82,6 +82,8 @@ private fun Demo(mesh: MeshCoordinator) {
                     Text(if (state.ready) "発信者準備済み（このインストール専用）" else "発信者を準備中 / エラー時は停止")
                     SelectionContainer { Text("DID: ${state.did}\nNostr: ${state.publicKey}", style = MaterialTheme.typography.bodySmall) }
                     Text(state.registration, style = MaterialTheme.typography.bodySmall)
+                    if (!state.pdsConfigured) Text("PDS 未設定の旧インストールのため PDS・Web には公開されません。アプリのデータを消去すると新しい発信者で再作成されます。",
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     Text("Nostr 署名検証 ≠ DID 本人認証 ≠ 内容の真実性", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Switch(checked = state.clockConfidence == ClockConfidence.TRUSTED,
@@ -111,7 +113,7 @@ private fun Demo(mesh: MeshCoordinator) {
                 Text("オンライン搬出先リレー（接続できたときに保持中の全投稿を送信）", style = MaterialTheme.typography.titleSmall)
                 state.relays.forEach { url ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(url, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Text(url + (state.queued[url]?.takeIf { it > 0 }?.let { "\n未送信 $it 件" } ?: ""), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         TextButton(enabled = state.ready, onClick = { mesh.removeRelay(url) }) { Text("削除") }
                     }
                 }
@@ -126,6 +128,12 @@ private fun Demo(mesh: MeshCoordinator) {
                     state.onlineActive -> "オンライン搬出有効（中継中は画面非表示でも継続）"
                     state.onlineEnabled -> "オンライン搬出有効 / 中継開始または画面表示で接続"
                     else -> "オンライン搬出停止 / 搬出待ちは保持"
+                }, style = MaterialTheme.typography.bodySmall)
+                if (state.onlineActive) Text(when {
+                    !state.network -> "ネットワークなし / 接続されたらすぐに送信"
+                    state.sendingRelay != null -> "接続中: ${state.sendingRelay}"
+                    state.retryInSeconds > 0 -> "接続失敗 / ${state.retryInSeconds} 秒後に再試行"
+                    else -> "接続待ち"
                 }, style = MaterialTheme.typography.bodySmall)
                 Text("OS の省電力・強制停止時の即時配送は保証しません。ws:// は暗号化されません。", style = MaterialTheme.typography.bodySmall)
             }
@@ -157,7 +165,8 @@ private fun Demo(mesh: MeshCoordinator) {
                             DeliveryDeadline.WITHIN_DEADLINE -> "信頼すると指定した端末時計では配送期限内（情報の有効性とは別）"
                             DeliveryDeadline.EXPIRED -> "配送期限切れ / 本文とオンライン搬出待ちは保持"
                         }, style = MaterialTheme.typography.bodySmall)
-                        Text(if (post.relayAccepted) "リレー OK true / PDS・AppView は未確認" else "リレー未受理 / キュー保持", style = MaterialTheme.typography.bodySmall)
+                        Text(if (post.relayAccepted) "リレー受理: ${post.acceptedBy.joinToString { it.removePrefix("wss://") }} / PDS・AppView は未確認"
+                            else "リレー未受理 / キュー保持", style = MaterialTheme.typography.bodySmall)
                     }
                 } }
             }

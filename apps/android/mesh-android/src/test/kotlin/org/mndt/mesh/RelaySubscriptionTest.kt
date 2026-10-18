@@ -128,6 +128,19 @@ class RelaySubscriptionTest {
         assertNull(flood.receive(2, "[]", 60_000))
     }
 
+    @Test fun backlogOksDoNotSpendTheReceiveWindow() {
+        val session = opened()
+        val ok = "[\"OK\",\"${"a".repeat(64)}\",true,\"\"]"
+        repeat(RelaySubscription.MAX_FRAMES_PER_MINUTE * 2) { assertEquals(RelayReply.Ok("a".repeat(64), true), session.receive(1, ok, 0)) }
+        assertNull(session.receive(1, "[\"NOTICE\",\"still within window\"]", 0))
+    }
+
+    @Test fun onlyUntouchedOldDefaultRelaysMigrate() {
+        assertEquals("wss://pds.oriom.dev", migrateDefaultRelays(listOf("wss://relay.damus.io", "wss://nos.lol"), migrated = false).first())
+        assertEquals(listOf("wss://nos.lol"), migrateDefaultRelays(listOf("wss://nos.lol"), migrated = false))
+        assertEquals(listOf("wss://nos.lol", "wss://relay.damus.io"), migrateDefaultRelays(listOf("wss://nos.lol", "wss://relay.damus.io"), migrated = false))
+    }
+
     @Test fun eventCountCapClosesRetrievalWithoutEvictionOrMeshInsertion() {
         val session = opened()
         repeat(RelaySubscription.MAX_EVENTS) { index ->

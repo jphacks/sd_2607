@@ -59,15 +59,16 @@ apps/android/gradlew -p apps/android \
   - 公開鍵を渡した場合は commit 署名も検証する。この公開鍵は本来 DID document から得る。
   - DID 認証と MST 包含検証は行わない（PDS 側の段階）。
 - record key と `rev` は同じ TID を使う（0012 §2.1.1 は一致を要求しないので、受信側は一致を前提にしない）。TID の clock ID は repository ごとの乱数で、永続化する。
+
 - DID はオフラインで導出する。現行アプリの Manifest は PDS に `https://pds.oriom.dev`、PLC Directory に `https://plc.directory` を指定し、オンライン時の初期操作登録・現在鍵と PDS 設定の確認を有効にしている。SDK の未設定時の PDS は `.invalid`。
   - 保存済みの PDS endpoint・鍵・DID は Manifest 更新だけでは変更しない。旧 `.invalid` の状態はそのままでは本番 atproto 公開できず、本人の鍵による PLC 更新等の移行判断が必要。アプリデータ削除で安易に別発信者へ置き換えない。
   - PLC 登録・確認はリレー搬出の ON/OFF とは独立して動く。公開ネットワークへ接続した検証時は、実 DID 登録が発生し得る点に注意する。
+  - 未登録のまま投稿した場合は、署名済み初期操作を制御イベント（[mndt §9.5](../../protocol/mndt.md#95-plc-初期操作の制御イベントと代理登録)）としてメッシュで運び、受け取ったオンライン端末が代理登録する。
 
 ## 未実装・範囲外
 
 - 削除（NIP-09）、訂正などの制御形式。
 - 地理・身元証明の拡張 UI。
-- PLC の代理登録。
 - 鍵対応宣言の配送。
 - Nearby への経路切替。
 - mDNS が届かない網向けの手動アドレス指定。
