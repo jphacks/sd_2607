@@ -59,6 +59,7 @@
 
 ## 動画リンク
 https://youtu.be/GTZUnUww7xk
+https://www.youtube.com/watch?v=RMGZ6aHQX2k
 
 
 ## 製品概要
