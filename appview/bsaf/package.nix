@@ -1,4 +1,8 @@
-{ lib, buildNpmPackage, nodejs_24 }:
+{ lib, buildNpmPackage, nodejs_24, callPackage }:
+let
+  # Reuse the locked PDS crypto/repository dependencies without duplicating a lockfile.
+  pdsRuntime = callPackage ../../pds/package.nix { };
+in
 buildNpmPackage {
   pname = "mosimo-bsaf";
   version = "0.1.0";
@@ -9,6 +13,7 @@ buildNpmPackage {
       let name = baseNameOf path;
       in path == toString ./. || (type == "regular" && (
         name == "package.json" || name == "package-lock.json" || name == "feed.lua"
+                || (lib.hasSuffix ".mjs" name && !(lib.hasInfix ".test." name))
         || (lib.hasSuffix ".mts" name && !(lib.hasInfix ".test." name))
       ));
   };
@@ -17,9 +22,11 @@ buildNpmPackage {
   dontNpmBuild = true;
   installPhase = ''
     runHook preInstall
-    mkdir -p $out/lib/mosimo-bsaf
-    cp *.mts feed.lua package.json $out/lib/mosimo-bsaf/
-    cp -r node_modules $out/lib/mosimo-bsaf/
+    mkdir -p $out/lib/appview/bsaf
+    cp *.mts *.mjs feed.lua package.json $out/lib/appview/bsaf/
+    cp -r node_modules $out/lib/appview/bsaf/
+    ln -s ${pdsRuntime}/lib/mosimo-pds $out/lib/pds
+    ln -s appview/bsaf $out/lib/mosimo-bsaf
     runHook postInstall
   '';
   meta = {

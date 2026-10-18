@@ -8,11 +8,29 @@ let
   disabled = evaluate { };
   empty = evaluate { enable = true; };
   selected = evaluate { enable = true; authors = [ "did:plc:example" ]; };
+  publishing = evaluate {
+    enable = true;
+    authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" ];
+    publisher = {
+      enable = true; selectJmaDefaults = true;
+      credentialsFile = "/var/lib/mosimo-importer/credentials.json";
+      trustFile = "/var/lib/mosimo-importer/roots.json";
+      relayUrl = "wss://pds.invalid/";
+    };
+  };
+  publisher = publishing.systemd.services.mosimo-bsaf-publisher;
   prepare = selected.systemd.services.mosimo-bsaf-prepare;
   collector = selected.systemd.services.mosimo-bsaf;
 in
 assert !(disabled.systemd.services ? mosimo-bsaf-prepare);
 assert !(empty.systemd.services ? mosimo-bsaf);
+assert !(empty.systemd.services ? mosimo-bsaf-publisher);
+assert publisher.serviceConfig.LoadCredential == [ "importer:/var/lib/mosimo-importer/credentials.json" ];
+assert builtins.match ".*publisher.mts" publisher.serviceConfig.ExecStart != null;
+assert publisher.serviceConfig.MemoryMax == "128M";
+assert publishing.services.mosimo-bsaf.publisher.priority == null;
+assert publishing.services.mosimo-bsaf.publisher.jmaPriorityPolicy;
+assert publishing.services.mosimo-bsaf.publisher.maxOriginalAgeSeconds == 3600;
 assert empty.systemd.services.mosimo-bsaf-prepare.serviceConfig.Type == "oneshot";
 assert builtins.elem "podman-happyview.service" prepare.wantedBy;
 assert prepare.partOf == [ "podman-happyview.service" ];

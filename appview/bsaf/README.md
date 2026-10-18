@@ -1,11 +1,13 @@
 # 登録済み発信元のBSAF投稿をHappyViewへ収集
 
 [0019 §5.1](../../protocol/0019-bsaf.md)の既存BSAF収集に対応する。
-**Mosimoへの変換、Nostr/BPv7への再配信、BSAFとしての再投稿はしない。**
+収集と署名付き再配信は別プロセス・別opt-in。collectorだけではMosimoへの変換・投稿はしない。
+任意のpublisherは[0020 wire-v1](../../protocol/0020-wire-v1.md)に従い、既存collector DBからPDSへNostr `EVENT`をpushする。
 
 HappyView 2.16.0の既存SQLite DBを使うNode.js 24の型付きサイドカー。
 HappyView本体をforkせず、投稿レコードとquery scriptの既存保存形式へ接続する。
-独立したDB・HTTPサーバー・著者秘密鍵・管理APIキーは不要。
+collectorには独立したDB・HTTPサーバー・著者秘密鍵・管理APIキーは不要。
+publisherだけが独立したimporter鍵を必要とする。root秘密鍵をオンラインサービスへ置かない。
 
 ## 登録と有効化
 
@@ -83,7 +85,7 @@ Bot定義の取得、構造化フィルタ、地域の推測、Bot間の重複�
 - rootful HappyView volumeに合わせてrootで動くが、書込範囲はそのvolumeのみ、capabilityは空。
   DBはローカルSQLite専用。先に整合性のあるバックアップを取り、HappyView更新時は隔離試験を実行する。
 - HappyViewの汎用record hooks/labeler/ref索引処理はこの収集経路では実行しない。
-  取り込み後の自動投稿は一切ない。Luaのfail-open record hookを認可境界に使わない。
+  collector自体は取り込み後に投稿しない。Luaのfail-open record hookを認可境界に使わない。
 - 既存query scriptの単件不在はLuaエラーになるため、標準処理の404ではなく非200のscriptエラーを返す。
 
 ## 検証
