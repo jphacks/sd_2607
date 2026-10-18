@@ -116,6 +116,8 @@ type SourceExtension = {
 
 ### 4.3 `public-information`: 原情報の意味（提案）
 
+以下は形式固有の項目を一つに集約した既存の型案であり、確定したスキーマではない。§4.4 の独立性と部分実装の方針に合わせた形式別の型・フィールド配置は今後具体化する。特に別の任意拡張 `source` を読まないと形式を識別できない依存は改訂対象とする。
+
 ```ts
 type PublicInformationExtension = {
   $type: "dev.oriom.mosimo.defs#publicInformation";
@@ -139,6 +141,17 @@ type PublicInformationExtension = {
 原情報参照は `public-information.references`、本プロトコル内の対象投稿への参照は `annotation` が担う。原電文IDをNostr event IDやatURIの代わりに使わない。原情報から派生した投稿への対応索引は取り込み側・AppViewで持ち、対象投稿が判明した場合は [0011 §7](0011-extensions.md#7-注釈-annotation型案) の参照案と関連付ける。
 
 `area` は配送にも使う円・セル、`validity` は内容の有効期間、`identity` は身元証明、`origin` は発信地点を担当する。0011と共通の説明用形は、`area` が `{ $type: string; regions: ({ shape: "circle"; latitudeMicrodegrees: Microdegrees; longitudeMicrodegrees: Microdegrees; radiusMillimeters: Millimeters } | { shape: "geohash"; hash: string })[] }`、`validity` が `{ $type: string; startsAt?: Timestamp; endsAt?: Timestamp }` である。公的情報の震源・観測地点やDEの配布対象地域を、変換サーバーの発信地点として `origin` に入れない。
+
+### 4.4 形式拡張の独立性と部分対応（合意済み）
+
+CAP・EDXL等の新たな形式の機能は、[0011 §9.1–§9.3](0011-extensions.md#91-独立した拡張定義と動作合意済み) の拡張モデルに従う。公式仕様の改訂や全クライアントの更新を待たず、第三者が独立した名前空間で型と対応クライアントの動作を定義できる。すべての原形式の項目を一つの汎用型へ集約することは要求しない。
+
+- 形式固有の意味と動作は、その形式に対応するクライアントが利用する。独立した型として扱う形式の識別や、その型だけで意味を持つ機能の解釈を、無関係な任意拡張の存在に依存させない。原形式の詳細を未知型のフィールド名から推測しない。
+- 取り込み側は、本文だけでも主要な指示・更新取消を伝える。意味を正しく表現できる場合は共通の `area`・`validity` 等を併用し、原形式の拡張に非対応の端末にも利用可能な情報を提供する。一方、共通拡張へ無理に当てはめたり、全形式に同じ組合せを必須化したりしない。
+- 中継側は理解できる本文・拡張だけを利用して表示や配送を判断する。例えばCAPに非対応でも、対応する `area` を使って地域別の配送順位を調整できる。理解しない原形式の拡張も改変せず保持・中継する。
+- 固有拡張の対応クライアントは独自の処理を実装できるが、その機能の採用と信頼はローカル方針で決める。署名検証・配送期限・サイズ・保存量等の制約は維持する。
+
+CAP・EDXL-DE・気象庁XML向けの具体的な型の分割、型名、参照構造、既存の `public-information` 型案からの整理は未確定である。本節は特定の型の一覧や実スキーマを確定するものではない。
 
 ## 5. 共通の処理の流れ（提案）
 
