@@ -21,6 +21,34 @@
 
 </div>
 
+## 目次
+
+- [リポジトリ構成](#リポジトリ構成)
+- [Live Demo](#live-demo)
+- [製品概要](#製品概要)
+  - [特長](#特長)
+  - [解決出来ること](#解決出来ること)
+  - [今後の展望](#今後の展望)
+- [開発技術](#開発技術)
+  - [活用した技術](#活用した技術)
+  - [独自技術](#独自技術)
+
+## リポジトリ構成
+
+各コンポーネントの役割・特長は、それぞれのREADMEを参照してください。開発・運用手順は、各READMEから案内しています。
+
+| ディレクトリ | 内容 |
+|---|---|
+| [`apps/android/`](./apps/android/README.md) | 被災地の端末を想定し、投稿とリレー、サーバーとの送受信ができるAndroidアプリ |
+| [`apps/esp32/`](./apps/esp32/README.md) | M5Stack Basicで動く、リレーとサーバーとの送受信ができる中継ノード |
+| [`apps/web/`](./apps/web/README.md) | AppViewから投稿を取得して表示するWebクライアント |
+| [`pds/`](./pds/README.md) | Nostrリレー兼PDS。投稿を収集、蓄積する |
+| [`appview/happyview/`](./appview/happyview/README.md) | 投稿を索引化するAppView（HappyView）のコンテナー・NixOS設定 |
+| [`appview/bsaf/`](./appview/bsaf/README.md) | 既存のBSAF投稿をAppView（HappyView）へ収集する機能 |
+| [`lexicons/`](./lexicons/README.md) | 投稿レコードやフィード取得APIのLexicon定義 |
+| [`protocol/`](./protocol/README.md) | 基本プロトコル・拡張・配送などの仕様文書 |
+| [`third_party/`](./third_party/README.md) | Androidアプリで使う外部ライブラリの固定スナップショット |
+
 ## Live Demo
 **被災地からの投稿を閲覧できるWeb Client**: https://mosimo.oriom.dev
 
