@@ -4,12 +4,15 @@
 
 #include "MeshBle.h"
 #include "MeshRelay.h"
+#include "MeshSpeech.h"
 #include "MessagePreview.h"
 
 namespace {
 mesh::Relay relay;
 mesh::Ble ble;
+mesh::Speech speech;
 bool meshReady = false;
+bool speechReady = false;
 constexpr int PREVIEW_HEIGHT = 56;
 
 void showMessage(const mesh::BundleInfo& message) {
@@ -32,6 +35,7 @@ void showMessage(const mesh::BundleInfo& message) {
     M5.Display.setTextScroll(true);
     M5.Display.setCursor(cursorX, cursorY);
     Serial.printf("Message preview updated id=%.8s\n", message.id.c_str());
+    if (speechReady) speech.enqueue(message.id, message.text);
 }
 
 void note(const std::string& text) {
@@ -44,7 +48,7 @@ void setup() {
     Serial.begin(115200);
     auto config = M5.config();
     M5.begin(config);
-    M5.Speaker.setVolume(64);
+    M5.Speaker.setVolume(96);
     Serial.printf("Speaker ready=%d\n", M5.Speaker.begin());
 
     M5.Display.setTextSize(2);
@@ -56,6 +60,9 @@ void setup() {
     M5.Display.println("ESP32 ready");
     Serial.printf("ESP32 ready chip=%s flash=%u heap=%u\n",
                   ESP.getChipModel(), ESP.getFlashChipSize(), ESP.getFreeHeap());
+
+    speechReady = speech.begin();
+    note(speechReady ? "TTS eval: A test / C mute" : "TTS unavailable; see README");
 
     uint8_t random[8];
     esp_fill_random(random, sizeof(random));
@@ -72,13 +79,18 @@ void loop() {
     M5.update();
 
     if (M5.BtnA.wasPressed()) {
-        M5.Display.println("Button A");
-        Serial.println("Button A");
+        const bool queued = speechReady && speech.test();
+        note(queued ? "Speech test queued" : "Speech test unavailable");
     }
     if (M5.BtnB.wasPressed()) {
-        const bool playing = M5.Speaker.tone(880, 250);
+        const bool playing = M5.Speaker.tone(880, 250, 0);
         M5.Display.println(playing ? "Button B: beep" : "Speaker error");
         Serial.printf("Button B: tone started=%d\n", playing);
+    }
+
+    if (M5.BtnC.wasPressed()) {
+        const bool muted = speech.toggleMuted();
+        note(muted ? "Speech muted / stopped" : "Speech enabled");
     }
 
     if (meshReady) ble.poll(relay);

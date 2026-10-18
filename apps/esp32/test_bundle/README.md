@@ -241,3 +241,30 @@ g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -Iapps/esp32/i
 
 These do not test physical LCD rendering. Device logs additionally confirm the
 callback runs after saving received bundles; screen appearance needs visual inspection.
+
+## Standalone evaluation speech
+
+From the repository root on Linux with GCC:
+
+```sh
+python3 apps/esp32/test_bundle/test_speech.py --sanitize
+python3 -m unittest discover -s apps/esp32/test_bundle -p test_tts_setup.py
+```
+
+`test_speech.py` compiles the actual `MeshSpeech.cpp` and text/queue helpers with
+mocks only at SDK, M5, partition/hash, and task boundaries. It checks UTF-8
+sanitization/chunking, bounded latest-priority jobs, deduplication, mute/cancel,
+dictionary bounds and mapping failures, three-buffer output ownership, SDK/frame
+errors, backpressure, timeout and non-silent sample accounting. It does not execute
+the proprietary synthesizer; the separate device smoke test does.
+
+The 13 setup tests use runtime-generated fake ZIP contents, not vendor assets.
+They check idempotent local extraction, no overwrites of differing files, entry
+size limits, ignored extra/traversal paths, generated size/hash config, and
+refusal of unexpected partition layouts before any flashing. They guard against
+subprocess/device access.
+
+Physical audio quality, DMA drain latency, and an SDK call that never returns
+are not covered. Timeout/cancel checks are cooperative between SDK calls, not an
+independent watchdog. No SDK source, library, dictionary, keys, or linked firmware
+is included in these tests or the repository.
