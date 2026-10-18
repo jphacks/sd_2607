@@ -29,9 +29,11 @@
 | 公的情報の集約型案に予約済みの名前 | `dev.oriom.mosimo.defs#publicInformation` |
 | CAP 1.2の原情報と選択した情報単位 | `dev.oriom.mosimo.defs#cap12` |
 | EDXL-DE 1.0の配布容器と選択した内容 | `dev.oriom.mosimo.defs#edxlDe10` |
+| 気象庁緊急地震速報（警報・予報） | `dev.oriom.mosimo.defs#jmaEew` |
+| 気象庁地震観測情報 | `dev.oriom.mosimo.defs#jmaEarthquake` |
 | 身元証明 | `dev.oriom.mosimo.defs#identity` |
 
-型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。これはすべての原形式を同じ型へ格納する義務ではない。CAP 1.2は独立型 `cap12` の[仕様草案](0015-cap.md)、EDXL-DE 1.0は `edxlDe10` の[仕様草案](0016-edxl-de.md)で具体化し、`publicInformation` へ重複して格納することは要求しない。
+型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。これはすべての原形式を同じ型へ格納する義務ではない。CAP 1.2は独立型 `cap12` の[仕様草案](0015-cap.md)、EDXL-DE 1.0は `edxlDe10` の[仕様草案](0016-edxl-de.md)で具体化し、`publicInformation` へ重複して格納することは要求しない。気象庁XMLの緊急地震速報は `jmaEew` の[仕様草案](0017-jma-eew.md)、地震観測情報は `jmaEarthquake` の[仕様草案](0018-jma-earthquake.md)で具体化する。共通管理型は各拡張内に格納し、別の共通ヘッダ拡張の必須同梱は要求しない。
 
 投稿の repository path は `dev.oriom.mosimo.post/<record-key>`。record key は端末で生成する13文字の atproto TID とする（[0012 §2.1.1](0012-bindings.md#211-レコードキーの生成合意済み)）。atURI の collection も同じ NSID を使う。
 
