@@ -7,12 +7,28 @@
 | NSID | ファイル | 内容 |
 |---|---|---|
 | `dev.oriom.mosimo.post` | [post.json](dev/oriom/mosimo/post.json) | TID キーの投稿レコード。本文・作成時刻・配送期限・拡張一覧が必須 |
+| `dev.oriom.mosimo.getFeed` | [getFeed.json](dev/oriom/mosimo/getFeed.json) | HappyView に取り込み済みの投稿を取得する query |
 
 レコードには標準どおり `$type: "dev.oriom.mosimo.post"` を付ける。`$type` はレコードの型識別子であり、Lexicon の `properties` に独自フィールドとして重複定義しない。
 
 `extensions` は `$type` 必須の open union。現在は `refs: []`・`closed: false` とし、外部の拡張スキーマを取得せずに未知の拡張を保持できる。これは [Lexicon 標準で許容される形式](https://atproto.com/specs/lexicon#union) であり、任意の JSON 値を許す配列ではない。
 
 `dev.oriom.mosimo.defs` 以下の個別拡張は、フィールド・必須条件等がまだ型案のため実装していない。空の定義ファイルや、仮のスキーマで型を固定することはしない。名前の割り当ては [0014](../protocol/0014-namespaces.md) を参照する。
+
+## HappyView の feed query 登録
+
+[HappyView](https://appview.oriom.dev/) の **Lexicons → Add Lexicon → Local** で `getFeed.json` を登録し、**Target Collection** を `dev.oriom.mosimo.post` に設定する。`target_collection` は HappyView の登録設定であり、Lexicon JSON には含めない。
+
+Lua スクリプトを付けず、HappyView の標準 query 処理を使う。`limit`、`cursor`、`did`、`uri` パラメーターに対応し、一覧取得のレスポンスは `records` 配列と、続きがある場合の `cursor` を含む。独自のランキングや配送期限による除外はこの定義には含まない。
+
+Settings → API Clients で作成した `hvc_` から始まるクライアントキーを `CLIENT_KEY` に設定して呼び出す。
+
+```sh
+curl 'https://appview.oriom.dev/xrpc/dev.oriom.mosimo.getFeed?limit=20' \
+  -H "X-Client-Key: $CLIENT_KEY"
+```
+
+詳細は [HappyView Quickstart](https://happyview.dev/getting-started/quickstart) と [XRPC API](https://happyview.dev/api-reference/xrpc-api) を参照。このファイルの追加だけでは VPS への登録は行われない。
 
 ## 使用例
 
