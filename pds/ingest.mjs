@@ -4,12 +4,12 @@ import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { decodePost, verifyCommit, reconstruct } from './repository.mjs';
+import { commitFrame, encodeFrame, futureRevisionDelay } from './sync.mts';
 
 const namespace = 'mosimo.oriom.dev';
 const isPost = event => event.kind === 1 && event.tags.some(tag => tag[0] === 't' && tag[1] === namespace);
-const frame = (type, body) => Buffer.concat([cbor.encode({ op: 1, t: type }), cbor.encode(body)]);
 
-export function createIngestion({ config, store, resolveIdentity }) {
+export function createIngestion({ config, store, resolveIdentity, clock = Date.now }) {
   const sqlite = store.dialect === 'sqlite';
   const now = sqlite ? sqliteNow : 'now()';
   async function ingest(input, { forward = true } = {}) {
@@ -77,6 +77,10 @@ export function createIngestion({ config, store, resolveIdentity }) {
           next_attempt=${sqlite ? "strftime('%Y-%m-%dT%H:%M:%fZ','now','+' || $3 || ' seconds')" : 'now()+make_interval(secs => $3)'} WHERE event_id=$1`,
         [job.event_id, message, Math.min(3600, 2 ** Math.min(job.attempts + 1, 12))]);
       };
+      if (futureRevisionDelay(commit.rev, clock()) > 0) {
+        await retry('Future revision exceeds five-minute clock skew');
+        return true;
+      }
       let identity;
       try { identity = await resolveIdentity(commit.did); }
       catch (error) { await retry(`PLC resolution: ${error.message}`); return true; }
@@ -129,21 +133,26 @@ export function createIngestion({ config, store, resolveIdentity }) {
             return true;
           }
           let seq = BigInt(sequence.seq);
-          const time = new Date().toISOString();
+          const time = new Date(clock()).toISOString();
           const append = async (type, body) => {
             seq += 1n;
             if (seq > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Firehose sequence exhausted');
-            await tx.query('INSERT INTO streams(group_id,seq,frame) VALUES($1,$2,$3)', [group.id, seq.toString(), frame(type, { ...body, seq: Number(seq) })]);
+            const bytes = encodeFrame(type, { ...body, seq: Number(seq) });
+            if (bytes.length > config.maxBufferedBytes) throw new Error('Stream frame exceeds maxBufferedBytes');
+            await tx.query('INSERT INTO streams(group_id,seq,frame) VALUES($1,$2,$3)', [group.id, seq.toString(), bytes]);
           };
           if (!head) {
             await append('#identity', { did: commit.did, time, ...(identity.handle ? { handle: identity.handle } : {}) });
             await append('#account', { did: commit.did, time, active: true });
           }
-          const tooBig = car.length > 900000;
-          await append('#commit', { repo: commit.did, commit: commitCid, rev: commit.rev,
-            since: head?.rev ?? null, rebase: false, tooBig, blocks: tooBig ? new Uint8Array() : car,
-            ops: tooBig ? [] : [{ action: 'create', path: decoded.path, cid: decoded.recordCid }],
-            blobs: [], time, ...(previous ? { prevData: cbor.decode(previous.commit_bytes).data } : {}) });
+          seq += 1n;
+          if (seq > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Firehose sequence exhausted');
+          const bytes = await commitFrame({ commitCid, commitBytes: decoded.commitBytes,
+            data: commit.data, blocks, repo: commit.did, rev: commit.rev,
+            since: head?.rev ?? null, prevData: previous ? cbor.decode(previous.commit_bytes).data : undefined,
+            ops: [{ action: 'create', path: decoded.path, cid: decoded.recordCid }],
+            time, seq: Number(seq), maxBufferedBytes: config.maxBufferedBytes });
+          await tx.query('INSERT INTO streams(group_id,seq,frame) VALUES($1,$2,$3)', [group.id, seq.toString(), bytes]);
           await tx.query('UPDATE group_sequences SET seq=$2 WHERE group_id=$1', [group.id, seq.toString()]);
           await tx.query(`INSERT INTO repos(group_id,did,head,rev) VALUES($1,$2,$3,$4)
             ON CONFLICT(group_id,did) DO UPDATE SET head=excluded.head,rev=excluded.rev`,

@@ -7,7 +7,8 @@ import { once } from 'node:events';
 import http from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { PGlite } from '@electric-sql/pglite';
-import { MST, MemoryBlockstore, readCar } from '@atproto/repo';
+import { MST, MemoryBlockstore, readCar, verifyProofs } from '@atproto/repo';
+import { TID } from '@atproto/common-web';
 import { Secp256k1Keypair, verifySignature } from '@atproto/crypto';
 import * as cbor from '@ipld/dag-cbor';
 import { decodeFirst } from 'cborg';
@@ -35,8 +36,8 @@ const signEvent = (event, key = nostrKey) => finalizeEvent({
 const envelope = event => JSON.parse(JSON.stringify(event));
 
 async function fixture({ index = 0, parent = null, key = repoKey, identity = did,
-  badRoot = false, badSignature = false, author = nostrKey, rev } = {}) {
-  const record = { $type: collection, text: `避難所 ${index}\r\nか\u3099 🏠`,
+  badRoot = false, badSignature = false, author = nostrKey, rev, text } = {}) {
+  const record = { $type: collection, text: text ?? `避難所 ${index}\r\nか\u3099 🏠`,
     createdAt: '2026-10-17T12:34:56.120Z', deliveryExpiresAt: '2026-10-18T12:34:56Z', extensions: [] };
   const path = `${collection}/3jzfcijpj2z2${'234567abcdefghijklmnopqrstuvwxyz'[index]}`;
   const recordBytes = new Uint8Array(cbor.encode(record));
@@ -60,7 +61,7 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
 }
 
-async function assertRepositoryCar(bytes, source) {
+async function assertRepositoryCar(bytes, source, { proof = false } = {}) {
   const car = await readCar(bytes);
   assert.deepEqual(car.roots.map(cid => cid.toString()), [source.commitCid.toString()]);
   for (const { cid, bytes } of car.blocks.entries()) assert.ok((await cidFor(bytes)).equals(cid));
@@ -69,7 +70,19 @@ async function assertRepositoryCar(bytes, source) {
   assert.equal(await verifySignature(repoKey.did(), cbor.encode(unsigned), sig), true);
   const storage = new MemoryBlockstore();
   for (const { cid, bytes } of car.blocks.entries()) await storage.putBlock(cid, bytes);
-  const entries = await MST.load(storage, unsigned.data).list();
+  const tree = MST.load(storage, unsigned.data);
+  if (proof) {
+    const claim = { collection, rkey: source.path.split('/')[1], cid: source.recordCid };
+    assert.deepEqual(await verifyProofs(bytes, [claim], did, repoKey.did()), { verified: [claim], unverified: [] });
+    // Covering proofs must also support removing the create to recover the previous root.
+    const previous = await tree.delete(source.path);
+    let expected = await MST.create(new MemoryBlockstore());
+    for (const entry of source.entries.filter(entry => entry.key !== source.path)) expected = await expected.add(entry.key, entry.value);
+    assert.ok((await previous.getPointer()).equals(await expected.getPointer()));
+    assert.deepEqual(Buffer.from(car.blocks.get(source.recordCid)), Buffer.from(source.recordBytes));
+    return;
+  }
+  const entries = await tree.list();
   assert.deepEqual(entries.map(({ key, value }) => [key, value.toString()]),
     source.entries.map(({ key, value }) => [key, value.toString()]).sort(([a], [b]) => a.localeCompare(b)));
   for (const { value } of entries) assert.equal(cbor.decode(car.blocks.get(value)).$type, collection);
@@ -302,14 +315,14 @@ test('missing-base retries survive reopen and resume a gap-free byte-exact fireh
     const [header, body] = decodeFirst(frame, cbor.decodeOptions);
     assert.deepEqual(header, { op: 1, t: '#commit' });
     assert.equal(cbor.decode(body).seq, index + 3);
-    await assertRepositoryCar(cbor.decode(body).blocks, source);
+    await assertRepositoryCar(cbor.decode(body).blocks, source, { proof: true });
   }
   const fourth = await fixture({ index: 3, parent: third });
   assert.equal((await process(fourth)).status, 'validated');
   const [header, body] = decodeFirst(await client.next(), cbor.decodeOptions);
   assert.deepEqual(header, { op: 1, t: '#commit' });
   assert.equal(cbor.decode(body).seq, 6);
-  await assertRepositoryCar(cbor.decode(body).blocks, fourth);
+  await assertRepositoryCar(cbor.decode(body).blocks, fourth, { proof: true });
   assert.deepEqual((await rows('SELECT seq FROM streams ORDER BY seq')).map(row => Number(row.seq)), [1, 2, 3, 4, 5, 6]);
 });
 
@@ -612,8 +625,13 @@ test('SQL-backed subscribeRepos replays persisted bytes and maintains independen
   t.after(() => app.close());
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
-  const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
-  for (const row of saved) assert.deepEqual(await client.next(), Buffer.from(row.frame));
+  // No cursor and explicit zero both replay the persisted stream from sequence zero.
+  const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos');
+  const explicitZero = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
+  for (const row of saved) {
+    assert.deepEqual(await client.next(), Buffer.from(row.frame));
+    assert.deepEqual(await explicitZero.next(), Buffer.from(row.frame));
+  }
   identityEndpoint = 'https://alpha.example';
   const second = await fixture({ index: 12, parent: first });
   await process(second);
@@ -622,6 +640,84 @@ test('SQL-backed subscribeRepos replays persisted bytes and maintains independen
   const [header, bodyBytes] = decodeFirst(frame, cbor.decodeOptions);
   assert.deepEqual(header, { op: 1, t: '#commit' });
   assert.ok(cbor.decode(bodyBytes).commit.equals(second.commitCid));
+});
+
+test('full snapshots above 900KB retain all records while publishing compact nonempty commit proofs', async () => {
+  let source;
+  for (let index = 0; index < 14; index++) {
+    source = await fixture({ index, parent: source, text: `${index}:` + 'x'.repeat(72_000) });
+    assert.ok(Buffer.byteLength(JSON.stringify(source.event)) < config.maxEventBytes);
+    assert.equal((await process(source)).status, 'validated');
+  }
+  const saved = (await rows('SELECT * FROM commits WHERE cid=$1', [source.commitCid.toString()]))[0];
+  assert.ok(saved.car.length > 900_000);
+  await assertRepositoryCar(saved.car, source);
+  const stream = (await rows('SELECT frame FROM streams ORDER BY seq DESC LIMIT 1'))[0].frame;
+  assert.ok(stream.length <= config.maxBufferedBytes);
+  const [header, bodyBytes] = decodeFirst(stream, cbor.decodeOptions);
+  const body = cbor.decode(bodyBytes);
+  assert.equal(header.t, '#commit');
+  assert.equal(body.tooBig, false);
+  assert.ok(body.blocks.length > 0 && body.blocks.length < 100_000);
+  assert.deepEqual(body.ops, [{ action: 'create', path: source.path, cid: source.recordCid }]);
+  await assertRepositoryCar(body.blocks, source, { proof: true });
+  const full = await readCar(saved.car);
+  const storage = new MemoryBlockstore(full.blocks);
+  const previousRoot = await MST.load(storage, source.commit.data).delete(source.path);
+  assert.ok(body.prevData.equals(await previousRoot.getPointer()));
+});
+
+for (const offset of [-365 * 24 * 3600_000, 0, 300_000]) {
+  test(`revision time offset ${offset}ms is tolerated without rewriting signed bytes`, async () => {
+    const now = Date.UTC(2026, 9, 18);
+    ingestion = createIngestion({ config, store, resolveIdentity, clock: () => now });
+    const source = await fixture({ rev: TID.fromTime((now + offset) * 1000, 0).toString() });
+    assert.equal((await process(source)).status, 'validated');
+    assert.equal((await head()).head, source.commitCid.toString());
+    const saved = (await rows('SELECT commit_bytes FROM commits'))[0];
+    assert.deepEqual(Buffer.from(saved.commit_bytes), Buffer.from(source.commitBytes));
+  });
+}
+
+test('future revision retries without repository writes and becomes valid at the five-minute boundary', async () => {
+  let now = Date.UTC(2026, 9, 18);
+  const rev = TID.fromTime((now + 300_000) * 1000 + 1, 0).toString();
+  ingestion = createIngestion({ config, store, resolveIdentity, clock: () => now });
+  const source = await fixture({ rev });
+  const before = Date.now();
+  const pending = await process(source);
+  assert.equal(pending.status, 'retry');
+  assert.match(pending.error, /Future revision/);
+  assert.equal(pending.attempts, 1);
+  assert.ok(new Date(pending.next_attempt).getTime() >= before);
+  assert.ok(new Date(pending.next_attempt).getTime() <= Date.now() + 3600_000);
+  for (const table of ['commits', 'blocks', 'repo_blocks', 'repos', 'streams', 'group_sequences']) {
+    assert.deepEqual(await rows(`SELECT * FROM ${table}`), []);
+  }
+  assert.deepEqual((await rows('SELECT event FROM events'))[0].event, envelope(source.event));
+  now += 1;
+  await store.query(`UPDATE jobs SET next_attempt=${dialect === 'sqlite' ? sqliteNow : 'now()'} WHERE event_id=$1`, [source.event.id]);
+  assert.equal(await ingestion.processOne(), true);
+  assert.equal((await job(source)).status, 'validated');
+  assert.equal((await head()).head, source.commitCid.toString());
+  const saved = (await rows('SELECT commit_bytes FROM commits'))[0];
+  assert.deepEqual(Buffer.from(saved.commit_bytes), Buffer.from(source.commitBytes));
+});
+
+test('configured frame budget triggers sync rather than publishing an undeliverable commit', async () => {
+  config.maxBufferedBytes = 1500;
+  const source = await fixture({ text: 'x'.repeat(5000) });
+  assert.equal((await process(source)).status, 'validated');
+  const saved = await rows('SELECT frame FROM streams ORDER BY seq');
+  assert.ok(saved.every(row => row.frame.length <= config.maxBufferedBytes));
+  const [header, bytes] = decodeFirst(saved[2].frame, cbor.decodeOptions);
+  assert.equal(header.t, '#sync');
+  const body = cbor.decode(bytes);
+  assert.deepEqual(Object.keys(body).sort(), ['blocks', 'did', 'rev', 'seq', 'time']);
+  const car = await readCar(body.blocks);
+  assert.equal(car.blocks.size, 1);
+  assert.deepEqual(Buffer.from(car.blocks.get(source.commitCid)), Buffer.from(source.commitBytes));
+  await assertRepositoryCar((await rows('SELECT car FROM commits'))[0].car, source);
 });
 
 test('processing errors roll back commit, blocks, streams, head and job status atomically', async () => {
