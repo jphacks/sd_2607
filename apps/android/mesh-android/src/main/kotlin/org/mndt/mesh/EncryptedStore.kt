@@ -34,8 +34,11 @@ internal data class DiskState(
     val onlineEnabled: Boolean = true
 ) {
     companion object {
-        // TODO(undecided): bundled general relays (0007 §5) until a mosimo PDS relay exists.
-        val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
+        // TODO(undecided): bundled relays (0007 §5). The mosimo PDS relay goes first so it never waits behind the others.
+        val DEFAULT_RELAYS = listOf("wss://pds.oriom.dev", "wss://relay.damus.io", "wss://nos.lol")
+        private val OLD_DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
+        /** Untouched old defaults get the new ones; any user-edited list is kept as is. */
+        fun migrateRelays(saved: List<String>) = if (saved == OLD_DEFAULT_RELAYS) DEFAULT_RELAYS else saved
         const val MAX_RELAYS = 8
     }
 }
@@ -97,7 +100,7 @@ internal class EncryptedStore(context: Context) {
             val clock = node.path("clockId")
             require(clock.isIntegralNumber && clock.intValue() in 0..1023)
             return DiskState(keys, RepositoryState(records, node["previous"]?.takeUnless { it.isNull }?.textValue(),
-                node.path("lastRev").longValue(), clock.intValue()), saved, relays.map { it.textValue() }, acks,
+                node.path("lastRev").longValue(), clock.intValue()), saved, DiskState.migrateRelays(relays.map { it.textValue() }), acks,
                 node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"),
                 node.path("onlineEnabled").asBoolean(true))
         } finally { plain.fill(0) }

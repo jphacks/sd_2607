@@ -62,13 +62,14 @@ internal class RelaySubscription {
     fun receive(generation: Long, text: String, elapsed: Long, meshIds: Set<String> = emptySet()): RelayReply? {
         if (connection != generation) return null
         require(text.length <= MAX_FRAME_BYTES && text.toByteArray(Charsets.UTF_8).size <= MAX_FRAME_BYTES) { "Relay frame size limit" }
+        val frame = runCatching { json.readTree(text) }.getOrNull()
+        // OKs answer our own one-at-a-time EVENTs, so a backlog flush must not spend the receive window.
+        if (frame != null && frame.isArray && frame.size() == 4 && frame[0].textValue() == "OK" && frame[1].isTextual &&
+            frame[2].isBoolean && frame[3].isTextual) return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue())
         while (frameTimes.isNotEmpty() && (elapsed - frameTimes.first() >= 60_000 || elapsed < frameTimes.first())) frameTimes.removeFirst()
         require(frameTimes.size < MAX_FRAMES_PER_MINUTE) { "Relay receive rate limit" }
         frameTimes.addLast(elapsed)
-        val frame = runCatching { json.readTree(text) }.getOrNull() ?: return null
-        if (!frame.isArray || frame.size() < 2 || !frame[0].isTextual || !frame[1].isTextual) return null
-        if (frame[0].textValue() == "OK" && frame.size() == 4 && frame[2].isBoolean && frame[3].isTextual)
-            return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue())
+        if (frame == null || !frame.isArray || frame.size() < 2 || !frame[0].isTextual || !frame[1].isTextual) return null
         if (subscriptionId == null || frame[1].textValue() != subscriptionId) return null
         return when (frame[0].textValue()) {
             "EOSE" -> if (frame.size() == 2) { eose = true; RelayReply.Eose } else null

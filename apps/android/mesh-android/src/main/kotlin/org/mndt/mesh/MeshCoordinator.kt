@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.provider.Settings
@@ -29,14 +30,17 @@ import java.util.concurrent.TimeUnit
 data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
-    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN)
+    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList())
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
     val posts: List<PostView> = emptyList(), val diagnostics: List<String> = emptyList(),
     val error: String? = null, val lastPublishedId: String? = null, val publishAttempt: Long = 0,
     val clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN,
-    val onlineEnabled: Boolean = false, val onlineActive: Boolean = false
+    val onlineEnabled: Boolean = false, val onlineActive: Boolean = false,
+    /** Send status: OS default network present, relay socket in use, unsent count per relay, seconds until retry. */
+    val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
+    val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -127,6 +131,25 @@ class MeshCoordinator private constructor(private val context: Context) {
             }
         }
         scope.launch { while (isActive) { delay(1_000); enqueue { tick() } } }
+        // Offline attempts grow the relay backoff to 60 s; a new network must not wait that out.
+        context.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            // Capabilities change on every bandwidth update; only the first validation per network may skip backoff.
+            private var validated: Network? = null
+            override fun onAvailable(network: Network) = enqueue(critical = true) { networkChanged(fresh = true) }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                if (network == validated || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
+                validated = network
+                enqueue(critical = true) { networkChanged(fresh = false) }
+            }
+            override fun onLost(network: Network) = enqueue(critical = true) { refresh() }
+        })
+    }
+    /** [fresh]: a new default network, so a socket bound to the old one is dropped without counting a failure. */
+    private fun networkChanged(fresh: Boolean) {
+        if (fatal || disk == null || (!fresh && relayFailures == 0)) return
+        if (fresh && socket != null) closeRelay(graceful = false)
+        relayFailures = 0; relayRetryAt = 0; relayDeferred.clear(); relayIndex = 0; registrationRetryAt = 0
+        drainRelay()
     }
     /**
      * Link frames and ticks may be dropped under load; [critical] actions (UI, connection state) wait for space.
@@ -153,6 +176,10 @@ class MeshCoordinator private constructor(private val context: Context) {
         mutableState.update { state -> state.copy(
             ready = author != null && !fatal, running = running, clockConfidence = engine.clockConfidence,
             onlineEnabled = data?.onlineEnabled == true, onlineActive = onlineAllowed(),
+            network = context.getSystemService(ConnectivityManager::class.java).activeNetwork != null,
+            sendingRelay = activeRelay.takeIf { socketOpen }, queued = data?.relays.orEmpty().associateWith { pendingFor(it).size },
+            retryInSeconds = ((relayRetryAt - elapsed()) / 1000).coerceAtLeast(0),
+            pdsConfigured = data == null || configuredHttps(data.pdsEndpoint) != null,
             did = author?.did ?: "", publicKey = author?.nostrPubkey ?: "", relays = data?.relays.orEmpty(),
             registration = (if (data?.plcRegistered == true) "PLC 初期操作登録確認済み" else "PLC 初期操作登録未確認") +
                 " / " + when (plcObservation.current) {
@@ -169,7 +196,8 @@ class MeshCoordinator private constructor(private val context: Context) {
             },
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
-                    deliveryDeadline = engine.deadline(it.event, now()))
+                    deliveryDeadline = engine.deadline(it.event, now()),
+                    acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList())
             }, relaySubscription.events(), activeRelay)
         ) }
     }
@@ -306,7 +334,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             socket = http.newWebSocket(Request.Builder().url(activeRelay).build(), object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) = enqueue(critical = true) {
                     if (gen == socketGeneration && onlineAllowed()) {
-                        socketOpen = true; relayDeadline = 0
+                        socketOpen = true; relayDeadline = 0; relayFailures = 0
                         val req = relaySubscription.open(gen)
                         if (req != null) {
                             relayReadDeadline = elapsed() + 20_000

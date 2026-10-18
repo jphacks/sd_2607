@@ -484,4 +484,4 @@ GATT・TCP とも、4 バイト big-endian の長さ（1〜32,768）に続けて
 - destination EID は `dtn://mosimo.oriom.dev/~post`（non-singleton）とする。source EID は `dtn://n<著者公開鍵の先頭32桁>/post` を仮置きする。
 - Hop Count の上限は 8（ローカル方針。著者署名の対象外）。Lifetime は最大24時間。配送期限は `mosimo.oriom.dev:delivery-expires-at` から読む。
 - 保存は128件まで。満杯時は、転送対象外かつリレー受理済み → 転送対象外 → 最古受信の順に1件を退避する。
-- 搬出先は同梱の一般リレー（`wss://relay.damus.io`、`wss://nos.lol`）と利用者の追加分で、全リレーへ順に元イベントを送る。
+- 搬出先は同梱のリレー（`wss://pds.oriom.dev`、`wss://relay.damus.io`、`wss://nos.lol`）と利用者の追加分で、全リレーへ順に元イベントを送る。
