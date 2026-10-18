@@ -1,0 +1,47 @@
+{
+  "at": "2026-10-18T14:56:16.875281+09:00",
+  "mode": "WORKING DEMO requested: leave relays ON; do not restore offline/stopped",
+  "apps": {
+    "4f4ebc6f": {
+      "package": "org.mndt.demo.peer",
+      "relay": "ON",
+      "export": "OFF",
+      "pid": "27455",
+      "network": {
+        "at": "2026-10-18T14:56:41.376563+09:00",
+        "transports": [],
+        "physicalValidated": false
+      },
+      "radio": {
+        "airplane_mode_on": "0",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      }
+    },
+    "T4AIOC732121JRB": {
+      "package": "org.mndt.demo",
+      "relay": "ON",
+      "export": "ON",
+      "pid": "3625",
+      "network": {
+        "at": "2026-10-18T14:56:59.148066+09:00",
+        "transports": [
+          "WIFI|VPN",
+          "WIFI",
+          "CELLULAR",
+          "CELLULAR",
+          "WIFI"
+        ],
+        "physicalValidated": true
+      },
+      "radio": {
+        "airplane_mode_on": "0",
+        "wifi_on": "1",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      }
+    }
+  },
+  "otherApps": "ASUS Peer and existing OPPO Demo force-stopped; old OPPO Demo not uninstalled/updated"
+}

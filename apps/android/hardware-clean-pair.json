@@ -1,0 +1,249 @@
+{
+  "startedAt": "2026-10-18T14:40:44.387841+09:00",
+  "marker": "TEST ONLY - NOT DISASTER INFORMATION CLEAN-20261018T144044",
+  "baseline": {
+    "T4AIOC732121JRB": {
+      "airplane_mode_on": "1",
+      "wifi_on": "0",
+      "bluetooth_on": "1",
+      "mobile_data": "1"
+    },
+    "4f4ebc6f": {
+      "airplane_mode_on": "0",
+      "wifi_on": "0",
+      "bluetooth_on": "1",
+      "mobile_data": "1"
+    }
+  },
+  "newPostRequested": false,
+  "sourceNode": "c047ef246330f71e",
+  "gatewayNode": "1047f1d5e2cd2f66",
+  "author": "3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818",
+  "sourceOfflineChecks": [
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:40:45.800490+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:43:20.783994+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:44:49.646626+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:44:52.249336+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:44:54.827955+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:44:57.431073+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:00.008359+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:02.895938+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:05.962524+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:08.637162+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:11.207330+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:13.790090+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:16.379610+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:19.126217+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:22.076660+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:24.688621+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    },
+    {
+      "radio": {
+        "airplane_mode_on": "1",
+        "wifi_on": "0",
+        "bluetooth_on": "1",
+        "mobile_data": "1"
+      },
+      "at": "2026-10-18T14:45:27.258675+09:00",
+      "transports": [
+        "VPN"
+      ],
+      "physicalValidated": false
+    }
+  ],
+  "identityBefore": {
+    "T4AIOC732121JRB": "DID: did:plc:uhgusj7lhdpjq3vpbxns4oam\nNostr: 3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818",
+    "4f4ebc6f": "DID: did:plc:3wy72zh2afquqm4y2667fe5j\nNostr: 39659c909e6743a67f2bee6aa3e614f1d3632aeb40ec12cfc56542f341704464"
+  }
+}

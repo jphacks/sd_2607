@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-18T14:57:53.663093+09:00",
+  "content": "TEST ONLY - NOT DISASTER INFORMATION DEMO-145753",
+  "source": "OPPO Peer",
+  "gateway": "ASUS Demo",
+  "publishRequested": true,
+  "sourceUi": [
+    "TEST ONLY - NOT DISASTER INFORMATION DEMO-145753",
+    "96fccf99bd95 / 鍵 39659c909e67",
+    "観測 hop 0（完全な経路の証明ではない）",
+    "配送期限の判定不能 / 中継は Bundle Age・hop・ローカル上限に従う",
+    "リレー未受理 / キュー保持"
+  ],
+  "prefix": "96fccf99bd95",
+  "gatewayReceipt": [
+    "10-18 14:58:19.683 I/Exchange( 3625): bundle 825B from a40981413f1eb48c: accepted 96fccf99bd95fba13bb5a397eafd1eee2cd9b16dce2ab2c331dc49be32cb5e15"
+  ],
+  "eventId": "96fccf99bd95fba13bb5a397eafd1eee2cd9b16dce2ab2c331dc49be32cb5e15",
+  "sourceNodeLog": [
+    "10-18 14:57:36.513 I/Exchange(27455): hello from a7fb2785f1068ab5 on ble:c:5C:01:3B:13:93:32",
+    "10-18 14:57:41.679 I/Exchange(27455): hello from 9613c138361ed6c7 on ble:p:73:83:89:13:58:BD",
+    "10-18 14:57:49.625 I/Exchange(27455): hello from a7fb2785f1068ab5 on ble:c:5C:01:3B:13:93:32",
+    "10-18 14:58:15.310 I/Exchange(27455): hello from 9613c138361ed6c7 on ble:p:73:83:89:13:58:BD",
+    "10-18 14:59:00.852 I/Exchange(27455): bundle 96fccf99 825B to 9613c138361ed6c7: queued",
+    "10-18 14:59:01.564 I/Exchange(27455): bundle 96fccf99 825B to 20c207b0518766bf: queued",
+    "10-18 14:59:01.760 I/Exchange(27455): bundle 96fccf99 825B to b6e0150f7ab7a3ff: queued",
+    "10-18 14:59:29.628 I/Exchange(27455): bundle 96fccf99 825B to a7fb2785f1068ab5: queued"
+  ]
+}
