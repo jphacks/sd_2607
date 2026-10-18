@@ -344,6 +344,10 @@ test('identity failures and bad repository signatures retry without canonical st
   resolutionError = new Error('offline');
   assert.equal((await process(first)).status, 'retry');
   assert.match((await job(first)).error, /PLC resolution: offline/);
+  // A DID registered later (e.g. by proxy) is retried within a minute, however many attempts failed before.
+  await store.query(`UPDATE jobs SET attempts=20,next_attempt=${dialect === 'sqlite' ? sqliteNow : 'now()'} WHERE event_id=$1`, [first.event.id]);
+  assert.equal(await ingestion.processOne(), true);
+  assert.ok(new Date((await job(first)).next_attempt).getTime() <= Date.now() + 61_000);
   resolutionError = null;
   for (const source of [await fixture({ index: 1, badSignature: true }),
     await fixture({ index: 2, key: await Secp256k1Keypair.create() })]) {

@@ -72,10 +72,11 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
       const { commit, commitCid, base } = decoded;
       // Serialize each DID across workers; group sequencing is separately serialized below.
       if (!sqlite) await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [commit.did]);
-      const retry = async message => {
+      // An unregistered DID (registered later, e.g. by proxy) or a not-yet-verified base must not drift to an hour.
+      const retry = async (message, cap = 3600) => {
         await tx.query(`UPDATE jobs SET status='retry',error=$2,attempts=attempts+1,
           next_attempt=${sqlite ? "strftime('%Y-%m-%dT%H:%M:%fZ','now','+' || $3 || ' seconds')" : 'now()+make_interval(secs => $3)'} WHERE event_id=$1`,
-        [job.event_id, message, Math.min(3600, 2 ** Math.min(job.attempts + 1, 12))]);
+        [job.event_id, message, Math.min(cap, 2 ** Math.min(job.attempts + 1, 12))]);
       };
       if (futureRevisionDelay(commit.rev, clock()) > 0) {
         await retry('Future revision exceeds five-minute clock skew');
@@ -83,13 +84,13 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
       }
       let identity;
       try { identity = await resolveIdentity(commit.did); }
-      catch (error) { await retry(`PLC resolution: ${error.message}`); return true; }
+      catch (error) { await retry(`PLC resolution: ${error.message}`, 60); return true; }
       try { await verifyCommit(decoded, identity.signingKey); }
       catch (error) { await retry(`Signature/key state: ${error.message}`); return true; }
       let previous;
       if (base) {
         previous = (await tx.query('SELECT * FROM commits WHERE cid=$1 AND did=$2', [base.toString(), commit.did])).rows[0];
-        if (!previous) { await retry('Missing verified base commit'); return true; }
+        if (!previous) { await retry('Missing verified base commit', 60); return true; }
         if (commit.rev <= previous.rev) {
           await tx.query("UPDATE jobs SET status='invalid',error='Non-increasing revision' WHERE event_id=$1", [job.event_id]);
           return true;
