@@ -67,7 +67,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val random = SecureRandom()
     private val node = ByteArray(8).also(random::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
     private val links: List<Link> = listOf(GattLink(context), LanLink(context))
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note) { dirty = true; drainRelay() }
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note) { persist(); drainRelay() }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -481,7 +481,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (own.none { it.event.kind == 1 } || own.any { it.event.isPlcGenesis() }) return
         // A rate-limited or rejected attempt is retried on a later tick.
         runCatching { engine.originate(me.createPlcGenesisEvent(now()), now(), elapsed()) }.onSuccess {
-            dirty = true
+            persist()
             note("PLC 未登録のため署名済み初期操作をメッシュで配送（代理登録用）")
             exchange.broadcastInventory()
         }

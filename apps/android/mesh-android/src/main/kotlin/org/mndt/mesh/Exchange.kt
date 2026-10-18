@@ -26,6 +26,7 @@ internal class Exchange(
     private val now: () -> Long,
     private val elapsed: () -> Long,
     private val note: (String) -> Unit = {},
+    // Must durably save before returning; failures must stop the coordinator's links.
     private val accepted: (StoredBundle) -> Unit = {},
 ) {
     val sessions = linkedMapOf<Pair<Link, String>, Session>()
@@ -107,9 +108,9 @@ internal class Exchange(
         val entry = engine.accept(bytes, now(), elapsed())
         log("bundle ${bytes.size}B from ${s.peerNode}: ${if (entry == null) "duplicate" else "accepted ${entry.event.id.take(8)}"}")
         if (entry == null) { inventory(s); return }
+        accepted(entry)
         send(s, Wire.encode(Control("ack", listOf(entry.event.id))))
         note("署名検証・保存 ${entry.event.id.take(8)} / 観測 hop ${entry.hop}")
-        accepted(entry)
         broadcastInventory()
     }
 

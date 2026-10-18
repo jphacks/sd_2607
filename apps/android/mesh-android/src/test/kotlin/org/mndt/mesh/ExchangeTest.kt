@@ -48,6 +48,51 @@ class ExchangeTest {
         assertTrue(c.sessions.values.all { it.peerNode == "b".repeat(16) })
     }
 
+    @Test fun durableSaveFinishesBeforeAckOrInventoryLeavesReceiver() {
+        val engine = MeshEngine()
+        val link = RecordingLink()
+        var saved = false
+        val receiver = Exchange(engine, "b".repeat(16), { now }, { clock }, accepted = { entry ->
+            assertTrue("no ACK or inventory before durable save", link.frames.isEmpty())
+            assertEquals(entry.event.id, engine.entries().single().event.id)
+            saved = true
+        })
+        receiver.connected(link, "peer")
+        receiver.frame(link, "peer", Wire.encode(Control("hello", node = "a".repeat(16), max = 24_000)))
+        link.frames.clear()
+        val source = MeshEngine()
+        val event = Author(SecretKeys.generate(), "https://pds.invalid").createPost("保存してから応答", now).event
+        source.originate(event, now, clock)
+        receiver.frame(link, "peer", source.forward(event.id, now, clock)!!)
+        assertTrue(saved)
+        assertEquals(listOf("ack", "inventory"), link.frames.map { Wire.decode(it).type })
+        assertEquals(listOf(event.id), Wire.decode(link.frames.first()).ids)
+    }
+
+    @Test fun failedDurableSaveDoesNotAckOrAdvertiseReceivedBundle() {
+        val link = RecordingLink()
+        val receiver = Exchange(MeshEngine(), "b".repeat(16), { now }, { clock }, accepted = {
+            throw java.io.IOException("disk full")
+        })
+        receiver.connected(link, "peer")
+        receiver.frame(link, "peer", Wire.encode(Control("hello", node = "a".repeat(16), max = 24_000)))
+        link.frames.clear()
+        val source = MeshEngine()
+        val event = Author(SecretKeys.generate(), "https://pds.invalid").createPost("未保存", now).event
+        source.originate(event, now, clock)
+        receiver.frame(link, "peer", source.forward(event.id, now, clock)!!)
+        assertTrue("a failed save must not claim custody", link.frames.isEmpty())
+    }
+
+    private class RecordingLink : Link {
+        override val name = "recording"
+        val frames = mutableListOf<ByteArray>()
+        override fun start(node: String, listener: LinkListener) = Unit
+        override fun stop() = Unit
+        override fun disconnect(peer: String) = Unit
+        override fun send(peer: String, frame: ByteArray): Boolean { frames.add(frame); return true }
+    }
+
     @Test fun silentPeerIsDroppedAndOwnNodeIsRefused() {
         val (_, a) = node('a')
         val silent = Wired()
