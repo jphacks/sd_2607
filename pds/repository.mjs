@@ -71,6 +71,24 @@ function timestamp(value) {
   return date.getTime() / 1000;
 }
 
+/** Routing, not authorization: malformed claimed BSAF imports also fail closed for atproto.
+ * A valid ordinary BSAF extension without `original` remains a user post.
+ * Keep this below the shared canonical decoder; never depend on PLC/root freshness.
+ */
+export function isBsafImport(event) {
+  const tags = event.tags.filter(tag => tag[0] === `${prefix}ext:dev.oriom.mosimo.defs#bsafV1`);
+  if (tags.length === 0) return false;
+  if (tags.length !== 1) return true;
+  try {
+    const tag = tags[0];
+    requireValue(tag.length === 2, 'Invalid BSAF extension tag');
+    const fields = decodeCbor(decodeBytes(tag[1]));
+    requireValue(object(fields) && (!Object.hasOwn(fields, '$type')
+      || fields.$type === 'dev.oriom.mosimo.defs#bsafV1'), 'Invalid BSAF fields');
+    return Object.hasOwn(fields, 'original');
+  } catch { return true; }
+}
+
 /** Validate the signed Nostr envelope and recover the original record and commit bytes. */
 export async function decodePost(event) {
   requireValue(event && event.kind === 1 && typeof event.content === 'string'

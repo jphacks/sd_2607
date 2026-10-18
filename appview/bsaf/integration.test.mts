@@ -229,7 +229,21 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
     assert.equal(metadata.source_url, source);
     assert.ok(Date.parse(String(metadata.fetched_at)) >= before && Date.parse(String(metadata.fetched_at)) <= after);
 
+    const importedUri = `at://${author}/${mosimoCollection}/historical-import`;
+    const imported = { ...mosimo, text: 'SYNTHETIC HISTORICAL IMPORT — retained, not displayed',
+      extensions: [{ $type: 'dev.oriom.mosimo.defs#bsafV1',
+        original: { uri: bsafUri, cid: created.commit.cid, createdAt: original.createdAt }, tags: ['bsaf:v1'] }] };
+    db.prepare(`INSERT INTO happyview_records(uri,did,collection,rkey,record,cid,indexed_at,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(importedUri, author, mosimoCollection, 'historical-import', JSON.stringify(imported),
+        (await cidForLex(imported)).toString(), new Date().toISOString(), new Date().toISOString());
+    const importedRow = db.prepare('SELECT * FROM happyview_records WHERE uri=?').get(importedUri);
+    const hidden = await fetch(`${origin}/xrpc/${query}?${new URLSearchParams({ uri: importedUri })}`, { signal: AbortSignal.timeout(5000) });
+    await hidden.body?.cancel();
+    assert.ok(!hidden.ok, 'Historical Mosimo import must not resolve in single-record feed');
+    assert.deepEqual(db.prepare('SELECT * FROM happyview_records WHERE uri=?').get(importedUri), importedRow);
     const combined = await feed();
+    assert.equal(combined.records.filter(record => record.uri === bsafUri).length, 1, 'Original appears exactly once');
+    assert.ok(!combined.records.some(record => record.uri === importedUri), 'Repost excluded without deleting history');
     assert.deepEqual(combined.records[0].tags, original.tags);
     assert.deepEqual(combined.records[0].langs, original.langs);
     assert.deepEqual(combined.records, [{ ...original, uri: bsafUri }, { ...mosimo, uri: mosimoUri }]);

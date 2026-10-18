@@ -10,7 +10,7 @@ import { openStore } from './store.mts';
 import { receiverConfigurations, presetSelection } from './identity-cli.mjs';
 import { openPublicationStore, cacheSnapshot, snapshotStore, stageNext, pushOnce, publishEvent, validatePublisherConfig, refreshSnapshots, publicationPriority, type PublisherConfig } from './publisher.mts';
 import { createRoot, createImporter, issueCertificate, createSnapshot, JMA_SELECTION, KIKIKURU_SELECTION, timestamp, keyPublic,
-  verifyPublicInformation, rootId, certId, canonical, priorityHint, effectivePriority } from '../../pds/public-information.mjs';
+  verifyPublicInformation, createImporterEvent, BSAF, rootId, certId, canonical, priorityHint, effectivePriority } from '../../pds/public-information.mjs';
 
 const now = 1792368000;
 const botDid = JMA_SELECTION[0]!.botDid;
@@ -132,8 +132,7 @@ test('direct collector DB conversion archives original/provenance, durable dedup
   const provenance = JSON.parse(String(row.provenance_json));
   assert.equal(provenance.did, botDid); assert.equal(provenance.sourceUrl, 'wss://jetstream.invalid/subscribe');
   const event = JSON.parse(String(row.event_json));
-  assert.ok(event.content.includes(source.record.text)); assert.ok(event.content.includes(botDid));
-  assert.ok(event.content.includes('署名を検証したものではありません'));
+  assert.equal(event.content, source.record.text);
   assert.equal(row.deadline, timestamp(now + 570));
   assert.equal((await verifyPublicInformation(event, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: f.config.selection })).authorized, true);
   const retry = await stageNext(f.store, f.config, f.credentials, f.roots, now + 20);
@@ -143,6 +142,38 @@ test('direct collector DB conversion archives original/provenance, durable dedup
   finally { reopened.close(); }
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_publications').get()!.n, 1);
   assert.equal(JSON.parse(String(f.store.db.prepare('SELECT state_json FROM mosimo_bsaf_repository').get()!.state_json)).entries.length, 1);
+});
+
+test('publication preserves exact Unicode source text, including any original DID, without attribution additions', async t => {
+  const f = await fixture(t);
+  for (const text of ['地震\r\nか\u3099 🏠\n', `原文 did:plc:example / ${botDid} CID source:そのまま`]) {
+    await f.ingest({ text });
+    const row = (await stageNext(f.store, f.config, f.credentials, f.roots, now))!;
+    assert.equal(JSON.parse(String(row.event_json)).content, text);
+    f.store.db.prepare("UPDATE mosimo_bsaf_publications SET status='accepted' WHERE seq=?").run(row.seq!);
+  }
+});
+
+test('legacy signed pending with appended text is held unchanged and never sent or resigned', async t => {
+  const f = await fixture(t); await f.ingest();
+  const row = (await stageNext(f.store, f.config, f.credentials, f.roots, now))!;
+  const { event: legacy } = await createImporterEvent({ importer: f.credentials.importer, chain: f.credentials.chain,
+    text: JSON.parse(String(row.original_json)).text + '\nlegacy attribution footer',
+    extensions: [{ $type: BSAF, tags: JSON.parse(String(row.original_json)).tags, langs: ['ja'],
+      original: { uri: row.uri, cid: row.cid, createdAt: JSON.parse(String(row.original_json)).createdAt } }],
+    nowSeconds: now, deliveryExpiresAt: String(row.deadline), priority: 3 });
+  assert.equal((await verifyPublicInformation(legacy, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now),
+    nowSeconds: now, selection: f.config.selection })).authorized, true);
+  f.store.db.prepare('UPDATE mosimo_bsaf_publications SET event_json=? WHERE seq=?').run(JSON.stringify(legacy), row.seq!);
+  let sent = 0;
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now, new AbortController().signal,
+    async () => { sent++; return true; }), false);
+  assert.equal(sent, 0);
+  const saved = f.store.db.prepare('SELECT * FROM mosimo_bsaf_publications WHERE seq=?').get(row.seq!)!;
+  assert.equal(saved.event_json, JSON.stringify(legacy));
+  assert.equal(saved.status, 'pending');
+  assert.equal(saved.hold_reason, 'Original text mismatch; operator review required; signed EVENT retained');
+  assert.deepEqual(await stageNext(f.store, f.config, f.credentials, f.roots, now), saved);
 });
 
 test('OK failure/loss retries exact EVENT; accepted dedup persists; CID changes are distinct', async t => {
