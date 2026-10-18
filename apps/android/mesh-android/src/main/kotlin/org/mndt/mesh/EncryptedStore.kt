@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import org.mndt.core.RepositoryState
+import org.mndt.core.PublicIngress
 import org.mndt.core.MeshPolicy
 import org.mndt.core.SecretKeys
 import org.mndt.core.StoredBundle
@@ -32,7 +33,9 @@ internal data class DiskState(
     val plcRegistered: Boolean = false,
     val pdsEndpoint: String = "https://pds.invalid",
     val onlineEnabled: Boolean = true,
-    val relayDefaultsMigrated: Boolean = true
+    val relayDefaultsMigrated: Boolean = true,
+    val publicTrust: PublicIngress.Memory = PublicIngress.Memory(),
+    val publicAudit: Map<String, String> = emptyMap()
 ) {
     companion object {
         const val PDS_RELAY = "wss://pds.oriom.dev"
@@ -102,7 +105,14 @@ internal class EncryptedStore(context: Context) {
                 node.path("lastRev").longValue(), clock.intValue()), saved,
                 migrateDefaultRelays(relays.map { it.textValue() }, node.path("relayDefaultsMigrated").asBoolean(false)), acks,
                 node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"),
-                node.path("onlineEnabled").asBoolean(true))
+                node.path("onlineEnabled").asBoolean(true), publicTrust = readPublicTrust(node["publicTrust"]),
+                publicAudit = node["publicAudit"]?.let { audit ->
+                    require(audit.isObject && audit.size() <= 128)
+                    audit.properties().associate { (id, value) ->
+                        require(id.matches(Regex("[0-9a-f]{64}")) && value.isTextual && value.textValue().length <= 4096)
+                        id to value.textValue()
+                    }
+                }.orEmpty())
         } finally { plain.fill(0) }
     }
     fun save(state: DiskState, entries: List<StoredBundle>, bootCount: Int? = null) {
@@ -114,6 +124,10 @@ internal class EncryptedStore(context: Context) {
             .put("relayDefaultsMigrated", state.relayDefaultsMigrated)
             .put("previous", state.repository.previousCommit).put("lastRev", state.repository.lastRevMicros)
             .put("clockId", state.repository.clockId)
+        node.putObject("publicAudit").also { a -> state.publicAudit.forEach { (id, value) -> a.put(id, value) } }
+        val trust = node.putObject("publicTrust")
+        trust.putObject("snapshots").also { s -> state.publicTrust.snapshots.forEach { (id, bytes) -> s.put(id, base64.encodeToString(bytes)) } }
+        trust.putObject("serials").also { s -> state.publicTrust.serials.forEach { (id, hash) -> s.put(id, hash) } }
         node.putArray("relays").also { a -> state.relays.forEach(a::add) }
         node.putObject("records").also { records -> state.repository.records.forEach { (k, v) -> records.put(k, v) } }
         node.putArray("bundles").also { a -> entries.forEach {

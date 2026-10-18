@@ -24,6 +24,9 @@ import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
 import org.mndt.core.MeshEngine
 import org.mndt.core.SecretKeys
+import org.mndt.core.PublicIngress
+import org.mndt.core.NostrEvent
+import java.time.Instant
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
@@ -31,7 +34,8 @@ import java.util.concurrent.TimeUnit
 data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
-    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList())
+    val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList(),
+    val publicAuthorization: String? = null)
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -41,13 +45,14 @@ data class MeshState(
     val onlineEnabled: Boolean = false, val onlineActive: Boolean = false,
     /** Send status: OS default network present, relay socket in use, unsent count per relay, seconds until retry. */
     val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
-    val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true
+    val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true,
+    val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList()
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
 @SuppressLint("MissingPermission")
 class MeshCoordinator private constructor(private val context: Context) {
-    // ponytail: one bounded actor serializes all IO/state; split only if it measurably lags.
+    // Mesh state and disk commits are serialized; public download/crypto run on a separate bounded worker.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inbox = Channel<() -> Unit>(256)
     private val mutableState = MutableStateFlow(MeshState())
@@ -55,6 +60,12 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val store = EncryptedStore(context)
     private var disk: DiskState? = null
     private var dirty = false
+    private var publicConfig = PublicIngress.Config()
+    private var publicGeneration = 0L
+    private var publicBusy = false
+    private var publicNext = 0L
+    private var publicJob: Job? = null
+    private var publicEvents: List<NostrEvent> = emptyList()
     private val engine = MeshEngine()
     private val bootCount = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }
         .getOrNull()?.takeIf { it >= 0 }
@@ -143,6 +154,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                 if (lost > 0) note("保存済み Bundle ${lost} 件を読めず破棄")
                 persist(saved)
                 note("インストール固有の3鍵・DIDを準備済み")
+                reloadPublicConfigInternal()
             } catch (_: Exception) {
                 fatal = true
                 issue("暗号化状態を開けません。鍵は再生成せず停止しました")
@@ -185,6 +197,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     fun reportError(text: String) = enqueue(critical = true) { issue(text.take(160)) }
     /** Local operator policy, not clock synchronization or network consensus. Defaults to UNKNOWN on restart. */
     fun setClockConfidence(value: ClockConfidence) = enqueue(critical = true) {
+        if (engine.clockConfidence != value) cancelPublicDownload()
         engine.clockConfidence = value
         exchange.broadcastInventory()
     }
@@ -216,15 +229,19 @@ class MeshCoordinator private constructor(private val context: Context) {
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { !it.event.isPlcGenesis() }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
-                    acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList())
-            }, relaySubscription.events(), activeRelay)
+                    acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
+                    publicAuthorization = data?.publicAudit?.get(it.event.id))
+            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).map { post ->
+                if (post.volatile && publicEvents.any { it.id == post.id }) post.copy(sourceRelay = DiskState.PDS_RELAY) else post
+            },
+            publicBusy = publicBusy
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
         check(!fatal) { "Persistence is disabled after a fatal error" }
         val entries = engine.entries()
         val ids = entries.map { it.event.id }.toSet()
-        val clean = next.copy(relayAccepted = next.relayAccepted.filterKeys { it in next.relays }.mapValues { (_, accepted) -> accepted.intersect(ids) })
+        val clean = next.copy(publicAudit = next.publicAudit.filterKeys { it in ids }, relayAccepted = next.relayAccepted.filterKeys { it in next.relays }.mapValues { (_, accepted) -> accepted.intersect(ids) })
         val wall = now()
         val monotonic = elapsed()
         try { store.save(clean, entries.map { engine.checkpoint(it, wall, monotonic) }, bootCount); disk = clean; dirty = false }
@@ -274,15 +291,114 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (endpoint == activeRelay) { closeRelay(); relaySubscription.clear() }
         note("リレー削除 $endpoint")
     }
+    /** Reload is an explicit local trust operation. A bad asset disables ingress, not the identity. */
+    fun reloadPublicConfig() = enqueue(critical = true) { reloadPublicConfigInternal() }
+    fun reloadPublicConfig(assetName: String) = enqueue(critical = true) { reloadPublicConfigInternal(assetName) }
+    private fun reloadPublicConfigInternal(assetName: String? = null) {
+        cancelPublicDownload()
+        publicGeneration++
+        publicConfig = PublicIngress.Config()
+        val loaded = runCatching {
+            val asset = assetName ?: metadata?.getString("mosimo.public.trust.asset") ?: "mosimo-public-trust.json"
+            require(asset.matches(Regex("[A-Za-z0-9_.-]{1,128}")))
+            val bytes = context.assets.open(asset).use { it.readBounded(65536) }
+            val text = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+            PublicIngress.config(text)
+        }
+        loaded.onSuccess { publicConfig = it }
+        mutableState.update { it.copy(publicStatus = loaded.fold(
+            { c -> "公的情報: 有効 root ${c.roots.count { r -> r.enabled }} / 選択 Bot/type ${c.selected.size}（未設定は投入不可）" },
+            { "公的情報: config 読込失敗 / fail closed（既存鍵・失効履歴は保持）" })) }
+    }
+    private fun cancelPublicDownload() {
+        publicGeneration++
+        publicJob?.cancel(); publicJob = null; publicBusy = false
+    }
+    /** Manual user request only; no AppView access and no client-side conversion/signing. */
+    fun requestPublicInformation() = enqueue(critical = true) {
+        if (fatal || disk == null || publicBusy) return@enqueue
+        if (!onlineAllowed() || !validatedInternet()) {
+            mutableState.update { it.copy(publicStatus = "公的情報: オンライン接続が必要 / 保留") }; return@enqueue
+        }
+        if (engine.clockConfidence != ClockConfidence.TRUSTED) {
+            mutableState.update { it.copy(publicStatus = "公的情報: 時計 unknown / 認可保留") }; return@enqueue
+        }
+        if (elapsed() < publicNext) {
+            mutableState.update { it.copy(publicStatus = "公的情報: 取得頻度制限（30秒）") }; return@enqueue
+        }
+        publicNext = elapsed() + 30000
+        publicBusy = true
+        val generation = ++publicGeneration
+        val config = publicConfig
+        val startingMemory = checkNotNull(disk).publicTrust
+        mutableState.update { it.copy(publicStatus = "PDS relay から priority-v1 取得中…", publicResults = emptyList()) }
+        publicJob = scope.launch {
+            // Network IO is never run inside inbox's serialized actor. No redirects or unbounded body reads.
+            val snapshots = config.roots.filter { it.enabled }.mapNotNull { root ->
+                ensureActive()
+                runCatching { root.rootId to PublicDownload.snapshot(http, root) }.getOrNull()
+            }.toMap()
+            val batch = runCatching { PublicDownload.fetch(http, generation) }
+            ensureActive()
+            val clock = Instant.ofEpochMilli(now())
+            var memory = startingMemory
+            val failures = mutableListOf<String>()
+            for (root in config.roots.filter { it.enabled }) {
+                snapshots[root.rootId]?.let { bytes ->
+                    runCatching { PublicIngress.acceptSnapshot(root, bytes, memory, clock) }
+                        .onSuccess { memory = it }.onFailure { failures += "snapshot ${root.rootId.take(8)}: ${it.message}" }
+                } ?: run { failures += "snapshot ${root.rootId.take(8)}: 取得失敗（有効な保存 snapshot のみ利用可）" }
+            }
+            // Crypto is bounded worker work too. Propagate serial history between events, not just requests.
+            val decisions = batch.getOrNull()?.events.orEmpty().map { event ->
+                ensureActive()
+                val decision = PublicIngress.verify(event, config, memory, clock)
+                memory = decision.memory
+                event to decision
+            }.sortedByDescending { it.second.receipt?.priority ?: minOf(PublicIngress.priority(it.first), 1) }
+            enqueue(critical = true) complete@{
+                if (generation != publicGeneration || fatal || !onlineAllowed()) return@complete
+                publicBusy = false; publicJob = null
+                // Generation fences reload/clock changes/cancellation. History has one writer (this request).
+                // Atomically write high-water, sticky CRL and serial history BEFORE considering any ingress.
+                persist(checkNotNull(disk).copy(publicTrust = memory))
+                batch.onSuccess { result ->
+                    publicEvents = result.events
+                    var imported = 0
+                    val reports = mutableListOf<String>()
+                    for ((event, decision) in decisions) {
+                        if (fatal) break
+                        val receipt = decision.receipt
+                        val insertionTime = if (engine.clockConfidence == ClockConfidence.TRUSTED) Instant.ofEpochMilli(now()) else null
+                        val outcome = if (receipt == null) "投入拒否/保留: ${decision.reason}"
+                        else if (!PublicIngress.readyToInsert(receipt, event, checkNotNull(disk).publicTrust, insertionTime)) "投入保留: 待機中に証明・snapshot・期限・時計が無効化"
+                        else if (engine.entries().any { it.event.id == event.id }) "既存 event ID / 重複投入なし" else {
+                            val saved = runCatching { engine.originate(event, now(), elapsed()) }
+                            if (saved.isSuccess) {
+                                val audit = "取込時の転載者認可（現在の公式認証ではない）: $receipt"
+                                persist(checkNotNull(disk).copy(publicAudit = checkNotNull(disk).publicAudit + (event.id to audit)))
+                                imported++; "認可・暗号化保存済み / priority ${receipt.priority}"
+                            } else "通常 mesh 資源制限: ${saved.exceptionOrNull()?.message}"
+                        }
+                        reports += "${event.id.take(8)} $outcome\n${decision.status}"
+                    }
+                    mutableState.update { it.copy(publicStatus = "PDS ${if (result.fallback) "通常REQ fallback" else "priority-v1"}: ${result.events.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）",
+                        publicResults = (failures + reports).take(40)) }
+                    if (imported > 0) { exchange.broadcastInventory(); drainRelay() }
+                }.onFailure { failure -> mutableState.update { it.copy(publicStatus = "公的情報取得失敗: ${failure.message}", publicResults = failures) } }
+            }
+        }
+    }
     /** Activity visibility permits online IO even while the mesh service is stopped. */
     fun setOnlineForeground(visible: Boolean) = enqueue(critical = true) {
         activityVisible = visible
-        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() } else drainRelay()
+        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else drainRelay()
     }
     fun setOnlineEnabled(enabled: Boolean) = enqueue(critical = true) {
         check(!fatal)
         persist(checkNotNull(disk).copy(onlineEnabled = enabled))
-        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() } else drainRelay()
+        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else drainRelay()
         note(if (enabled) "オンライン搬出を有効化" else "オンライン搬出を停止。搬出待ちは保持")
     }
     private fun onlineAllowed(): Boolean = disk?.let {
@@ -306,7 +422,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         running = false
         links.forEach { runCatching { it.stop() } }
         exchange.clear()
-        if (!onlineAllowed()) { closeRelay(); relaySubscription.clear() }
+        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() }
         if (stopService) context.stopService(Intent(context, MeshService::class.java))
         note("中継を停止。保存済み投稿とリレー設定は保持")
     }
@@ -413,7 +529,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             relaySubscription.receive(socketGeneration, text, elapsed(), engine.entries().map { it.event.id }.toSet())
         } catch (_: Exception) { relayFailure(); return }
         when (reply) {
-            // Importer trust/equivalence rules are undecided (mndt §6): relay events are display-only, never mesh ingress.
+            // General subscription remains display-only; authorized ingress uses the explicit public request.
             is RelayReply.Event -> if (relaySubscription.atCapacity) closeRelayRead()
             RelayReply.Full -> closeRelayRead()
             RelayReply.Eose, RelayReply.Closed -> relayReadDeadline = 0
