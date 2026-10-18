@@ -28,6 +28,8 @@ apps/android/gradlew -p apps/android \
 
 成果物は `app/build/outputs/apk/{demo,peer}/debug/`（`org.mndt.demo` / `org.mndt.demo.peer`）。Google Play 開発者サービスは不要。
 
+本番公開を検証する専用 flavor は `:app:assembleVerificationDebug`（`org.mndt.demo.verification`、表示名 `mosimo Public Network Test`）。既存アプリとは別の鍵・保存領域を使い、ネイティブ Instrumentation から実 Coordinator を駆動する。実 PLC 登録と公開投稿を伴うため、通常のローカルテストとして実行しない。[実機検証報告](../../docs/android-production-verification-2026-10-18.md)と[検証メモ](VERIFICATION.md)を参照。
+
 ## 動作
 
 - 「中継開始」で Bluetooth 権限を求め、前景サービスを開始する。
@@ -38,7 +40,10 @@ apps/android/gradlew -p apps/android \
   - `START_STICKY` なので、OS がプロセスを回収した場合は再起動される。
   - 中継を有効にしたまま端末を再起動すると、自動で再開する。
   - 強制停止後や省電力制限下の動作は保証しない（mndt §3.5）。
-- インターネットに接続できるときは、保持中の全イベントを元の署名のまま、既定リレー（`wss://relay.damus.io`、`wss://nos.lol`）と追加したリレーへ順に送る。リレーから取得したイベントは表示専用で、メッシュには投入しない（mndt §6）。
+- オンライン搬出が有効で、画面表示中または中継サービス稼働中は、保持中の全イベントを元の署名のまま、既定リレー（`wss://pds.oriom.dev`、`wss://relay.damus.io`、`wss://nos.lol`）と追加したリレーへ巡回して送る。拒否・接続失敗の再試行待機はリレーごとに独立する。リレーから取得したイベントは表示専用で、メッシュには投入しない（mndt §6）。
+  - 保存済み一覧が旧既定の2件と完全一致するときだけ、PDS を一度追加する。独自一覧・一部削除済み一覧は変更しないため、その場合は PDS を手動追加する。
+  - 自作投稿は PDS リレーの `OK` まで容量退避しない。未配送の自作投稿で128件が埋まると新規保存・投稿を拒否し、既存投稿を保持する。PDS を削除した構成でもこの保護は続く。一般リレーへの `OK` では保護を解除しない。
+  - `OK` は Nostr イベントの受理であり、PLC 登録・atproto 公開・AppView 表示の完了ではない。PDS の受理後も、一般リレーへの配送が終わる前に容量退避される可能性はある。
 - 画像などのメディアは送らない（0003 §9.4 で延期）。1イベントの CBOR payload の上限は 32 KiB（Bundle はローカル上限 24,000 bytes）。
 - 旧形式（`org.mndt.experimental.v2` タグ・`mesh-state.aesgcm`）は読まない。初回起動時に旧状態を削除し、鍵を新しく生成する。
 
@@ -54,7 +59,9 @@ apps/android/gradlew -p apps/android \
   - 公開鍵を渡した場合は commit 署名も検証する。この公開鍵は本来 DID document から得る。
   - DID 認証と MST 包含検証は行わない（PDS 側の段階）。
 - record key と `rev` は同じ TID を使う（0012 §2.1.1 は一致を要求しないので、受信側は一致を前提にしない）。TID の clock ID は repository ごとの乱数で、永続化する。
-- DID はオフラインで導出したもので、PLC 登録はしない。既定の PDS は `.invalid`。
+- DID はオフラインで導出する。現行アプリの Manifest は PDS に `https://pds.oriom.dev`、PLC Directory に `https://plc.directory` を指定し、オンライン時の初期操作登録・現在鍵と PDS 設定の確認を有効にしている。SDK の未設定時の PDS は `.invalid`。
+  - 保存済みの PDS endpoint・鍵・DID は Manifest 更新だけでは変更しない。旧 `.invalid` の状態はそのままでは本番 atproto 公開できず、本人の鍵による PLC 更新等の移行判断が必要。アプリデータ削除で安易に別発信者へ置き換えない。
+  - PLC 登録・確認はリレー搬出の ON/OFF とは独立して動く。公開ネットワークへ接続した検証時は、実 DID 登録が発生し得る点に注意する。
 
 ## 未実装・範囲外
 

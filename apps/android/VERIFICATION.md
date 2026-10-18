@@ -1,6 +1,53 @@
 # Android 検証メモ
 
-## 実行済み（2026-10-17、JVM・ビルドのみ）
+## 実機・本番検証（2026-10-18 03:09–03:12 UTC）
+
+**成功。** 別アプリ ID `org.mndt.demo.verification` の実 `MeshCoordinator` で、オフライン生成した初回・継続投稿2件をプロセス終了後に復元。Wi-Fi 復帰後、PDS・Damus・nos.lol の全3リレーへ配送し、別クライアントから同じ署名付きイベントを取得できた。
+
+実 PLC の初期操作登録・現在鍵・PDS 設定、PDS の2レコード・最新 commit・CAR／MST を照合し、`bsky.network` の最新 CID／rev も一致した。試験中は既存 Demo／Peer の保存データを保持し、Wi-Fi・機内モード設定も試験後に復元した。
+
+試験完了後、通常 Demo は署名鍵の不一致で上書きできなかったため、利用者の明示承認により `org.mndt.demo` のみ削除・修正版を再インストールした。旧 Demo のローカル鍵・DID・投稿は引き継がない。Peer と専用試験アプリは保持した。
+
+[本番検証報告と公開証拠](../../docs/android-production-verification-2026-10-18.md)を参照。今回の実機試験は Instrumentation から UI と同じ公開 API を使った foreground 搬出であり、Compose 操作・BLE 実機中継・画面消灯中の搬出を実証するものではない。
+
+## ローカル・読み取り検証（2026-10-18）
+
+- Android の `bundle-core` 31件、`mesh-android` 39件、`dtn7-bpv7` 33件が成功。Demo／Peer の APK ビルドも成功。
+- 一般リレーが `OK=false` を返しても PDS と別リレーへ巡回する選択を、MockWebServer と実 WebSocket で回帰検証。実 `MeshCoordinator` を Android OS 上で駆動する試験ではない。
+- 旧既定リレー一覧への PDS の一度限りの追加、独自一覧の保持を検証。
+- 自作投稿の PDS 受理前の退避防止、全128件保護時の新規保存拒否と既存データ維持を検証。
+- 実 Kotlin `Author.createPost` の初回・継続投稿を、ESP32 の本番 C++ `forwardBundle` → Kotlin 再受信 → ローカル PDS の実 WebSocket → SQLite／署名検証／MST 復元 → HTTP `getRecord`／`getLatestCommit` まで照合した。署名済み payload・event ID・record CID・commit CID が一致。未知・同型重複拡張、bytes・CID・null・日本語を含む。C++ は ASan／UBSan 有効。
+  - PLC はテスト鍵のローカル解決を注入し、実 PLC 登録を行わない。無線リンク・Android 実機のオンライン復帰・公開 PDS への投稿の実証とは区別する。
+- 本番の読み取り確認：`https://pds.oriom.dev/health` と NIP-11 は HTTP 200。PDS と nos.lol の WebSocket `REQ` に `EOSE` 応答。Damus はこの環境からの接続時に HTTP 503 を返した。投稿受理の試験ではない。
+- PDS 全体は133件成功、新規統合テスト1件は fixture 未指定の通常 `npm test` では skip。統合ランナーではその1件も成功。`npm run typecheck` 成功。
+
+再実行（この Windows／WSL 環境、リポジトリルートの Git Bash）：
+
+```sh
+JAVA_HOME='C:/Program Files/Microsoft/jdk-21.0.6.7-hotspot' \
+ANDROID_HOME='C:/Users/chiba/AppData/Local/Android/Sdk' \
+apps/android/gradlew -p apps/android --offline --no-daemon --console=plain \
+  :dtn7-bpv7:test :bundle-core:test :mesh-android:testDebugUnitTest \
+  :app:assembleDemoDebug :app:assemblePeerDebug
+
+MSYS_NO_PATHCONV=1 python apps/esp32/test_bundle/test_repository_integration.py \
+  --java 'C:/Program Files/Microsoft/jdk-21.0.6.7-hotspot/bin/java.exe' \
+  --wsl Ubuntu \
+  --mbedtls-include /home/mchiba/.cache/mesh-bundle-host/deps/usr/include \
+  --mbedtls-library /home/mchiba/.cache/mesh-bundle-host/deps/usr/lib/x86_64-linux-gnu/libmbedcrypto.a
+```
+
+統合ランナーにはキャッシュ済み Kotlin 依存、ビルド済み BPv7 jar、PDS の npm 依存が必要。詳細は `apps/esp32/test_bundle/test_repository_integration.py --help` を参照。
+
+### 残る制約
+
+- アプリは atproto 公開完了を監視しない。Nostr の `OK` 後に、PLC・base 不足等で PDS の復元が保留されることはある。
+- 他者から預かった投稿は既存の容量退避方針のまま。全投稿・全リレーへの永続配送は保証しない。更新前に失った base イベントの自動回復もない。
+- 旧 `.invalid` endpoint を保存済みの場合は、リレー追加だけでは正規 PDS の設定は変わらない。
+- Android／ESP32 は秒未満9桁を超える日時を受理できない。0010 の Timestamp との一般的な相互運用上の制限であり、現行 Android が生成するミリ秒精度の投稿は今回の経路で検証済み。
+- 公開先への試験投稿は永続的に残り得る。初回の照合段階では本番投稿を行わず、その後の利用者承認により上記実機試験で専用 DID と2投稿のみを公開した。ESP32 書込みは行っていない。
+
+## 以前の検証（2026-10-17、JVM・ビルドのみ）
 
 - `bundle-core` 29件、`mesh-android` 35件の単体テストに成功。
   - 0012 §3.2.4 の基本タグ表との一致、拡張タグの自己完結性と配列順、メッシュ CBOR v1 の3種の型変換と非正規値の保持。
@@ -11,11 +58,11 @@
 - `assembleDemoDebug` / `assemblePeerDebug` に成功。
 - `lexicons/` の `npm test` 24件に成功。
 
-形式変更前に行った Node 別実装による署名・CID・MST の独立照合と AVD 試験は、旧形式・旧サービス構成に対するもの。現行形式では未実施。
+形式変更前の Node 別実装による署名・CID・MST の独立照合と AVD 試験は旧形式・旧サービス構成に対するもの。現行形式のデータ相互運用検証は上記2026-10-18の追加検証を参照。AVD 試験は現行形式では未実施。
 
 ## 未検証（実機で要確認）
 
-BLE・mDNS・前景サービス・再起動・Keystore は実機でしか確認できない。JVM テストの成功を無線の動作確認とは扱わない。
+Keystore・暗号化保存・オンライン搬出は上記実機試験で確認済み。BLE・mDNS・画面消灯中の前景サービス・端末再起動は別途実機検証が必要であり、JVM テストの成功を無線の動作確認とは扱わない。
 
 ## 実機手順（2〜3台）
 

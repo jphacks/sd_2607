@@ -21,6 +21,11 @@ android {
             applicationIdSuffix = ".peer"
             versionNameSuffix = "-peer"
         }
+        create("verification") {
+            dimension = "demo"
+            applicationId = "org.mndt.demo.verification"
+            versionNameSuffix = "-verification"
+        }
     }
     buildFeatures { compose = true }
     compileOptions {

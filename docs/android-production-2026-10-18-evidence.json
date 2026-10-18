@@ -1,0 +1,329 @@
+{
+  "ok": false,
+  "readOnly": true,
+  "startedAt": "2026-10-18T03:10:14.111Z",
+  "limits": {
+    "totalMs": 90000,
+    "fetchMs": 10000,
+    "wsMs": 15000
+  },
+  "relays": {
+    "wss://pds.oriom.dev": {
+      "required": true,
+      "ok": true,
+      "events": [
+        {
+          "id": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+          "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+          "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial.",
+          "kind": 1,
+          "created_at": 1792292966,
+          "tags": [
+            [
+              "t",
+              "mosimo.oriom.dev"
+            ],
+            [
+              "mosimo.oriom.dev:version",
+              "1"
+            ],
+            [
+              "mosimo.oriom.dev:commit",
+              "pmNkaWR4IGRpZDpwbGM6MjJlbmFkbXVsbmIyZTd1cmhpNGhjdm55Y3Jldm0zbXk0bXd0eWlwY214Y3NpZ1hAuAVIgx3picL8wXd3Cd4BmOGMyEixfReY664+e+qBWhAnczPzVU4otdKyKTnUvZPxV3HkrXXFfC9/NGq37L/sZWRkYXRh2CpYJQABcRIgAy1iuMUykepBJ1lfCTxVymbgOhfckCIzWdQ1kTYDp3VkcHJldvZndmVyc2lvbgM"
+            ],
+            [
+              "mosimo.oriom.dev:base",
+              ""
+            ],
+            [
+              "mosimo.oriom.dev:path",
+              "dev.oriom.mosimo.post/3my4mwtyipcmx"
+            ],
+            [
+              "mosimo.oriom.dev:created-at",
+              "2026-10-18T03:09:26.841Z"
+            ],
+            [
+              "mosimo.oriom.dev:delivery-expires-at",
+              "2026-10-19T03:09:26Z"
+            ]
+          ],
+          "sig": "03db07bfe6adef64a3e84bb4e68ca167618ddebff517863977c18ad251d83b2e2cfa1b4f177071bc8e4c332ea89d5ca9df92f30261567d10aba50fb5d7e106a7"
+        },
+        {
+          "id": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+          "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+          "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=2 continuation.",
+          "kind": 1,
+          "created_at": 1792292966,
+          "tags": [
+            [
+              "t",
+              "mosimo.oriom.dev"
+            ],
+            [
+              "mosimo.oriom.dev:version",
+              "1"
+            ],
+            [
+              "mosimo.oriom.dev:commit",
+              "pmNkaWR4IGRpZDpwbGM6MjJlbmFkbXVsbmIyZTd1cmhpNGhjdm55Y3Jldm0zbXk0bXd1MzRvc214Y3NpZ1hAe88JwMPeRlW2NhO87GiaH/QTNrovMRfUVK+RXG+6qEkUyLd4OIjzrvA99hHjq2i0oeeHx6uq2I6Yub9yZ6AwlmRkYXRh2CpYJQABcRIgnOY3xHXGEwfI9YwjzwcKnDOmASS1PIIarmnevpDPKx9kcHJldvZndmVyc2lvbgM"
+            ],
+            [
+              "mosimo.oriom.dev:base",
+              "bafyreieowet34pv23iu6vmk7spj763gwm37gjijzy5hz5wtxe5d7fbrwfa"
+            ],
+            [
+              "mosimo.oriom.dev:path",
+              "dev.oriom.mosimo.post/3my4mwu34osmx"
+            ],
+            [
+              "mosimo.oriom.dev:created-at",
+              "2026-10-18T03:09:26.927Z"
+            ],
+            [
+              "mosimo.oriom.dev:delivery-expires-at",
+              "2026-10-19T03:09:26Z"
+            ]
+          ],
+          "sig": "d33284f8159cc45c5590c0c30bf350bc03065193f14e2176325a3e4971c85610b07f1d45be49b4432c07d5a7578e4379795ab89a968d4f8fd7fb5ed3fd30319a"
+        }
+      ]
+    },
+    "wss://nos.lol": {
+      "required": true,
+      "ok": false,
+      "events": [
+        {
+          "id": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+          "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+          "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial.",
+          "kind": 1,
+          "created_at": 1792292966,
+          "tags": [
+            [
+              "t",
+              "mosimo.oriom.dev"
+            ],
+            [
+              "mosimo.oriom.dev:version",
+              "1"
+            ],
+            [
+              "mosimo.oriom.dev:commit",
+              "pmNkaWR4IGRpZDpwbGM6MjJlbmFkbXVsbmIyZTd1cmhpNGhjdm55Y3Jldm0zbXk0bXd0eWlwY214Y3NpZ1hAuAVIgx3picL8wXd3Cd4BmOGMyEixfReY664+e+qBWhAnczPzVU4otdKyKTnUvZPxV3HkrXXFfC9/NGq37L/sZWRkYXRh2CpYJQABcRIgAy1iuMUykepBJ1lfCTxVymbgOhfckCIzWdQ1kTYDp3VkcHJldvZndmVyc2lvbgM"
+            ],
+            [
+              "mosimo.oriom.dev:base",
+              ""
+            ],
+            [
+              "mosimo.oriom.dev:path",
+              "dev.oriom.mosimo.post/3my4mwtyipcmx"
+            ],
+            [
+              "mosimo.oriom.dev:created-at",
+              "2026-10-18T03:09:26.841Z"
+            ],
+            [
+              "mosimo.oriom.dev:delivery-expires-at",
+              "2026-10-19T03:09:26Z"
+            ]
+          ],
+          "sig": "03db07bfe6adef64a3e84bb4e68ca167618ddebff517863977c18ad251d83b2e2cfa1b4f177071bc8e4c332ea89d5ca9df92f30261567d10aba50fb5d7e106a7"
+        }
+      ],
+      "error": "EOSE before both IDs arrived"
+    },
+    "wss://relay.damus.io": {
+      "required": false,
+      "ok": true,
+      "events": [
+        {
+          "id": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+          "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+          "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial.",
+          "kind": 1,
+          "created_at": 1792292966,
+          "tags": [
+            [
+              "t",
+              "mosimo.oriom.dev"
+            ],
+            [
+              "mosimo.oriom.dev:version",
+              "1"
+            ],
+            [
+              "mosimo.oriom.dev:commit",
+              "pmNkaWR4IGRpZDpwbGM6MjJlbmFkbXVsbmIyZTd1cmhpNGhjdm55Y3Jldm0zbXk0bXd0eWlwY214Y3NpZ1hAuAVIgx3picL8wXd3Cd4BmOGMyEixfReY664+e+qBWhAnczPzVU4otdKyKTnUvZPxV3HkrXXFfC9/NGq37L/sZWRkYXRh2CpYJQABcRIgAy1iuMUykepBJ1lfCTxVymbgOhfckCIzWdQ1kTYDp3VkcHJldvZndmVyc2lvbgM"
+            ],
+            [
+              "mosimo.oriom.dev:base",
+              ""
+            ],
+            [
+              "mosimo.oriom.dev:path",
+              "dev.oriom.mosimo.post/3my4mwtyipcmx"
+            ],
+            [
+              "mosimo.oriom.dev:created-at",
+              "2026-10-18T03:09:26.841Z"
+            ],
+            [
+              "mosimo.oriom.dev:delivery-expires-at",
+              "2026-10-19T03:09:26Z"
+            ]
+          ],
+          "sig": "03db07bfe6adef64a3e84bb4e68ca167618ddebff517863977c18ad251d83b2e2cfa1b4f177071bc8e4c332ea89d5ca9df92f30261567d10aba50fb5d7e106a7"
+        },
+        {
+          "id": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+          "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+          "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=2 continuation.",
+          "kind": 1,
+          "created_at": 1792292966,
+          "tags": [
+            [
+              "t",
+              "mosimo.oriom.dev"
+            ],
+            [
+              "mosimo.oriom.dev:version",
+              "1"
+            ],
+            [
+              "mosimo.oriom.dev:commit",
+              "pmNkaWR4IGRpZDpwbGM6MjJlbmFkbXVsbmIyZTd1cmhpNGhjdm55Y3Jldm0zbXk0bXd1MzRvc214Y3NpZ1hAe88JwMPeRlW2NhO87GiaH/QTNrovMRfUVK+RXG+6qEkUyLd4OIjzrvA99hHjq2i0oeeHx6uq2I6Yub9yZ6AwlmRkYXRh2CpYJQABcRIgnOY3xHXGEwfI9YwjzwcKnDOmASS1PIIarmnevpDPKx9kcHJldvZndmVyc2lvbgM"
+            ],
+            [
+              "mosimo.oriom.dev:base",
+              "bafyreieowet34pv23iu6vmk7spj763gwm37gjijzy5hz5wtxe5d7fbrwfa"
+            ],
+            [
+              "mosimo.oriom.dev:path",
+              "dev.oriom.mosimo.post/3my4mwu34osmx"
+            ],
+            [
+              "mosimo.oriom.dev:created-at",
+              "2026-10-18T03:09:26.927Z"
+            ],
+            [
+              "mosimo.oriom.dev:delivery-expires-at",
+              "2026-10-19T03:09:26Z"
+            ]
+          ],
+          "sig": "d33284f8159cc45c5590c0c30bf350bc03065193f14e2176325a3e4971c85610b07f1d45be49b4432c07d5a7578e4379795ab89a968d4f8fd7fb5ed3fd30319a"
+        }
+      ]
+    }
+  },
+  "atproto": {
+    "ok": true,
+    "plc": {
+      "url": "https://plc.directory/did:plc:22enadmulnb2e7urhi4hcvny/data",
+      "did": "did:plc:22enadmulnb2e7urhi4hcvny",
+      "signingKey": "did:key:zQ3shm3x2r2sJ7CDkyMC4459cdttxJnRXS2yuuERcYQ2zs1G9",
+      "endpoint": "https://pds.oriom.dev"
+    },
+    "commits": [
+      {
+        "cid": "bafyreieowet34pv23iu6vmk7spj763gwm37gjijzy5hz5wtxe5d7fbrwfa",
+        "rev": "3my4mwtyipcmx",
+        "base": null,
+        "mstRoot": "bafyreiadfvrlrrjsshvecj2zl4etyvokm3qduf64sardgwougwitma5hou",
+        "path": "dev.oriom.mosimo.post/3my4mwtyipcmx",
+        "recordCid": "bafyreidk3r3bzn6exn2lnn3ajnmnozfztp22dxxkdl4bgrmyupuuu4gdpa",
+        "signature": true,
+        "reconstructedMst": true
+      },
+      {
+        "cid": "bafyreichkigr44ysa6ire6hklbgjcvbygovbyz45aaatb43e5isky2l5ki",
+        "rev": "3my4mwu34osmx",
+        "base": "bafyreieowet34pv23iu6vmk7spj763gwm37gjijzy5hz5wtxe5d7fbrwfa",
+        "mstRoot": "bafyreie44y34i5ogcmd4r5mmephqocu4gotacjfvhsbbvltj327jbtzld4",
+        "path": "dev.oriom.mosimo.post/3my4mwu34osmx",
+        "recordCid": "bafyreiarj36hmthi5x22c47ors5yzd2xa5yn43rvnvmf5s2ol6gmbs57ay",
+        "signature": true,
+        "reconstructedMst": true
+      }
+    ],
+    "latestCommit": {
+      "cid": "bafyreichkigr44ysa6ire6hklbgjcvbygovbyz45aaatb43e5isky2l5ki",
+      "rev": "3my4mwu34osmx"
+    },
+    "records": [
+      {
+        "uri": "at://did:plc:22enadmulnb2e7urhi4hcvny/dev.oriom.mosimo.post/3my4mwtyipcmx",
+        "cid": "bafyreidk3r3bzn6exn2lnn3ajnmnozfztp22dxxkdl4bgrmyupuuu4gdpa",
+        "value": {
+          "text": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial.",
+          "$type": "dev.oriom.mosimo.post",
+          "createdAt": "2026-10-18T03:09:26.841Z",
+          "extensions": [],
+          "deliveryExpiresAt": "2026-10-19T03:09:26Z"
+        }
+      },
+      {
+        "uri": "at://did:plc:22enadmulnb2e7urhi4hcvny/dev.oriom.mosimo.post/3my4mwu34osmx",
+        "cid": "bafyreiarj36hmthi5x22c47ors5yzd2xa5yn43rvnvmf5s2ol6gmbs57ay",
+        "value": {
+          "text": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=2 continuation.",
+          "$type": "dev.oriom.mosimo.post",
+          "createdAt": "2026-10-18T03:09:26.927Z",
+          "extensions": [],
+          "deliveryExpiresAt": "2026-10-19T03:09:26Z"
+        }
+      }
+    ],
+    "car": {
+      "root": "bafyreichkigr44ysa6ire6hklbgjcvbygovbyz45aaatb43e5isky2l5ki",
+      "blockCount": 5,
+      "records": 2,
+      "allCidHashes": true,
+      "originalCommitBytes": true,
+      "commitSignature": true,
+      "officialMst": true,
+      "originalRecordBytes": true
+    }
+  },
+  "input": {
+    "run": "android20261018T0301",
+    "did": "did:plc:22enadmulnb2e7urhi4hcvny",
+    "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+    "events": [
+      {
+        "id": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+        "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial."
+      },
+      {
+        "id": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+        "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=2 continuation."
+      }
+    ],
+    "relayOk": [
+      {
+        "relay": "wss://pds.oriom.dev",
+        "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c"
+      },
+      {
+        "relay": "wss://pds.oriom.dev",
+        "eventId": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30"
+      },
+      {
+        "relay": "wss://relay.damus.io",
+        "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c"
+      },
+      {
+        "relay": "wss://relay.damus.io",
+        "eventId": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30"
+      },
+      {
+        "relay": "wss://nos.lol",
+        "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c"
+      }
+    ]
+  },
+  "receiptNote": "Android relayOk is reported acknowledgement metadata, not independent receipt proof; REQ signatures below are independently checked.",
+  "finishedAt": "2026-10-18T03:10:15.314Z"
+}

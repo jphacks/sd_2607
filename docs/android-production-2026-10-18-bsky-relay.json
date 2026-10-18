@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "readOnly": true,
+  "checkedAt": "2026-10-18T03:12:10.224Z",
+  "relay": "https://bsky.network",
+  "did": "did:plc:22enadmulnb2e7urhi4hcvny",
+  "status": {
+    "active": true,
+    "did": "did:plc:22enadmulnb2e7urhi4hcvny",
+    "rev": "3my4mwu34osmx"
+  },
+  "latestCommit": {
+    "cid": "bafyreichkigr44ysa6ire6hklbgjcvbygovbyz45aaatb43e5isky2l5ki",
+    "rev": "3my4mwu34osmx"
+  },
+  "headMatchesPds": true
+}

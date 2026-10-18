@@ -1,0 +1,58 @@
+{
+  "run": "android20261018T0301",
+  "phase": "observe",
+  "result": "success",
+  "did": "did:plc:22enadmulnb2e7urhi4hcvny",
+  "pubkey": "48621e36908a8ecbaf377c9a786a93c112194b99a219b34a2494d658192035d2",
+  "plc": "PLC 初期操作登録確認済み \/ Directory 現在鍵・PDS設定一致（確認時刻 1792293101622） \/ PDS 受入・公開未確認",
+  "events": [
+    {
+      "id": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+      "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=1 initial."
+    },
+    {
+      "id": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+      "content": "TEST ONLY - NOT DISASTER INFORMATION. Android MeshCoordinator verification run=android20261018T0301 step=2 continuation."
+    }
+  ],
+  "relayOk": [
+    {
+      "relay": "wss:\/\/pds.oriom.dev",
+      "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+      "observedAtMillis": 1792293001334,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    },
+    {
+      "relay": "wss:\/\/pds.oriom.dev",
+      "eventId": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+      "observedAtMillis": 1792293004154,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    },
+    {
+      "relay": "wss:\/\/relay.damus.io",
+      "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+      "observedAtMillis": 1792293002174,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    },
+    {
+      "relay": "wss:\/\/relay.damus.io",
+      "eventId": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+      "observedAtMillis": 1792293004543,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    },
+    {
+      "relay": "wss:\/\/nos.lol",
+      "eventId": "19ce3df4c83a33da82a0f49978b5af2d4bf631a4c152206f290dfce1f1453e2c",
+      "observedAtMillis": 1792293003960,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    },
+    {
+      "relay": "wss:\/\/nos.lol",
+      "eventId": "05e11efda16b130267afd539ee510778ace980f9052a318a9235225269561c30",
+      "observedAtMillis": 1792293102135,
+      "source": "MeshState.diagnostics: unique 8-char event prefix"
+    }
+  ],
+  "deliverySuccess": true,
+  "persistence": "foreground off and >=2 ticks awaited before final result; restored IDs checked by observe"
+}
