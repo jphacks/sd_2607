@@ -104,3 +104,19 @@ HAPPYVIEW_IMAGE=localhost/your-existing-2.16-image node --test integration.test.
 許可/拒否、CID、タグ・言語・添付参照、更新/削除、許可取消、統合一覧・ページング、
 原レコード保持、独自scriptの上書き拒否を検証し、終了時に削除する。
 本番DB・実Botの秘密鍵や投稿権限は使用しない。
+
+### 2026-10-18の実施結果
+
+- 収集・永続化・再接続の15テスト、TypeScript型チェック、Nixモジュール検証が成功。
+- VPS上の実HappyView 2.16イメージを使った一時DBの結合試験が成功。
+  最終版のqueryはMosimoとBSAFを順序付きで統合し、許可取消・削除後の除外も確認した。
+- query planは両collectionの索引を`MERGE (UNION ALL)`で結合し、全履歴のsortを避ける。
+  50,000件の合成DBで、21件取得の中央値約0.19 msを観測した（メモリ内SQLite、VPS負荷試験ではない）。
+- 実装commit `61e1247`を本番へ反映。
+  system closure: `/nix/store/h4gcjcavlzfa2i7xv38ic4zwqrwmhf71-nixos-system-kagoya-vps-26.05.20260409.4c1018d`。
+- 反映前の整合性あるSQLiteバックアップをVPS内のroot専用ディレクトリへ保存。
+- 本番で`mosimo-bsaf-prepare`がsuccess、`approvedAuthors:0`を確認。
+  準備処理のMemoryPeakは30,146,560 bytes。空リストのためcollector unitは作成されていない。
+- 公開getFeedで既存テスト著者の9件・原投稿URI・CID provenance・ページングを再確認した。
+  HappyView/PDSの両サービスはactive。
+- **実Botの許可DIDは未指定。実BotのライブBSAF受信や過去投稿の取得は未検証・未有効化。**
