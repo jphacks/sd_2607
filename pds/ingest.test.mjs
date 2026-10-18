@@ -683,6 +683,19 @@ for (const offset of [-365 * 24 * 3600_000, 0, 300_000]) {
   });
 }
 
+test('future revision retries when the five-minute window opens, not on exponential backoff', async () => {
+  const now = Date.UTC(2026, 9, 18);
+  const rev = TID.fromTime((now + 480_000) * 1000, 0).toString();
+  ingestion = createIngestion({ config, store, resolveIdentity, clock: () => now });
+  const source = await fixture({ rev });
+  await process(source);
+  await store.query(`UPDATE jobs SET attempts=20,next_attempt=${dialect === 'sqlite' ? sqliteNow : 'now()'} WHERE event_id=$1`, [source.event.id]);
+  const before = Date.now();
+  assert.equal(await ingestion.processOne(), true);
+  const due = new Date((await job(source)).next_attempt).getTime() - before;
+  assert.ok(due >= 178_000 && due <= 182_000, `retry due in ${due} ms, expected ~180 s`);
+});
+
 test('future revision retries without repository writes and becomes valid at the five-minute boundary', async () => {
   let now = Date.UTC(2026, 9, 18);
   const rev = TID.fromTime((now + 300_000) * 1000 + 1, 0).toString();
