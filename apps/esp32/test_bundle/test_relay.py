@@ -212,6 +212,9 @@ def main():
         (build / "0.bin").write_bytes(bytes.fromhex(fixed["valid_bundle_hex"]))
 
         (build / "tampered.bin").write_bytes(bytes.fromhex(fixed["tampered_signature_bundle_hex"]))
+        control, _, _ = fixtures.event('{"type":"plc_operation"}',
+            [[fixtures.DEADLINE, "2030-10-18T12:34:56Z"]], kind=8173)
+        (build / "control.bin").write_bytes(fixtures.bundle(control))
         # 128 session completions plus a 129th offer exercise the history cap.
         for i in range(1, 129):
             payload, _, _ = fixtures.event("host relay test " + str(i))

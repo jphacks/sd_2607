@@ -209,13 +209,15 @@ python3 apps/esp32/test_bundle/test_ble.py --sanitize
 ```
 
 Relay compiles the production codec/exchange with ArduinoJson 7.4.2, mocking only
-LittleFS and monotonic time. Its 3,596 assertions cover verification before writes,
+LittleFS and monotonic time. Its 3,621 assertions cover verification before writes,
 ACK after readback, the provisioned 32-character filename limit, numeric slots,
 cold restoration, bounded cache replacement, duplicate age preservation, queue
 backpressure, protocol limits, and failed I/O without false ACKs. Accepted-message
 callbacks fire only for verified, successfully saved new events, not duplicates,
 failed saves or reboot-restored entries. Same-session 17th receipt and bounded
-128-ID completion history have dedicated regressions.
+128-ID completion history have dedicated regressions. Verified kind metadata is
+preserved for ordinary posts and PLC control events; controls still save, ACK and
+forward without changing their event ID/content.
 
 BLE compiles production `MeshBle.cpp` with mocked NimBLE/FreeRTOS/Relay. Its 316
 assertions cover nonzero handles, notification queue acceptance versus application
@@ -237,9 +239,11 @@ ASan/UBSan by default (BLE requires `--sanitize` to enable them).
 python3 apps/esp32/test_bundle/test_main_controls.py --sanitize
 ```
 
-73 assertions compile the actual `main.cpp` with host hardware boundaries: C
+85 assertions compile the actual `main.cpp` with host hardware boundaries: C
 changes only audio mute, reception still updates the preview while muted, B toggles
-radio without changing mute, and A queues a speech test. Physical button timing
+radio without changing mute, and A queues a speech test. PLC genesis, deletion
+and other control kinds must not replace the latest kind-1 preview or queue speech,
+even though Relay still accepts/stores/forwards them. Physical button timing
 and LCD appearance still require device inspection.
 
 ## Message preview

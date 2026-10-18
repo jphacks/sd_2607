@@ -14,6 +14,7 @@ struct BundleInfo {
     std::string id, text;
     uint64_t age = 0, lifetime = 0;
     uint32_t hop = 0, hopLimit = 0;
+    uint16_t kind = 0;
 };
 
 // No wall-clock assumptions: a syntactically valid signed deadline is required,

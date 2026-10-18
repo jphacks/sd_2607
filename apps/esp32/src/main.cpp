@@ -36,6 +36,8 @@ void showControls() {
 }
 
 void showMessage(const mesh::BundleInfo& message) {
+    // Control events (e.g. PLC genesis JSON) still relay, but are not notices.
+    if (message.kind != 1) return;
     const int cursorX = M5.Display.getCursorX();
     const int cursorY = M5.Display.getCursorY();
     M5.Display.setTextScroll(false);
