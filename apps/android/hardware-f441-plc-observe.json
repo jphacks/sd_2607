@@ -1,0 +1,50 @@
+{
+  "route": "DIRECT Peer online export; BLE chain NOT proved",
+  "targetPrefix": "f44162129aa3",
+  "baseline": {
+    "airplane_mode_on": "1",
+    "wifi_on": "0",
+    "bluetooth_on": "1",
+    "mobile_data": "1"
+  },
+  "observations": [
+    {
+      "at": "2026-10-18T14:08:41.086556+09:00",
+      "publicUi": [
+        "DID: did:plc:uhgusj7lhdpjq3vpbxns4oam\nNostr: 3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818",
+        "PLC 初期操作登録未確認 / 現在状態不明（オフライン・未設定・未確認） / PDS 受入・公開未確認",
+        "オンライン搬出先リレー（接続できたときに保持中の全投稿を送信）",
+        "wss://pds.oriom.dev",
+        "wss://relay.damus.io",
+        "wss://nos.lol",
+        "オンライン搬出を停止",
+        "オンライン搬出有効（中継中は画面非表示でも継続）",
+        "接続中: wss://pds.oriom.dev",
+        "署名検証済み投稿 67"
+      ]
+    },
+    {
+      "at": "2026-10-18T14:08:48.212160+09:00",
+      "publicUi": [
+        "DID: did:plc:uhgusj7lhdpjq3vpbxns4oam\nNostr: 3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818",
+        "PLC 初期操作登録確認済み / Directory 現在鍵・PDS設定一致（確認時刻 1792300122544） / PDS 受入・公開未確認",
+        "オンライン搬出先リレー（接続できたときに保持中の全投稿を送信）",
+        "wss://pds.oriom.dev",
+        "wss://relay.damus.io",
+        "wss://nos.lol",
+        "オンライン搬出を停止",
+        "オンライン搬出有効（中継中は画面非表示でも継続）",
+        "接続中: wss://pds.oriom.dev",
+        "署名検証済み投稿 67"
+      ]
+    }
+  ],
+  "allThreeQueuesEmpty": true,
+  "plcConfirmedUi": true,
+  "restored": {
+    "airplane_mode_on": "1",
+    "wifi_on": "0",
+    "bluetooth_on": "1",
+    "mobile_data": "1"
+  }
+}

@@ -66,8 +66,16 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var lastSync = 0L
     private val random = SecureRandom()
     private val node = ByteArray(8).also(random::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
-    private val links: List<Link> = listOf(GattLink(context), LanLink(context))
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note) { persist(); drainRelay() }
+    private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
+    // Optional test isolation only: node IDs are ephemeral and are NOT peer authentication.
+    private val allowedPeerNode = metadata?.getString("mndt.test.peer.node")?.takeIf { it.isNotEmpty() }?.also {
+        require(it.matches(Regex("[0-9a-f]{16}"))) { "Invalid test peer node" }
+    }
+    private val allowedAuthor = metadata?.getString("mndt.test.author.pubkey")?.takeIf { it.isNotEmpty() }?.also {
+        require(it.matches(Regex("[0-9a-f]{64}"))) { "Invalid test author" }
+    }
+    private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor) { persist(); drainRelay() }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -92,7 +100,6 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var registrationFailures = 0
     // Historical genesis confirmation is persisted; current authority is an online observation only.
     private var plcObservation = PlcObservation()
-    private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
     // TODO(undecided): no production PDS/PLC policy is selected. Configure metadata before first install.
     private val pds = metadata?.getString("mndt.pds.endpoint") ?: "https://pds.invalid"
     private val plcDirectory = metadata?.getString("mndt.plc.directory") ?: ""
@@ -332,7 +339,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     // Genesis control events stay in the mesh: relays (including the PDS) accept only kinds 1 and 5, and the online
     // node submits them to the PLC Directory itself.
-    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
+    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && (allowedAuthor == null || it.event.pubkey == allowedAuthor) && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mndt §6). */
     private fun drainRelay() {
         val current = disk ?: return
@@ -491,7 +498,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         val directory = configuredHttps(plcDirectory) ?: return
         if (fatal || !allowRegistration || proxyBusy || !validatedInternet()) return
         val clock = elapsed()
-        val (did, operation) = engine.entries().asSequence().filter { it.event.isPlcGenesis() && it.event.pubkey != author?.nostrPubkey }
+        val (did, operation) = engine.entries().asSequence().filter { it.event.isPlcGenesis() && it.event.pubkey != author?.nostrPubkey && (allowedAuthor == null || it.event.pubkey == allowedAuthor) }
             .mapNotNull { e -> runCatching { AtRepository.plcDid(e.event.content) to e.event.content }.getOrNull() }
             .firstOrNull { (did, _) -> clock >= (proxyNext[did]?.second ?: 0) } ?: return
         proxyBusy = true

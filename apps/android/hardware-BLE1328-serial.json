@@ -1,0 +1,236 @@
+{
+  "targetPrefix": "77588a3c",
+  "peerAckObserved": false,
+  "records": [
+    {
+      "at": "2026-10-18T13:28:28.737969+09:00",
+      "kind": "action",
+      "line": "COM3 opened without asserting DTR/RTS"
+    },
+    {
+      "at": "2026-10-18T13:28:31.001929+09:00",
+      "kind": "action",
+      "line": "Demo relay started through UI; online policy remains disabled"
+    },
+    {
+      "at": "2026-10-18T13:28:31.004930+09:00",
+      "kind": "serial",
+      "line": "TTS done id=bdced1900714bff9d1413369712e8eea1ce10de9665c3eee1d2967bfe2513cc5 samples=48936 nonzero=24375 chunks=153"
+    },
+    {
+      "at": "2026-10-18T13:28:31.005438+09:00",
+      "kind": "serial",
+      "line": "TTS start id=69b885f56808fb77092e0d1a480f53e3984d8b6d2a8599a9e3a78557880b8a76"
+    },
+    {
+      "at": "2026-10-18T13:28:31.799883+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=343149 heap=87220 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:36.256996+09:00",
+      "kind": "serial",
+      "line": "TTS done id=69b885f56808fb77092e0d1a480f53e3984d8b6d2a8599a9e3a78557880b8a76 samples=58676 nonzero=32431 chunks=184"
+    },
+    {
+      "at": "2026-10-18T13:28:36.263270+09:00",
+      "kind": "serial",
+      "line": "TTS start id=a63feb04a8335d14a5e5394b88e5441fb917da2cf06820b3591b20df8df48fb3"
+    },
+    {
+      "at": "2026-10-18T13:28:36.800706+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=348150 heap=87220 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:38.824257+09:00",
+      "kind": "serial",
+      "line": "TTS done id=a63feb04a8335d14a5e5394b88e5441fb917da2cf06820b3591b20df8df48fb3 samples=20416 nonzero=13171 chunks=64"
+    },
+    {
+      "at": "2026-10-18T13:28:38.831780+09:00",
+      "kind": "serial",
+      "line": "TTS start id=adc84459dd85568391aefe720148e62bee917b655681d4ec514a0e524f2338de"
+    },
+    {
+      "at": "2026-10-18T13:28:41.804540+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=353153 heap=86880 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:46.173535+09:00",
+      "kind": "serial",
+      "line": "TTS done id=adc84459dd85568391aefe720148e62bee917b655681d4ec514a0e524f2338de samples=58676 nonzero=32431 chunks=184"
+    },
+    {
+      "at": "2026-10-18T13:28:46.809248+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=358158 heap=86704 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:48.597688+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 429bde11"
+    },
+    {
+      "at": "2026-10-18T13:28:48.826325+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 84c60d93 hop 2 735B"
+    },
+    {
+      "at": "2026-10-18T13:28:50.057826+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 6d09ccdb"
+    },
+    {
+      "at": "2026-10-18T13:28:50.308517+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 77588a3c hop 2 761B"
+    },
+    {
+      "at": "2026-10-18T13:28:50.411373+09:00",
+      "kind": "action",
+      "line": "Demo force-stopped immediately after post and second control save"
+    },
+    {
+      "at": "2026-10-18T13:28:50.440608+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=77588a3c"
+    },
+    {
+      "at": "2026-10-18T13:28:50.446650+09:00",
+      "kind": "serial",
+      "line": "TTS queued id=77588a3c32c4a53e5873d3b448d61806b7c266226a2d9e99431bae533e821ec0"
+    },
+    {
+      "at": "2026-10-18T13:28:50.452683+09:00",
+      "kind": "serial",
+      "line": "TTS start id=77588a3c32c4a53e5873d3b448d61806b7c266226a2d9e99431bae533e821ec0"
+    },
+    {
+      "at": "2026-10-18T13:28:51.808910+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=363158 heap=85168 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:55.265484+09:00",
+      "kind": "action",
+      "line": "Peer relay started through UI after Demo stopped"
+    },
+    {
+      "at": "2026-10-18T13:28:56.814215+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=368164 heap=85132 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:28:59.174174+09:00",
+      "kind": "serial",
+      "line": "TTS done id=77588a3c32c4a53e5873d3b448d61806b7c266226a2d9e99431bae533e821ec0 samples=69696 nonzero=41827 chunks=218"
+    },
+    {
+      "at": "2026-10-18T13:29:01.815061+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=373164 heap=85132 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:06.815935+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=378165 heap=85132 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:11.824574+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=383173 heap=85156 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:16.825465+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=388174 heap=85156 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:21.825085+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=393174 heap=85096 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:26.825544+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=398175 heap=85096 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:30.202179+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted c16b7a96"
+    },
+    {
+      "at": "2026-10-18T13:29:30.474844+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 97f00674 hop 1 832B"
+    },
+    {
+      "at": "2026-10-18T13:29:30.606852+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=97f00674"
+    },
+    {
+      "at": "2026-10-18T13:29:30.612260+09:00",
+      "kind": "serial",
+      "line": "TTS queued id=97f006740cfff2970484ff64903b72db3d13a7bd45410dbf38208348c0e5fe1d"
+    },
+    {
+      "at": "2026-10-18T13:29:30.618352+09:00",
+      "kind": "serial",
+      "line": "TTS start id=97f006740cfff2970484ff64903b72db3d13a7bd45410dbf38208348c0e5fe1d"
+    },
+    {
+      "at": "2026-10-18T13:29:31.835888+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=403184 heap=84852 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:36.837218+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=408185 heap=84852 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:37.961242+09:00",
+      "kind": "serial",
+      "line": "TTS done id=97f006740cfff2970484ff64903b72db3d13a7bd45410dbf38208348c0e5fe1d samples=58676 nonzero=32431 chunks=184"
+    },
+    {
+      "at": "2026-10-18T13:29:41.839321+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=413188 heap=84888 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:46.841662+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=418189 heap=84888 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:51.843099+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=423191 heap=84872 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:29:56.843662+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=428192 heap=84872 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:30:01.844395+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=433192 heap=84884 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:30:06.845774+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=438193 heap=84884 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:30:11.187392+09:00",
+      "kind": "action",
+      "line": "Both apps force-stopped; COM3 closed; radio settings unchanged"
+    }
+  ]
+}

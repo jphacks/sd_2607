@@ -1,0 +1,47 @@
+{
+  "checkedAt": "2026-10-18T05:09:06.251Z",
+  "readOnly": true,
+  "eventId": "f44162129aa31843a58af01310d78b61fba6505d23aeed2590ad1862ac2f4c8f",
+  "atUri": "at://did:plc:uhgusj7lhdpjq3vpbxns4oam/dev.oriom.mosimo.post/3my4rrjels2rd",
+  "plc": {
+    "status": 200,
+    "body": {
+      "did": "did:plc:uhgusj7lhdpjq3vpbxns4oam",
+      "verificationMethods": {
+        "atproto": "did:key:zQ3shjumf2cxsbmGkFf2tFqADB81ekZoN9ST1zMofb81jPxPs"
+      },
+      "rotationKeys": [
+        "did:key:zQ3shSZLXCMPkYwoNqFPQAbSc4GFT4CFtxKK73YjvWjFs8mK3"
+      ],
+      "alsoKnownAs": [],
+      "services": {
+        "atproto_pds": {
+          "type": "AtprotoPersonalDataServer",
+          "endpoint": "https://pds.oriom.dev"
+        }
+      }
+    }
+  },
+  "record": {
+    "status": 404,
+    "body": {
+      "error": "RepoNotFound",
+      "message": "RepoNotFound"
+    }
+  },
+  "pds": {
+    "status": 404,
+    "body": {
+      "error": "RepoNotFound",
+      "message": "RepoNotFound"
+    }
+  },
+  "relay": {
+    "status": 404,
+    "body": {
+      "error": "RepoNotFound",
+      "message": "account not found"
+    }
+  },
+  "commitSignatureVerified": true
+}

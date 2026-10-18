@@ -84,12 +84,50 @@ class ExchangeTest {
         assertTrue("a failed save must not claim custody", link.frames.isEmpty())
     }
 
+    @Test fun optionalTestPeerIsolationRejectsOtherNodesBeforeInventory() {
+        val expected = "a7fb2785f1068ab5"
+        for (peer in listOf(expected, "d".repeat(16))) {
+            val link = RecordingLink()
+            val receiver = Exchange(MeshEngine(), "b".repeat(16), { now }, { clock }, allowedPeerNode = expected)
+            receiver.connected(link, "peer")
+            link.frames.clear()
+            receiver.frame(link, "peer", Wire.encode(Control("hello", node = peer, max = 24_000)))
+            if (peer == expected) {
+                assertEquals("inventory", Wire.decode(link.frames.single()).type)
+                assertFalse(link.disconnected)
+            } else {
+                assertTrue(link.frames.isEmpty())
+                assertTrue(link.disconnected)
+                assertTrue(receiver.sessions.isEmpty())
+            }
+        }
+    }
+
+    @Test fun optionalTestAuthorIsolationDoesNotAdvertiseOrSendUnrelatedStoredPosts() {
+        val engine = MeshEngine()
+        val wanted = Author(SecretKeys.generate(), "https://pds.invalid").createPost("TEST ONLY - NOT DISASTER INFORMATION", now).event
+        val unrelated = Author(SecretKeys.generate(), "https://pds.invalid").createPost("other stored data", now).event
+        engine.originate(wanted, now, clock)
+        engine.originate(unrelated, now, clock)
+        val link = RecordingLink()
+        val receiver = Exchange(engine, "b".repeat(16), { now }, { clock }, allowedAuthor = wanted.pubkey)
+        receiver.connected(link, "peer")
+        link.frames.clear()
+        receiver.frame(link, "peer", Wire.encode(Control("hello", node = "a".repeat(16), max = 24_000)))
+        assertEquals(listOf(wanted.id), Wire.decode(link.frames.single()).ids)
+        link.frames.clear()
+        receiver.frame(link, "peer", Wire.encode(Control("want", listOf(unrelated.id))))
+        assertTrue(link.frames.isEmpty())
+        assertEquals("existing data must remain stored", 2, engine.entries().size)
+    }
+
     private class RecordingLink : Link {
         override val name = "recording"
         val frames = mutableListOf<ByteArray>()
         override fun start(node: String, listener: LinkListener) = Unit
         override fun stop() = Unit
-        override fun disconnect(peer: String) = Unit
+        var disconnected = false
+        override fun disconnect(peer: String) { disconnected = true }
         override fun send(peer: String, frame: ByteArray): Boolean { frames.add(frame); return true }
     }
 

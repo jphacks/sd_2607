@@ -1,0 +1,21 @@
+{
+  "readOnly": true,
+  "observations": [
+    {
+      "at": "2026-10-18T05:09:27.617Z",
+      "status": 404,
+      "body": {
+        "error": "RepoNotFound",
+        "message": "RepoNotFound"
+      }
+    },
+    {
+      "at": "2026-10-18T05:09:35.699Z",
+      "status": 200,
+      "body": {
+        "cid": "bafyreiefg7inlbu4ar7hxj6prqsk6d6uzlm4exub2s2b2hrxzokn6rhjke",
+        "rev": "3my4rrjels2rd"
+      }
+    }
+  ]
+}

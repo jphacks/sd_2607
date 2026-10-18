@@ -1,0 +1,51 @@
+{
+  "checkedAt": "2026-10-18T05:08:38.966Z",
+  "route": "DIRECT Peer online export, not a proved BLE chain",
+  "relay": "wss://pds.oriom.dev",
+  "event": {
+    "id": "f44162129aa31843a58af01310d78b61fba6505d23aeed2590ad1862ac2f4c8f",
+    "pubkey": "3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818",
+    "created_at": 1792298156,
+    "kind": 1,
+    "tags": [
+      [
+        "t",
+        "mosimo.oriom.dev"
+      ],
+      [
+        "mosimo.oriom.dev:version",
+        "1"
+      ],
+      [
+        "mosimo.oriom.dev:commit",
+        "pmNkaWR4IGRpZDpwbGM6dWhndXNqN2xoZHBqcTN2cGJ4bnM0b2FtY3Jldm0zbXk0cnJqZWxzMnJkY3NpZ1hAxmhlKdAnkQ9971t/kdfcLkYRTFAgTUmqkQDjpB7EBDZyxb+tSf2QF8+gAe1c2Xh9cBG2++YVkvFjBhZTBF5PO2RkYXRh2CpYJQABcRIgEKRwtMY3tKqbB8W6AahRegStnkURv5XI0QzwTR3SucRkcHJldvZndmVyc2lvbgM"
+      ],
+      [
+        "mosimo.oriom.dev:base",
+        ""
+      ],
+      [
+        "mosimo.oriom.dev:path",
+        "dev.oriom.mosimo.post/3my4rrjels2rd"
+      ],
+      [
+        "mosimo.oriom.dev:created-at",
+        "2026-10-18T04:35:56.640Z"
+      ],
+      [
+        "mosimo.oriom.dev:delivery-expires-at",
+        "2026-10-19T04:35:56Z"
+      ]
+    ],
+    "content": "TEST ONLY - NOT DISASTER INFORMATION ISOLATED1338",
+    "sig": "20210db84ab5ae105b6b946ca908c8bbd763be3df4c30e7439eeaa0f433fecbc378f279c623f13a6e7e0e0f00cc865f7e6fcbdd8a0504a4a64451cf401697176"
+  },
+  "did": "did:plc:uhgusj7lhdpjq3vpbxns4oam",
+  "path": "dev.oriom.mosimo.post/3my4rrjels2rd",
+  "atUri": "at://did:plc:uhgusj7lhdpjq3vpbxns4oam/dev.oriom.mosimo.post/3my4rrjels2rd",
+  "recordCid": "bafyreia4aeqnr6nsp3qgm6kcd5bajccj6kveum5vsvb7gz4zlitqukmhdq",
+  "commitCid": "bafyreiefg7inlbu4ar7hxj6prqsk6d6uzlm4exub2s2b2hrxzokn6rhjke",
+  "rev": "3my4rrjels2rd",
+  "nostrSignatureVerified": true,
+  "base": null
+}

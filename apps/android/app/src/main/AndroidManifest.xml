@@ -3,6 +3,8 @@
         <meta-data android:name="mndt.pds.endpoint" android:value="https://pds.oriom.dev" />
         <meta-data android:name="mndt.plc.directory" android:value="https://plc.directory" />
         <meta-data android:name="mndt.plc.registration.enabled" android:value="true" />
+        <meta-data android:name="mndt.test.peer.node" android:value="${mndtTestPeerNode}" />
+        <meta-data android:name="mndt.test.author.pubkey" android:value="${mndtTestAuthor}" />
         <activity android:name="org.mndt.app.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

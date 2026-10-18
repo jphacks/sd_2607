@@ -1,0 +1,28 @@
+{
+  "at": "2026-10-18T14:19:03.194566+09:00",
+  "deviceSerial": "T4AIOC732121JRB",
+  "normalUnfilteredBuild": true,
+  "apps": {
+    "org.mndt.demo": {
+      "did": "did:plc:stco4adgiiiv65jltcbhulf4",
+      "relay": "OFF",
+      "export": "OFF",
+      "identityPreserved": true
+    },
+    "org.mndt.demo.peer": {
+      "did": "did:plc:uhgusj7lhdpjq3vpbxns4oam",
+      "relay": "OFF",
+      "export": "OFF",
+      "identityPreserved": true
+    }
+  },
+  "radio": {
+    "airplane_mode_on": "1",
+    "wifi_on": "0",
+    "bluetooth_on": "1",
+    "mobile_data": "1"
+  },
+  "com3Access": "NONE during normal-APK restoration",
+  "espAllowlist": "owned/reset by ESP worker; no UART commands issued",
+  "processes": "both force-stopped after verification"
+}

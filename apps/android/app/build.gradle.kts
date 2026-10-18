@@ -12,6 +12,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-experimental"
+        manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
+        manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
     }
     flavorDimensions += "demo"
     productFlavors {

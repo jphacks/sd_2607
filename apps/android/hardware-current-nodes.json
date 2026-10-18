@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-18T14:13:34.710456+09:00",
+  "deviceSerial": "T4AIOC732121JRB",
+  "nodes": {
+    "org.mndt.demo": { "pid": "23633", "node": "5f79af9ec7048549" },
+    "org.mndt.demo.peer": { "pid": "23922", "node": "335dd31ddbad9006" }
+  },
+  "relayStates": "both stopped via UI; processes retained; ESP-only/test-author-only central-only/default-MTU APKs",
+  "note": "hardware-final-state.json contains complete restore/quarantine state. Node IDs become stale after process restart."
+}

@@ -1,0 +1,188 @@
+{
+  "targetPrefix": "f4416212",
+  "source": "org.mndt.demo.peer",
+  "receiver": "org.mndt.demo",
+  "peerAckObserved": false,
+  "records": [
+    {
+      "at": "2026-10-18T14:01:15.806614+09:00",
+      "kind": "action",
+      "line": "COM3 opened without asserting DTR/RTS"
+    },
+    {
+      "at": "2026-10-18T14:01:16.005573+09:00",
+      "kind": "action",
+      "line": "UART peers bb377686bee2bb46 2e5cb0a0ca78e483"
+    },
+    {
+      "at": "2026-10-18T14:01:18.720604+09:00",
+      "kind": "action",
+      "line": "org.mndt.demo.peer relay started through UI; online policy remains disabled"
+    },
+    {
+      "at": "2026-10-18T14:01:18.721613+09:00",
+      "kind": "serial",
+      "line": "mesh: TEST peer filter count=2"
+    },
+    {
+      "at": "2026-10-18T14:01:18.721613+09:00",
+      "kind": "serial",
+      "line": "mesh: TEST command accepted"
+    },
+    {
+      "at": "2026-10-18T14:01:18.723622+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=888931 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:22.355947+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=893932 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:27.357593+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=898933 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:31.274402+09:00",
+      "kind": "serial",
+      "line": "BLE disconnected reason=531"
+    },
+    {
+      "at": "2026-10-18T14:01:31.275509+09:00",
+      "kind": "serial",
+      "line": "BLE drop: physical disconnect"
+    },
+    {
+      "at": "2026-10-18T14:01:32.363411+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=903939 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:37.363772+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=908940 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:42.365657+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=913941 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:46.000882+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T14:01:47.366220+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=918942 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:52.367280+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=923943 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:01:57.368039+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=928944 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:01.966844+09:00",
+      "kind": "serial",
+      "line": "BLE disconnected reason=531"
+    },
+    {
+      "at": "2026-10-18T14:02:01.966844+09:00",
+      "kind": "serial",
+      "line": "BLE drop: physical disconnect"
+    },
+    {
+      "at": "2026-10-18T14:02:02.371912+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=933947 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:07.373233+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=938948 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:12.373427+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=943949 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:17.375139+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=948950 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:20.681936+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T14:02:22.377303+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=953952 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:27.378443+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=958953 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:32.379353+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=963954 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:37.379662+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=968955 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:39.497869+09:00",
+      "kind": "serial",
+      "line": "BLE disconnected reason=531"
+    },
+    {
+      "at": "2026-10-18T14:02:39.499869+09:00",
+      "kind": "serial",
+      "line": "BLE drop: physical disconnect"
+    },
+    {
+      "at": "2026-10-18T14:02:42.386067+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=973961 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:47.387342+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=978962 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:51.283079+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T14:02:52.389212+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=983963 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:57.389884+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=988964 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T14:02:58.997630+09:00",
+      "kind": "action",
+      "line": "Both apps force-stopped; COM3 closed; radio settings unchanged"
+    }
+  ]
+}

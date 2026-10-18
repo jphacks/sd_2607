@@ -60,11 +60,12 @@ internal fun shouldConnect(myNode: String, peer: GattAdvert) =
  * and "p:ADDR" (we are server). Listener calls go through one executor, never under [lock].
  */
 @SuppressLint("MissingPermission")
-internal class GattLink(private val context: Context) : Link {
+internal class GattLink(private val context: Context, private val allowedPeerNode: String? = null) : Link {
     override val name = "ble"
 
     private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, var node: String?) {
         var connected = false
+
         var mtu = 23
         val reader = FrameReader()
         val out = ArrayDeque<ByteArray>() // encoded frames; [offset] bytes of the first are already sent
@@ -153,7 +154,7 @@ internal class GattLink(private val context: Context) : Link {
     }
 
     private fun connect(g: Int, device: BluetoothDevice, ad: GattAdvert) {
-        if (ad.node == node || peers.size >= MAX_LINKS) return
+        if (ad.node == node || peers.size >= MAX_LINKS || allowedPeerNode != null && ad.node != allowedPeerNode) return
         val now = SystemClock.elapsedRealtime()
         val waited = now - firstSeen.getOrPut(ad.node) { now } >= ASYMMETRIC_FALLBACK_MS
         // Visibility can be one-way (one phone's scanner misses the other's advert), so the loser dials too after a wait.
@@ -198,6 +199,7 @@ internal class GattLink(private val context: Context) : Link {
         val frame = p.out.firstOrNull() ?: return
         // An attribute value is at most 512 bytes even when the MTU is 517 (MTU - 3 = 514 throws).
         val chunk = frame.copyOfRange(p.offset, minOf(frame.size, p.offset + minOf(p.mtu - 3, MAX_ATTRIBUTE)))
+
         p.inFlight = chunk.size
         if (!(try { write(p, chunk) } catch (_: IllegalArgumentException) { false })) { Log.w(TAG, "write failed on ${p.handle}"); drop(p) }
     }

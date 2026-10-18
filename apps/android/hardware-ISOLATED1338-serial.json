@@ -1,0 +1,448 @@
+{
+  "targetPrefix": "f4416212",
+  "source": "org.mndt.demo.peer",
+  "receiver": "org.mndt.demo",
+  "peerAckObserved": false,
+  "records": [
+    {
+      "at": "2026-10-18T13:36:32.835443+09:00",
+      "kind": "action",
+      "line": "COM3 opened without asserting DTR/RTS"
+    },
+    {
+      "at": "2026-10-18T13:36:35.471995+09:00",
+      "kind": "action",
+      "line": "org.mndt.demo.peer relay started through UI; online policy remains disabled"
+    },
+    {
+      "at": "2026-10-18T13:36:35.473926+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 6d09ccdb"
+    },
+    {
+      "at": "2026-10-18T13:36:35.474927+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 77588a3c hop 2 763B"
+    },
+    {
+      "at": "2026-10-18T13:36:35.476435+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=77588a3c"
+    },
+    {
+      "at": "2026-10-18T13:36:35.476435+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:36:36.504250+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted c16b7a96"
+    },
+    {
+      "at": "2026-10-18T13:36:36.776283+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 97f00674 hop 1 834B"
+    },
+    {
+      "at": "2026-10-18T13:36:36.908199+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=97f00674"
+    },
+    {
+      "at": "2026-10-18T13:36:36.913819+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:36:36.915736+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=828255 heap=84868 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:36:41.922858+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=833263 heap=84952 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:36:46.925742+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=838266 heap=84948 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:36:51.933627+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=843274 heap=84948 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:36:56.939340+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=848279 heap=84960 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:01.940081+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=853280 heap=84960 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:06.941585+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=858282 heap=84960 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:11.397208+09:00",
+      "kind": "serial",
+      "line": "BLE drop: notification subscription removed"
+    },
+    {
+      "at": "2026-10-18T13:37:11.892023+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T13:37:11.947512+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=863287 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:16.948332+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=868288 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:21.948600+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=873289 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:26.617693+09:00",
+      "kind": "serial",
+      "line": "BLE disconnected reason=531"
+    },
+    {
+      "at": "2026-10-18T13:37:26.617693+09:00",
+      "kind": "serial",
+      "line": "BLE drop: physical disconnect"
+    },
+    {
+      "at": "2026-10-18T13:37:26.954648+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=878294 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:27.229481+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T13:37:28.589610+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh connected"
+    },
+    {
+      "at": "2026-10-18T13:37:29.411833+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh JSON invalid"
+    },
+    {
+      "at": "2026-10-18T13:37:29.524064+09:00",
+      "kind": "serial",
+      "line": "BLE drop: invalid stream or relay rejection"
+    },
+    {
+      "at": "2026-10-18T13:37:30.217067+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T13:37:31.625944+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh connected"
+    },
+    {
+      "at": "2026-10-18T13:37:31.954496+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=883294 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:32.508633+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh JSON invalid"
+    },
+    {
+      "at": "2026-10-18T13:37:32.622969+09:00",
+      "kind": "serial",
+      "line": "BLE drop: invalid stream or relay rejection"
+    },
+    {
+      "at": "2026-10-18T13:37:32.953328+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T13:37:34.622031+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh connected"
+    },
+    {
+      "at": "2026-10-18T13:37:34.735983+09:00",
+      "kind": "serial",
+      "line": "mesh: mesh HELLO accepted node=dcde563cfe910f8e"
+    },
+    {
+      "at": "2026-10-18T13:37:36.959494+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=888299 heap=96068 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:39.848514+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 7941cac0"
+    },
+    {
+      "at": "2026-10-18T13:37:40.007459+09:00",
+      "kind": "serial",
+      "line": "mesh: saved cef0c66b hop 4 721B"
+    },
+    {
+      "at": "2026-10-18T13:37:40.134795+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=cef0c66b"
+    },
+    {
+      "at": "2026-10-18T13:37:40.135301+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:41.014565+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 0851767e"
+    },
+    {
+      "at": "2026-10-18T13:37:41.196135+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 723499a7 hop 4 782B"
+    },
+    {
+      "at": "2026-10-18T13:37:41.322757+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=723499a7"
+    },
+    {
+      "at": "2026-10-18T13:37:41.324303+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:42.280526+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted f83f9b5d"
+    },
+    {
+      "at": "2026-10-18T13:37:42.485294+09:00",
+      "kind": "serial",
+      "line": "mesh: saved f64f02dc hop 4 784B"
+    },
+    {
+      "at": "2026-10-18T13:37:42.612427+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=f64f02dc"
+    },
+    {
+      "at": "2026-10-18T13:37:42.613432+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:43.622617+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 90ea2d5e"
+    },
+    {
+      "at": "2026-10-18T13:37:43.850828+09:00",
+      "kind": "serial",
+      "line": "mesh: saved e24e017d hop 3 727B"
+    },
+    {
+      "at": "2026-10-18T13:37:43.978759+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=e24e017d"
+    },
+    {
+      "at": "2026-10-18T13:37:43.983752+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:43.985346+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=895323 heap=88664 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:45.106602+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 1a921a08"
+    },
+    {
+      "at": "2026-10-18T13:37:45.356734+09:00",
+      "kind": "serial",
+      "line": "mesh: saved a5985c07 hop 4 821B"
+    },
+    {
+      "at": "2026-10-18T13:37:45.487912+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=a5985c07"
+    },
+    {
+      "at": "2026-10-18T13:37:45.487912+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:46.659584+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 4e2d6d3b"
+    },
+    {
+      "at": "2026-10-18T13:37:46.931359+09:00",
+      "kind": "serial",
+      "line": "mesh: saved c022b36d hop 4 809B"
+    },
+    {
+      "at": "2026-10-18T13:37:47.060925+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=c022b36d"
+    },
+    {
+      "at": "2026-10-18T13:37:47.062397+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:48.307664+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted bdced190"
+    },
+    {
+      "at": "2026-10-18T13:37:48.466980+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 8537ee2f hop 4 787B"
+    },
+    {
+      "at": "2026-10-18T13:37:48.594886+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=8537ee2f"
+    },
+    {
+      "at": "2026-10-18T13:37:48.595392+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:49.476453+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 2822913e"
+    },
+    {
+      "at": "2026-10-18T13:37:49.658326+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 34d08a6a hop 4 787B"
+    },
+    {
+      "at": "2026-10-18T13:37:49.785894+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=34d08a6a"
+    },
+    {
+      "at": "2026-10-18T13:37:49.790443+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:49.791952+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=901130 heap=88160 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:50.746657+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 84d4804f"
+    },
+    {
+      "at": "2026-10-18T13:37:50.951690+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 46014181 hop 4 784B"
+    },
+    {
+      "at": "2026-10-18T13:37:51.078809+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=46014181"
+    },
+    {
+      "at": "2026-10-18T13:37:51.079315+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:52.088859+09:00",
+      "kind": "serial",
+      "line": "mesh: evicted 72a89759"
+    },
+    {
+      "at": "2026-10-18T13:37:52.318177+09:00",
+      "kind": "serial",
+      "line": "mesh: saved 8859d609 hop 4 824B"
+    },
+    {
+      "at": "2026-10-18T13:37:52.448595+09:00",
+      "kind": "serial",
+      "line": "Message preview updated id=8859d609"
+    },
+    {
+      "at": "2026-10-18T13:37:52.448595+09:00",
+      "kind": "serial",
+      "line": "TTS error stage=enqueue code=2"
+    },
+    {
+      "at": "2026-10-18T13:37:54.592023+09:00",
+      "kind": "serial",
+      "line": "BLE drop: notification subscription removed"
+    },
+    {
+      "at": "2026-10-18T13:37:54.800404+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=906139 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:37:55.095846+09:00",
+      "kind": "serial",
+      "line": "BLE connected handle=0 mtu=23"
+    },
+    {
+      "at": "2026-10-18T13:37:59.801390+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=911140 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:38:04.802159+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=916141 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:38:09.803868+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=921142 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:38:14.803425+09:00",
+      "kind": "serial",
+      "line": "alive uptime_ms=926143 heap=97412 stored=16 stack_free=28056 radio=1 muted=0"
+    },
+    {
+      "at": "2026-10-18T13:38:15.723899+09:00",
+      "kind": "action",
+      "line": "Both apps force-stopped; COM3 closed; radio settings unchanged"
+    }
+  ]
+}
