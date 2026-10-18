@@ -105,6 +105,8 @@ struct Relay {
     }
     size_t storedCount() const { return acceptedCalls; }
 };
+void gatewayBegin(Relay&) {}
+void gatewayPoll(Relay&) {}
 struct Ble {
     bool isEnabled = true, pending = false;
     unsigned begins = 0, polls = 0, sends = 0;

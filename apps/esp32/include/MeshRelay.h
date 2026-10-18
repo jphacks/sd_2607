@@ -35,6 +35,23 @@ public:
     // disk capacity but are not included in this count.
     size_t storedCount() const { return entries_.size(); }
 
+    // Enable before BLE starts. Pending kind 1/5/8173 entries cannot be evicted,
+    // even cold/expired. Completion is RAM-only: reboot safely resends originals.
+    void enableGateway() { gateway_ = true; }
+    std::vector<std::string> gatewayPending() const;
+    bool gatewayRead(const std::string& id, std::vector<uint8_t>& bytes);
+    void gatewayDelivered(const std::string& id);
+    std::vector<std::string> retainedIds() const;
+    // Conservative acquisition prefilter only; custody still compares full IDs.
+    std::vector<std::array<uint8_t,8>> seenPrefixes() const { return seen_; }
+    // Main-loop-only ingress custody/checkpoint operations. Missing state is
+    // distinguishable from unreadable/corrupt state. No auto-format/reset.
+    bool ingressReadState(std::vector<uint8_t>& bytes, bool& exists);
+    bool ingressWriteState(const std::vector<uint8_t>& bytes);
+    bool ingressSave(const std::vector<uint8_t>& bundle, const std::string& expectedId,
+                     const std::string& importerOrg, unsigned priority,
+                     std::function<bool()> stillAuthorized);
+
     // Parent must physically close the current link when true, then call
     // disconnected(). There is no BLE dependency or disconnect callback here.
     bool disconnectRequested() const { return disconnect_; }
@@ -80,6 +97,8 @@ private:
         uint32_t hop = 0, hopLimit = 0;
         size_t size = 0;
         bool cold = true;
+        uint16_t kind = 0;
+        bool delivered = false;
     };
     struct Request {
         std::string id;
@@ -105,6 +124,7 @@ private:
     bool seenHealthy_ = true;
     size_t fileCount_ = 0, diskBytes_ = 0;
     bool ready_ = false, active_ = false, disconnect_ = false;
+    bool gateway_ = false;
     bool helloPending_ = false, peerHello_ = false, inventoryDirty_ = false;
     size_t peerMax_ = 0;
     uint64_t beganMs_ = 0, inventoryMs_ = 0, windowMs_ = 0;
@@ -122,6 +142,7 @@ private:
     void window(uint64_t now);
     const Entry* find(const std::string& id) const;
     bool eligible(const Entry& entry, uint64_t now) const;
+    bool gatewayProtected(const Entry& entry) const;
     size_t victim(uint64_t now) const;
     bool restore();
     bool restoreSeen();

@@ -390,7 +390,7 @@ bool Relay::restore() {
             Entry e;
             e.path = std::string(DIRECTORY) + "/" + name;
             e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
-            e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size;
+            e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
             entries_.push_back(std::move(e)); // cold=true; no fabricated received timestamp.
         } else note("invalid store file retained");
         f = root.openNextFile();
@@ -423,6 +423,83 @@ bool Relay::eligible(const Entry& e, uint64_t now) const {
         now - e.receivedMs < MAX_RESIDENCE_MS && now - e.receivedMs < e.lifetime - e.age &&
         e.hop < std::min(e.hopLimit, MAX_HOPS);
 }
+bool Relay::gatewayProtected(const Entry& e) const {
+    return gateway_ && !e.delivered && (e.kind == 1 || e.kind == 5 || e.kind == 8173);
+}
+std::vector<std::string> Relay::gatewayPending() const {
+    std::vector<std::string> ids;
+    if (ready_) for (const Entry& e : entries_) if (gatewayProtected(e)) ids.push_back(e.id);
+    return ids;
+}
+bool Relay::gatewayRead(const std::string& id, std::vector<uint8_t>& bytes) {
+    const Entry* e = find(id);
+    return e && gatewayProtected(*e) && read(*e, bytes);
+}
+void Relay::gatewayDelivered(const std::string& id) {
+    for (Entry& e : entries_) if (e.id == id) e.delivered = true;
+}
+std::vector<std::string> Relay::retainedIds() const {
+    std::vector<std::string> ids; for (const Entry& e : entries_) ids.push_back(e.id); return ids;
+}
+bool Relay::ingressReadState(std::vector<uint8_t>& bytes, bool& exists) {
+    bytes.clear(); exists = false;
+    if (!ready_) return false;
+    errno = 0; exists = LittleFS.exists("/ingress-state");
+    if (!exists) return errno == 0 || errno == ENOENT;
+    File file = LittleFS.open("/ingress-state", "r");
+    if (!file || file.isDirectory() || !file.size() || file.size() > 8192) { file.close(); return false; }
+    bytes.resize(file.size()); errno = 0;
+    bool ok = file.read(bytes.data(),bytes.size()) == bytes.size() && errno == 0;
+    file.close(); ok = ok && errno == 0;
+    if (!ok) bytes.clear();
+    return ok;
+}
+bool Relay::ingressWriteState(const std::vector<uint8_t>& bytes) {
+    if (!ready_ || bytes.empty() || bytes.size() > 8192) return false;
+    const char* temp = "/ingress-tmp";
+    // An interrupted temp is never promoted. Only a newly verified worker result
+    // can replace the atomic high-water checkpoint, before any ingress advertise.
+    if (LittleFS.exists(temp) && !LittleFS.remove(temp)) return false;
+    errno = 0; File file = LittleFS.open(temp,"w");
+    if (!file) return false;
+    bool ok = file.write(bytes.data(),bytes.size()) == bytes.size();
+    file.flush(); ok = ok && errno == 0 && file.size() == bytes.size();
+    file.close(); ok = ok && errno == 0;
+    if (!ok) { LittleFS.remove(temp); return false; }
+    errno = 0;
+    if (!LittleFS.rename(temp,"/ingress-state")) { LittleFS.remove(temp); return false; }
+    file = LittleFS.open("/ingress-state","r");
+    if (!file || file.isDirectory() || file.size() != bytes.size()) { file.close(); return false; }
+    uint8_t chunk[256];
+    for (size_t at = 0; at < bytes.size();) {
+        size_t n = std::min(sizeof(chunk),bytes.size() - at);
+        errno = 0;
+        if (file.read(chunk,n) != n || errno || std::memcmp(chunk,bytes.data() + at,n)) { file.close(); return false; }
+        at += n;
+    }
+    errno = 0; file.close(); return errno == 0;
+}
+bool Relay::ingressSave(const std::vector<uint8_t>& bytes, const std::string& id,
+                        const std::string& org, unsigned priority, std::function<bool()> stillAuthorized) {
+    if (!ready_ || !seenHealthy_ || !hexId(id) || !stillAuthorized || !stillAuthorized() || find(id) || wasSeen(id) || !seenHealthy_) return false;
+    size_t capacity = STORE_FILES - fileCount_;
+    for (const Entry& entry : entries_) if (!gatewayProtected(entry)) ++capacity;
+    const size_t historyCapacity = STORE_FILES - fileCount_ + SEEN_LIMIT - seen_.size();
+    // A download must not steal capacity already reserved by BLE WANTs.
+    if (capacity <= requests_.size() || historyCapacity <= requests_.size()) return false;
+    BundleInfo info; std::string error;
+    if (!validateBundle(bytes.data(),bytes.size(),info,error) || info.id != id || info.kind != 1 || !save(bytes.data(),bytes.size(),info,clockMs())) return false;
+    if (!stillAuthorized()) {
+        for (Entry& e : entries_) if (e.id == id) e.cold = true;
+        note("ingress authorization expired during persistence; retained cold, not advertised");
+        return false;
+    }
+    info.certifiedImporter = org; info.effectivePriority = std::min(priority,3u);
+    inventoryDirty_ = true;
+    if (accepted_) accepted_(info);
+    note("ingress saved " + id.substr(0,8) + " importer-certified priority=" + std::to_string(info.effectivePriority));
+    return true;
+}
 size_t Relay::victim(uint64_t now) const {
     auto dead = [now](const Entry& e) {
         return e.cold || now < e.receivedMs || e.age >= e.lifetime ||
@@ -430,6 +507,7 @@ size_t Relay::victim(uint64_t now) const {
     };
     size_t best = entries_.size();
     for (size_t i = 0; i < entries_.size(); ++i) {
+        if (gatewayProtected(entries_[i])) continue;
         if (best == entries_.size() || (dead(entries_[i]) && !dead(entries_[best])) ||
             (dead(entries_[i]) == dead(entries_[best]) && entries_[i].receivedMs < entries_[best].receivedMs)) best = i;
     }
@@ -564,7 +642,7 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
     Entry e;
     e.path = path;
     e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
-    e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size;
+    e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
     e.receivedMs = receivedMs; e.cold = false;
     entries_.push_back(std::move(e));
     return true;
@@ -575,7 +653,8 @@ void Relay::fillRequests() {
     // outstanding requests separately from the session's replay history. Reserve
     // a history entry for each request so no issued WANT exceeds the 128-ID cap.
     if (!seenHealthy_) return;
-    const size_t capacity = STORE_FILES - fileCount_ + entries_.size();
+    size_t capacity = STORE_FILES - fileCount_;
+    for (const Entry& e : entries_) if (!gatewayProtected(e)) ++capacity;
     const size_t historyCapacity = STORE_FILES - fileCount_ + SEEN_LIMIT - seen_.size();
     for (auto it = remoteIds_.rbegin(); it != remoteIds_.rend(); ++it) {
         const std::string& id = *it;

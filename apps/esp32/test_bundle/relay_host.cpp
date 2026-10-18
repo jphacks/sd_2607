@@ -158,9 +158,86 @@ void historySafety(const std::string& dir){
   CHECK(reboot.out.size()==before&&reboot.received.empty());CHECK(LittleFS.files.at("/mesh-seen")==history);
  }
 }
+void gatewaySafety(const std::string& dir){
+ // Offline/unconfirmed originals remain pinned even when cold or mesh-expired.
+ Env reset;seedFullCache(dir);Env e(false);e.relay.enableGateway();e.start();
+ CHECK(e.ids()==0);const auto before=cacheSnapshot();
+ auto pending=e.relay.gatewayPending();CHECK(pending.size()==16);
+ const auto next=load(dir+"/16.bin");const auto nextId=idOf(next);
+ const size_t sent=e.out.size();e.rx(control("inventory",{nextId}));e.relay.tick();
+ CHECK(e.out.size()==sent);CHECK(cacheSnapshot()==before);CHECK(LittleFS.evictions==0);
+ std::vector<uint8_t> raw;CHECK(e.relay.gatewayRead(pending[0],raw));CHECK(idOf(raw)==pending[0]);
+ LittleFS.failRead=true;CHECK(!e.relay.gatewayRead(pending[0],raw));LittleFS.failRead=false;
+ CHECK(e.relay.gatewayPending().size()==16); // Failed read/timeout/negative OK never frees custody.
+ fakeNow+=86400001;e.rx(control("inventory",{nextId}));e.relay.tick();CHECK(cacheSnapshot()==before);
+ e.relay.gatewayDelivered(std::string(64,'f'));CHECK(e.relay.gatewayPending().size()==16);
+ e.relay.gatewayDelivered(pending[0]);CHECK(e.relay.gatewayPending().size()==15);
+ CHECK(cacheSnapshot()==before); // Positive OK unpins, does not itself delete a bundle.
+ e.relay.disconnected();e.start();e.request(nextId);e.rx(next);CHECK(!e.relay.disconnectRequested());
+ CHECK(e.relay.gatewayPending().size()==16);CHECK(e.relay.storedCount()==16);CHECK(LittleFS.evictions==1);
+ for(const auto& id:pending)if(id!=pending[0]){CHECK(e.relay.gatewayRead(id,raw));CHECK(idOf(raw)==id);}
+ Env reboot(false);reboot.relay.enableGateway();CHECK(reboot.relay.gatewayPending().size()==16);
+ // Reboot intentionally loses positive OK state, never queued originals: at-least-once.
+ reboot.relay.gatewayDelivered(nextId);CHECK(reboot.relay.gatewayPending().size()==15);
+ Env again(false);again.relay.enableGateway();CHECK(again.relay.gatewayPending().size()==16);
+ // Separate PLC control receives the same pinning and unchanged readback.
+ Env controlEnv;controlEnv.relay.enableGateway();controlEnv.start();auto genesis=load(dir+"/control.bin");
+ auto genesisId=idOf(genesis);controlEnv.request(genesisId);controlEnv.rx(genesis);controlEnv.relay.tick();
+ CHECK(controlEnv.type()=="ack");CHECK(controlEnv.relay.gatewayPending()==std::vector<std::string>{genesisId});
+ CHECK(controlEnv.relay.gatewayRead(genesisId,raw));CHECK(raw==genesis);
+}
+void ingressCustody(const std::string& dir){
+ const auto bytes=load(dir+"/0.bin");const auto id=idOf(bytes);
+ const std::vector<uint8_t> state={1,2,3,4};
+ {
+  Env e;e.start();bool exists=true;std::vector<uint8_t> loaded;
+  CHECK(e.relay.ingressReadState(loaded,exists)&&!exists&&loaded.empty());
+  CHECK(e.relay.ingressWriteState(state));CHECK(e.received.empty());CHECK(cacheFiles()==0);
+  CHECK(e.relay.ingressReadState(loaded,exists)&&exists&&loaded==state);
+  CHECK(!e.relay.ingressSave(bytes,"bad-id","Importer",3,[]{return true;}));
+  CHECK(e.relay.ingressSave(bytes,id,"TEST certified importer",3,[]{return true;}));
+  CHECK(e.received.size()==1&&e.received[0].certifiedImporter=="TEST certified importer"&&e.received[0].effectivePriority==3);
+  CHECK(LittleFS.files.at("/ingress-state")==state);
+  e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==1);
+  const auto writes=LittleFS.renames;
+  CHECK(!e.relay.ingressSave(bytes,id,"Importer",3,[]{return true;}));CHECK(LittleFS.renames==writes&&e.received.size()==1);
+  Env reboot(false);CHECK(!reboot.relay.ingressSave(bytes,id,"Importer",3,[]{return true;}));reboot.start();CHECK(reboot.ids()==0);
+ }
+ {
+  Env e;e.start();CHECK(e.relay.ingressWriteState(state));
+  unsigned authorizations=0;
+  CHECK(!e.relay.ingressSave(bytes,id,"Importer",3,[&]{return ++authorizations==1;}));
+  CHECK(e.received.empty()&&e.relay.storedCount()==1);e.relay.tick();CHECK(e.ids()==0);
+  CHECK(cacheFiles()==1); // Authorization expired during flash write: retained cold, never advertised.
+ }
+ for(int fault=0;fault<5;++fault){
+  Env e;e.start();CHECK(e.relay.ingressWriteState(state));
+  LittleFS.failWrite=fault==0;LittleFS.failFlush=fault==1;LittleFS.failRename=fault==2;
+  LittleFS.failRead=fault==3;LittleFS.corruptReadback=fault==4;
+  const std::vector<uint8_t> next={5,6,7,8};CHECK(!e.relay.ingressWriteState(next));
+  CHECK(e.received.empty()&&cacheFiles()==0);e.relay.tick();CHECK(e.ids()==0);
+  if(fault<3)CHECK(LittleFS.files.at("/ingress-state")==state);
+ }
+ {
+  Env reset;seedFullCache(dir);Env e(false);e.relay.enableGateway();e.start();
+  const auto before=cacheSnapshot();const auto next=load(dir+"/16.bin");
+  CHECK(!e.relay.ingressSave(next,idOf(next),"Importer",3,[]{return true;}));CHECK(cacheSnapshot()==before&&e.received.empty());
+ }
+ {
+  Env e;e.relay.enableGateway();e.start();std::vector<std::string> offered;
+  for(int i=0;i<16;++i)offered.push_back(idOf(load(dir+"/"+std::to_string(i)+".bin")));
+  e.rx(control("inventory",offered));e.relay.tick();CHECK(e.type()=="want"&&e.ids()==16);
+  const auto next=load(dir+"/16.bin");CHECK(!e.relay.ingressSave(next,idOf(next),"Importer",3,[]{return true;}));
+  CHECK(cacheFiles()==0&&e.received.empty()); // Reserved BLE custody wins over a new download.
+ }
+ {
+  Env e;e.start();const auto tampered=load(dir+"/tampered.bin");
+  CHECK(!e.relay.ingressSave(tampered,id,"Importer",3,[]{return true;}));CHECK(cacheFiles()==0&&e.received.empty());
+ }
+}
 int main(int argc,char**argv){
  CHECK(argc==2||argc==3);std::string dir=argv[1];
- dedupRegression(dir);historySafety(dir);
+ dedupRegression(dir);historySafety(dir);gatewaySafety(dir);ingressCustody(dir);
  if(argc==3){std::cout<<"PASS dedup regression: "<<checks<<" assertions\n";return 0;}
  auto bytes=load(dir+"/0.bin");std::string id=idOf(bytes);
 

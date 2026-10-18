@@ -5,6 +5,7 @@
 
 #include <mbedtls/bignum.h>
 #include <mbedtls/ecp.h>
+#include <mbedtls/ecdsa.h>
 #include <mbedtls/sha256.h>
 
 namespace mesh {
@@ -107,10 +108,13 @@ struct Hash {
     mbedtls_sha256_context ctx;
     bool ok;
     size_t bytes = 0;
+    std::string* capture = nullptr;
     Hash() { mbedtls_sha256_init(&ctx); ok = mbedtls_sha256_starts_ret(&ctx, 0) == 0; }
     ~Hash() { mbedtls_sha256_free(&ctx); }
     void add(const void* p, size_t n) {
         bytes += n;
+        if (capture && capture->size() + n <= 65536) capture->append(static_cast<const char*>(p), n);
+        else if (capture) ok = false;
         if (bytes > 262144 || mbedtls_sha256_update_ret(&ctx, static_cast<const uint8_t*>(p), n)) ok = false;
     }
     void add(const std::string& s) { add(s.data(), s.size()); }
@@ -239,7 +243,7 @@ bool deadline(Slice s) {
     return hour <= 23 && (second <= 59 || (hour == 23 && minute == 59 && second == 60));
 }
 
-bool event(Slice payload, BundleInfo& info, std::string& error) {
+bool event(Slice payload, BundleInfo& info, std::string& error, std::string* json = nullptr) {
     Reader p(payload, true);
     uint64_t count, version, created, kind, tags;
     Slice pub, sig, content;
@@ -248,7 +252,13 @@ bool event(Slice payload, BundleInfo& info, std::string& error) {
         !p.array(tags) || tags > 256) { error = "invalid event header"; return false; }
     Hash h;
     h.literal("[0,\""); h.add(hex(pub)); h.literal("\","); h.add(std::to_string(created));
-    h.literal(","); h.add(std::to_string(kind)); h.literal(",[");
+    h.literal(","); h.add(std::to_string(kind)); h.literal(",");
+    if (json) {
+        *json = "{\"pubkey\":\"" + hex(pub) + "\",\"created_at\":" + std::to_string(created) +
+            ",\"kind\":" + std::to_string(kind) + ",\"tags\":";
+        h.capture = json;
+    }
+    h.literal("[");
     bool hasDeadline = false;
     for (uint64_t i = 0; i < tags; ++i) {
         uint64_t length;
@@ -285,11 +295,20 @@ bool event(Slice payload, BundleInfo& info, std::string& error) {
     if (!hasDeadline || !p.bytes(3, content) || content.n > 16384 || !p.bytes(2, sig) || sig.n != 64 || !p.done()) {
         error = "invalid event content/signature/deadline"; return false;
     }
-    h.literal("],"); h.quote(content); h.literal("]");
+    h.literal("]");
+    h.capture = nullptr;
+    h.literal(",");
+    if (json) { *json += ",\"content\":"; h.capture = json; }
+    h.quote(content);
+    h.capture = nullptr;
+    h.literal("]");
     uint8_t digest[32];
     if (!h.finish(digest) || !verifySchnorr(pub, sig, digest)) { error = "invalid event signature"; return false; }
     info.id = hex({digest, 32}); info.text = string(content);
     info.kind = static_cast<uint16_t>(kind);
+    if (json) {
+        *json += ",\"id\":\"" + info.id + "\",\"sig\":\"" + hex(sig) + "\"}";
+    }
     return true;
 }
 
@@ -342,7 +361,7 @@ bool eid(Reader& r, bool* null = nullptr, bool destination = false) {
     return r.end(count);
 }
 
-bool parse(Slice bytes, Parsed& result, std::string& error) {
+bool parse(Slice bytes, Parsed& result, std::string& error, std::string* json = nullptr) {
     if (!bytes.p || bytes.n == 0 || bytes.n > MAX_BUNDLE_BYTES) { error = "bundle size limit"; return false; }
     Reader r(bytes);
     uint64_t outer, primaryCount, version, flags, crcType, timestamp, sequence, timeCount;
@@ -408,7 +427,7 @@ bool parse(Slice bytes, Parsed& result, std::string& error) {
     if (!r.end(outer) || !r.done() || !age || !hop || !payload || result.info.age >= result.info.lifetime) {
         error = "missing blocks/trailing bytes/expired age"; return false;
     }
-    return event(result.blocks.back().data, result.info, error);
+    return event(result.blocks.back().data, result.info, error, json);
 }
 
 void head(std::vector<uint8_t>& out, unsigned major, uint64_t value) {
@@ -442,6 +461,78 @@ bool validateBundle(const uint8_t* data, size_t size, BundleInfo& info, std::str
     info = {}; error.clear();
     Parsed parsed;
     if (!parse({data, size}, parsed, error)) return false;
+    info = std::move(parsed.info);
+    return true;
+}
+
+namespace {
+bool compressedPoint(Curve& c, const std::vector<uint8_t>& key) {
+    if (key.size() != 33 || (key[0] != 2 && key[0] != 3)) return false;
+    Mpi y2, exponent;
+    if (mbedtls_ecp_group_load(&c.g, MBEDTLS_ECP_DP_SECP256K1) ||
+        mbedtls_mpi_read_binary(&c.p.X, key.data() + 1, 32) || mbedtls_mpi_cmp_mpi(&c.p.X, &c.g.P) >= 0 ||
+        mbedtls_mpi_mul_mpi(&y2.v, &c.p.X, &c.p.X) || mbedtls_mpi_mod_mpi(&y2.v, &y2.v, &c.g.P) ||
+        mbedtls_mpi_mul_mpi(&y2.v, &y2.v, &c.p.X) || mbedtls_mpi_add_int(&y2.v, &y2.v, 7) ||
+        mbedtls_mpi_mod_mpi(&y2.v, &y2.v, &c.g.P) || mbedtls_mpi_add_int(&exponent.v, &c.g.P, 1) ||
+        mbedtls_mpi_shift_r(&exponent.v, 2) || mbedtls_mpi_exp_mod(&c.p.Y, &y2.v, &exponent.v, &c.g.P, nullptr)) return false;
+    if (mbedtls_mpi_get_bit(&c.p.Y, 0) != (key[0] & 1) && mbedtls_mpi_sub_mpi(&c.p.Y, &c.g.P, &c.p.Y)) return false;
+    return !mbedtls_mpi_lset(&c.p.Z, 1) && !mbedtls_ecp_check_pubkey(&c.g, &c.p);
+}
+}
+bool validSecpKey(const std::vector<uint8_t>& key) { Curve c; return compressedPoint(c, key); }
+bool verifyCompactEcdsa(const std::vector<uint8_t>& key, const std::vector<uint8_t>& sig, const uint8_t hash[32]) {
+    if (sig.size() != 64) return false;
+    Curve c; Mpi r, s, half;
+    if (!compressedPoint(c, key) || mbedtls_mpi_read_binary(&r.v, sig.data(), 32) ||
+        mbedtls_mpi_read_binary(&s.v, sig.data() + 32, 32) || mbedtls_mpi_copy(&half.v, &c.g.N) ||
+        mbedtls_mpi_shift_r(&half.v, 1) || mbedtls_mpi_cmp_int(&r.v, 1) < 0 || mbedtls_mpi_cmp_mpi(&r.v, &c.g.N) >= 0 ||
+        mbedtls_mpi_cmp_int(&s.v, 1) < 0 || mbedtls_mpi_cmp_mpi(&s.v, &half.v) > 0) return false;
+    return mbedtls_ecdsa_verify(&c.g, hash, 32, &c.p, &r.v, &s.v) == 0;
+}
+bool verifyCompactSchnorr(const std::vector<uint8_t>& key, const std::vector<uint8_t>& sig, const uint8_t hash[32]) {
+    return verifySchnorr({key.data(), key.size()}, {sig.data(), sig.size()}, hash);
+}
+bool validateEventPayload(const std::vector<uint8_t>& payload, BundleInfo& info, std::string& error) {
+    info = {}; error.clear();
+    if (payload.empty() || payload.size() > MAX_BUNDLE_BYTES - 256) { error = "event payload size"; return false; }
+    return event({payload.data(),payload.size()},info,error);
+}
+bool wrapEventPayload(const std::vector<uint8_t>& payload, uint64_t lifetime,
+                      std::vector<uint8_t>& out, BundleInfo& info, std::string& error) {
+    out.clear(); info = {}; error.clear();
+    BundleInfo verified;
+    if (payload.empty() || payload.size() > MAX_BUNDLE_BYTES - 256 || lifetime < 1 || lifetime > MAX_RESIDENCE_MS ||
+        !validateEventPayload(payload, verified, error)) { if (error.empty()) error = "invalid ingress payload/lifetime"; return false; }
+    auto finishCrc = [&](size_t start) {
+        head(out, 2, 4); const size_t at = out.size(); out.insert(out.end(), 4, 0);
+        uint32_t sum = crc({out.data() + start, out.size() - start}, {out.data() + at, 4}, 2);
+        for (size_t j = 0; j < 4; ++j) out[at + j] = sum >> ((3 - j) * 8);
+    };
+    auto eidNull = [&]() { head(out, 4, 2); head(out, 0, 1); head(out, 0, 0); };
+    out.push_back(0x9f); size_t start = out.size();
+    head(out, 4, 9); head(out, 0, 7); head(out, 0, 4); head(out, 0, 2);
+    head(out, 4, 2); head(out, 0, 1);
+    const std::string destination = "//mosimo.oriom.dev/~post";
+    head(out, 3, destination.size()); append(out, {reinterpret_cast<const uint8_t*>(destination.data()), destination.size()});
+    eidNull(); eidNull(); head(out, 4, 2); head(out, 0, 0);
+    uint64_t sequence = 0;
+    for (size_t j = 0; j < 15; ++j) sequence = (sequence << 4) | (verified.id[j] <= '9' ? verified.id[j] - '0' : verified.id[j] - 'a' + 10);
+    head(out, 0, sequence); head(out, 0, lifetime); finishCrc(start);
+    auto block = [&](unsigned type, unsigned number, const std::vector<uint8_t>& data) {
+        size_t at = out.size(); head(out, 4, 6); head(out, 0, type); head(out, 0, number); head(out, 0, 0); head(out, 0, 2);
+        head(out, 2, data.size()); append(out, {data.data(), data.size()}); finishCrc(at);
+    };
+    std::vector<uint8_t> hop; head(hop, 4, 2); head(hop, 0, MAX_HOPS); head(hop, 0, 0);
+    block(10, 2, hop); block(7, 3, {0}); block(1, 1, payload); out.push_back(0xff);
+    info = std::move(verified); info.lifetime = lifetime; info.hopLimit = MAX_HOPS;
+    return true;
+}
+
+bool exportEvent(const uint8_t* data, size_t size, BundleInfo& info,
+                 std::string& json, std::string& error) {
+    info = {}; json.clear(); error.clear();
+    Parsed parsed;
+    if (!parse({data, size}, parsed, error, &json)) { json.clear(); return false; }
     info = std::move(parsed.info);
     return true;
 }

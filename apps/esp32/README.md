@@ -1,6 +1,6 @@
 # M5Stack Basic BLEメッシュ中継ノード（実験実装）
 
-Androidの公開・署名済み投稿をBLEで受信し、検証・保存して、後で接続するAndroidへ転送する。
+Androidの公開・署名済み投稿をBLEで受信し、検証・保存して、後で接続するAndroidへ転送する。任意のgatewayビルドでは、周囲のAndroidがオフラインでもESP32自身のWi-FiでNostrリレー／PLC Directoryへ搬出できる。
 uvでPlatformIO CLIを管理する。SDK・コンパイラーは既定のユーザーディレクトリ（Windowsでは`%USERPROFILE%\.platformio`）を使用する。`PLATFORMIO_CORE_DIR`の設定は不要。
 
 ## 対応範囲
@@ -10,7 +10,7 @@ uvでPlatformIO CLIを管理する。SDK・コンパイラーは既定のユー�
 - 対応するwire形式は同文書**§9のAndroid実験形式**。JSON `hello / inventory / want / ack`、4バイトbig-endian長＋BPv7 Bundle。
 - §3の新しいCBOR交換、連番付きGATTフレーム、`BEGIN / DATA / CREDIT / RESULT`には**未対応**。両形式を同じ接続で混在させない。§9のUUIDも採用済み標準値とは扱わない。
 - ESP32は**peripheral / GATT server専用**の部分実装。広告で専用フラグを示し、Androidがcentralとして接続する。接続後の転送は双方向。同時接続は1台。
-- 2台のこのESP32ファームウェア同士では接続できない。central側、LAN、Nearby、オンライン搬出、ESP32での投稿作成は未実装。
+- 2台のこのESP32ファームウェア同士では接続できない。central側、LAN、Nearby、ESP32での投稿作成は未実装。オンライン搬出は下記の任意gatewayプロファイルで対応する。
 
 ## 構成
 
@@ -19,6 +19,9 @@ uvでPlatformIO CLIを管理する。SDK・コンパイラーは既定のユー�
 | `src/MeshBle.cpp` | 広告・GATT・有界キュー・フレーム再組み立て・切断時の破棄 |
 | `src/MeshRelay.cpp` | 所持情報・取得要求・保存受理応答・LittleFSキャッシュ |
 | `src/MeshBundle.cpp` | BPv7/CRC、CBORイベント、Nostr IDとBIP340署名検証、hop/age更新 |
+| `src/MeshGateway.cpp` | 任意Wi-Fi・TLS Nostr搬出・PLC代理登録・on-demand verified ingress、単一ネットワークtask |
+| `src/MeshIngress.cpp`, `include/IngressCodec.h` | wire-v1 root→leaf・ECDSA/binding/commit・fresh snapshot/high-water・strict JSON/CBOR |
+| `include/GatewayProtocol.h`, `include/GatewayWire.h` | 有界HTTP/WebSocket・OK判定・PLC DAG-CBOR/DID導出 |
 | `src/MeshSpeech.cpp` | ローカル評価SDK・辞書検証・日本語音声合成・非同期PCM再生 |
 | `src/main.cpp` | M5Stack表示・ボタン・メインループ |
 | `test_bundle/` | 暗号・異常系・保存・BLE境界のホストテストとKotlin実装由来fixture |
@@ -75,7 +78,7 @@ uv run pio device monitor --port COM3
 ```
 
 ログ監視の終了は`Ctrl+C`。ポートを使うほかのモニターは閉じる。
-- **Aボタン**：固定の日本語評価テスト文を合成・再生する（録音の再生ではない）。
+- **Aボタン**：通常ビルドでは固定の日本語評価テスト文を合成・再生する（録音の再生ではない）。gatewayビルドでは、明示設定したwire-v1 ingressの優先度付き取得要求（下記）。
 - **Bボタン**：BLE送受信のオン／オフ。オフ時は広告と接続を停止し、オンで探索可能な状態へ戻す。
 - **Cボタン**：音声だけをミュート／解除。現在の発話を中断し、待ち行列を破棄する。受信・保存・転送・本文表示は継続する。表示は`Audio muted`／`Audio enabled`。
 音量は96/255。通信・音声の状態は画面最上部の`RX/TX`と`AUDIO`で個別に表示する。設定は起動中のみ有効で、再起動時は通信・読み上げともに有効へ戻る。
@@ -115,6 +118,151 @@ adb logcat -d -v brief -s Exchange:I GattLink:I '*:S'
 - **再起動前の保存データは復元・検証するがcold扱いで、広告・転送しない。** 再起動で期限をリセットして無制限に配送しないための保守的な制約。同じIDの再受信でも復活させない。異なる新規イベントは通常どおり受信し、必要ならcoldキャッシュと置換する。
 - ファイル保存はArduino FSが公開する範囲で確認する。実電源断を挟む耐障害性試験は未実施。
 - 通信路自体は暗号化・相互認証しない。公開投稿のみを扱う。標準の確定値や本番運用向けの完成品とは扱わない。
+
+## Optional Wi-Fi Internet gateway
+
+The **default `m5stack-basic` and diagnostic profiles remain offline**, even if a local gateway config exists. The gateway is public store-and-forward, not a phone tether, a new author, a PDS, or a PLC authority. It never generates keys or re-signs/edits posts. Protocol boundaries: [0001 §1.1.1](../../protocol/0001-repository-model.md), [0007](../../protocol/0007-nostr-relay-profile.md), [0012](../../protocol/0012-bindings.md), and provisional Android control kind 8173 in [mndt §9.5](../../protocol/mndt.md).
+
+### Local configuration (explicit opt-in to public upload)
+
+From `apps/esp32`, create an ignored header; **never put credentials in `platformio.ini`, command-line flags, tracked source, screenshots or logs**:
+
+```powershell
+New-Item -ItemType Directory -Force private/gateway
+Copy-Item include/GatewayConfig.example.h private/gateway/config.h
+```
+
+Edit `private/gateway/config.h` locally:
+
+- `MESH_GATEWAY_WIFI_SSID`, `MESH_GATEWAY_WIFI_PASSWORD`: a 2.4 GHz station network; SSID <=32 bytes, WPA passphrase <=63 bytes (empty only for an intentionally open network). No captive-portal or enterprise provisioning.
+- `MESH_GATEWAY_RELAY_HOST`, `..._PORT`, `..._PATH`: one explicitly trusted DNS host, TLS port and WebSocket request path. Configure the actual physical PDS's **Nostr WebSocket** endpoint if atproto reconstruction is wanted; the logical PDS HTTPS URL alone is not a relay endpoint. No relay discovery, redirects, or fallback to plaintext.
+- `MESH_GATEWAY_RELAY_CA`: PEM root CA(s) for that relay, obtained and verified out of band. Certificate-chain, validity and DNS-hostname verification use ESP32 `WiFiClientSecure`. A blank/invalid CA never enables insecure TLS.
+- `MESH_GATEWAY_PLC_URL`: optional Directory HTTPS base URL, without trailing slash, for example `https://plc.directory`. DNS host and port **443** only; a base path is allowed. `MESH_GATEWAY_PLC_CA` is its PEM root CA(s). Leave both empty to disable PLC proxy registration, **but genesis events then remain pending/pinned**. For newly created offline phone identities, configure this or have another online node register their original genesis; relay upload alone cannot register a repository.
+- `MESH_GATEWAY_NTP_SERVER`: operator-chosen SNTP server; default `pool.ntp.org`. TLS waits for wall time >=2026-10-18. Clock synchronization is asynchronous. **SNTP is not authenticated**; a hostile network can disrupt the clock/availability, and there is no hardware-backed trusted-time claim. TLS never falls back to skipping certificate verification.
+
+`private/` is already ignored by the repository. Credentials are compiled into firmware, **not encrypted at rest**: protect the header, build artifacts, flash backups and physical device. There is no BLE/HTTP provisioning endpoint. No event can choose the upload destination or CA. Enabling this profile consents to uploading **all retained supported public events**, including cold events from before the current boot. Do not use it for private information. The relay receives public signed content/metadata and the gateway's network address; the Directory receives the public signed genesis.
+
+### Build/flash profile and migration
+
+```powershell
+uv run pio run -e m5stack-basic-gateway
+# After inspecting configuration and backing up existing flash/data:
+uv run pio run -e m5stack-basic-gateway --target upload --upload-port COM3
+```
+
+**Do not run `uploadfs` or erase flash to enable networking.** Follow the backup procedure above first. `partitions-gateway.csv` merges the old app0/app1 area into one 0x280000-byte app at 0x10000. NVS, LittleFS (`0x290000`), coredump and dictionary (`0x400000`) remain at their old offsets/sizes. This removes the spare OTA slot; no OTA updater is provided. Upload the matching firmware **and partition table** together using PlatformIO; do not flash a gateway image into the smaller default app slot. Downgrading likewise requires the normal profile's matching partition table and firmware. Back up the partition table/whole flash too if recovery of a previous app/boot selection matters. Power-loss/upgrade/rollback on physical hardware has not been tested for this change.
+
+The gateway profile deliberately **does not initialize TTS**, reserving its working memory/task stack for Wi-Fi/TLS. BLE, buttons, receipt verification, custody, screen preview and heartbeat remain. A/C cannot play audio in this profile; **A now requests the optional verified download described below**. **B disables BLE only, not Internet upload/download**; it is not a privacy/offline switch. To stop Internet export, remove the local config and rebuild/flash the gateway profile (which keeps pending entries pinned but starts no networking), or power off. Flashing the normal offline profile restores the original bounded, evictable-cache behavior. A missing header, invalid config or worker failure never silently unpins gateway data.
+
+For compilation without credentials, `uv run pio run -e m5stack-basic-gateway-check` explicitly uses `GatewayConfig.check.h`: non-routable `.invalid` destinations and an intentionally invalid CA, not deployable credentials. Nonempty test values ensure the full TLS/upload/PLC/ingress path survives compiler/linker dead-code elimination. **Never deploy this profile.** The production gateway profile needs the local header; the default example's empty settings fail closed.
+
+### Delivery, bounds and failure behavior
+
+- Main loop alone owns Relay/LittleFS/UI. A one-item pointer queue transfers an immutable <=24,000-byte copy to one 16 KiB-stack network task. Only the main loop processes results/unpins IDs. DNS, TLS, HTTP and WebSocket waits never run in BLE callbacks or the main-loop upload poll. Existing BLE crypto/flash work is still synchronous as before; this is not a measured real-time latency guarantee.
+- Original kind **1/5** fields are reconstructed reversibly from signed CBOR (typed version/Base64 tags included), ID and BIP340 signature are verified again, then the original event is sent as NIP-01 `["EVENT", event]`. No expiry/hop rewriting, author substitution, new tags, or re-signing. Mesh-expired/hop-exhausted/cold copies may still be exported online, without reviving mesh eligibility. Unknown kinds are not exported.
+- Only a well-typed `["OK", exactFullId, true, message]` from that TLS connection counts as relay acceptance. A successful socket write, unrelated OK, false OK (even `duplicate:`), NOTICE, AUTH challenge, timeout, disconnect, malformed/oversized/fragmented frame or lost result does not. Pending originals stay durable for retry. One relay is supported; no NIP-42 authentication or fragmented messages. Live subscriptions are not used; optional finite, verified ingress is described below.
+- Provisional **8173 is never posted to Nostr**. The signed event's original content is submitted unchanged as a PLC operation. The gateway derives `did:plc` from SHA-256 of canonical signed DAG-CBOR, GETs `/did/log`, POSTs only after a TLS-authenticated **404**, then GETs again. Only a matching first signed genesis in a successful log response is historical registration confirmation. Existing/malformed/mismatched logs are never overwritten. The configured Directory validates PLC ECDSA/signature/operation rules; ESP32 does not locally audit PLC signatures or the full update history. No current-key, PDS-endpoint or tombstone status is blessed by this confirmation.
+- **Relay acceptance != PLC registration != PDS reconstruction/publication != AppView display.** Inspect PLC and the configured PDS/AppView separately. Posts may reach the relay before genesis; the server must retry deferred reconstruction (as the current Android online path expects). No publication-completion monitor is implemented.
+- A gateway protects pending **1/5/8173** entries from eviction, even after mesh expiry/reboot. At 16 unconfirmed entries the node stops WANT acquisition rather than deleting them; source phones retain responsibility for posts not ACKed here. Positive delivery only unpins an entry for the normal cache replacement policy, never immediately deletes it. Unknown kinds keep the previous cache policy. `gateway: <id-prefix> accepted (not PDS publication)` is a local observation, not a receipt returned to phones. A 30-second serial status reports Wi-Fi association, clock readiness, heap, pending count and worker busy state without credentials or event bodies.
+- Delivery checkpoints are deliberately **RAM-only**: reboot re-verifies and retries every retained supported event, including previously accepted ones. This is at-least-once, not exactly-once. Losing an OK/checkpoint can cause duplicates, never a false completion. Once a positively accepted event is later evicted, relay-side future retention is not guaranteed. Physical flash corruption/erasure and capacity refusal cannot guarantee eventual delivery; this is not permanent archival storage.
+- Round-robin scheduling prevents a bad author/relay response from permanently starving other pending IDs. Each ID backs off 5/10/20/40/80/160/300 seconds, capped at 5 minutes, without automatic give-up; Wi-Fi reconnect attempts are spaced 30 seconds apart. One job/connection at a time. Bounded queues, <=16 retry records, no unbounded outbox or network-supplied URL.
+- Local limits: HTTP headers <=4 KiB / <=64 lines / <=512-byte lines; PLC operation <=8 KiB, log body <=16 KiB / <=128 operations / depth 8 / <=48 KiB shared JSON allocator. HTTP Content-Length, chunked and close-delimited bodies are bounded; malformed lengths/conflicting framing fail closed. Upload-ACK WebSocket inbound frames <=1 KiB / <=32 frames / no fragments (the separate ingress limits are below), mandatory upgrade accept challenge, masked outbound frames, ping/pong. TLS/connect timeout 5 seconds, response budget 15 seconds per PLC request or 20 seconds per relay exchange; underlying DNS/SDK scheduling can add latency in the worker, not BLE poll.
+- Export JSON capture is capped at 64 KiB plus fixed fields. An otherwise valid bundle whose escaped JSON exceeds this stays pending, unchanged; it is **not** truncated. A 110,000-byte free-heap admission guard plus conservative per-job worst-case escaping/contiguous-allocation checks defer work under memory pressure. Concurrent BLE allocations and actual TLS heap/stack peaks still need device measurement. Large events, large PLC logs, permanently rejected data, invalid config, missing CA, no clock sync or unavailable memory can leave the bounded cache pinned indefinitely. Provision/correct the endpoint or recover originals before any manual cleanup; no automatic data-dropping escape hatch is supplied.
+
+### Tests and unverified hardware behavior
+
+`test_bundle/test_gateway.py` builds the real codec/protocol/transport helpers with synthetic sockets, ASan/UBSan and independent Python CBOR/hash/signing oracles. It checks exact exported fields for all eight actual Android fixtures, signed kind 1/5/8173, tampering/JSON expansion failure, PLC DID derivation, correct/wrong/negative OKs, framing/body/deadline/size limits and masking. `test_relay.py` also checks pending cache backpressure, cold/expired protection, failed reads, successful unpinning without deletion, reboot retries and unchanged genesis custody. These tests never publish events or submit a real PLC operation.
+
+Example host invocation from the repository root with existing mbedTLS 2.x and ArduinoJson headers (the retained Windows/WSL dependency paths are documented in [`test_bundle/README.md`](test_bundle/README.md)):
+
+```sh
+python3 apps/esp32/test_bundle/test_gateway.py
+python3 apps/esp32/test_bundle/test_relay.py
+python3 apps/esp32/test_bundle/test_main_controls.py --sanitize --diagnostic
+```
+
+No live Wi-Fi/CA rejection/relay OK/PLC registration, ESP32 radio coexistence, flash power-cut, peak TLS heap/stack, or full phone → ESP32 → public PDS/AppView test is claimed for this change. Test with disposable **public** test identities and operator-approved destinations before deployment. Keep phone networking off during that test, independently retrieve and verify the identical full event ID/signature from the relay, check PLC genesis/current state separately, then check the PDS record/head and AppView.
+
+### Optional wire-v1 Nostr → mesh ingress (A button)
+
+Implemented against [`protocol/0020-wire-v1.md`](../../protocol/0020-wire-v1.md), not the earlier deferred signer-list proposal. **Disabled by default; no production root or real JMA Bot DID is shipped.** No relay URL, NIP-11 capability, signer allowlist, `source:jma`, organization display name or priority hint is a trust anchor. Existing BLE receipt/forwarding and outgoing upload rules remain unchanged; these stricter checks apply to **new Internet→mesh admission**, not every ordinary mesh post.
+
+#### Public root integration contract (parent/server worker)
+
+The parent/root operator can later generate **`include/IngressTrust.generated.h`**, following `include/IngressTrust.example.h`. This is public trust/configuration material, safe to review/version separately from Wi-Fi credentials; **never include root/importer private keys**. `include/IngressTrust.h` loads it if present, otherwise supplies empty/default-disabled values.
+
+| Macro | Public value / rule |
+|---|---|
+| `MESH_INGRESS_ROOT_PUBKEY` | One SEC1 compressed secp256k1 root, 66 lowercase hex characters. Root ID is SHA-256 of its decoded 33 bytes. |
+| `MESH_INGRESS_SCOPE_CBOR_HEX` | Lowercase hex of canonical `C({orgIds:[...],bsaf:[{botDid,types:[...]}]})`, exactly wire-v1 Scope. |
+| `MESH_INGRESS_SNAPSHOT_URL` | Absolute HTTPS DNS URL, port 443, no credentials/query/fragment/redirects. The endpoint must return `application/cbor` and canonical `C({body,sig})`. |
+| `MESH_INGRESS_SNAPSHOT_CA` | Public PEM X.509 CA(s) for HTTPS. **Different purpose from the secp256k1 signing root.** TLS identity does not replace the snapshot signature. |
+| `MESH_INGRESS_MIN_SEQUENCE` | Integer 1..9007199254740991; provisioned snapshot sequence floor. Never automatically lowered on errors/root changes. |
+| `MESH_INGRESS_SELECTED_CBOR_HEX` | Local selection: hex of canonical `C([{botDid,types:[...]}])`. Use the **actual approved JMA Bot DID and exact original `type:` values**; no source-name/handle inference or wildcard expansion. This field can instead be defined in the private local header; do not define it twice. |
+
+All lists must have the ordering/distinctness wire-v1 requires. Selection must be a subset of the configured root Scope. Root/selection fields are canonical CBOR hex, **not JSON or Base64**. The sample root/Bot in the test fixture are public synthetic test identities, not JMA or production authority.
+
+Local operators must **also** add both explicit opt-ins to ignored `private/gateway/config.h`:
+
+```cpp
+#define MESH_INGRESS_ENABLED 1
+#define MESH_INGRESS_TRUST_CLOCK 1
+```
+
+The public generated root file should not set these local decisions. With missing/invalid public fields, no local selection, either opt-in absent, unknown clock, or unreadable checkpoint, ingress does not run. Root configuration alone does not enable it. The full-path `m5stack-basic-gateway-check` build uses only the synthetic public fixture root, `.invalid` endpoints and invalid TLS CA; it is never deployable. No additional PlatformIO library or partition change was added for ingress. **The existing gateway TTS-disabled tradeoff remains**.
+
+#### Clock and authorization boundary
+
+`MESH_INGRESS_TRUST_CLOCK=1` explicitly accepts the device's SNTP-derived wall clock as a **local deployment assumption**. It does not authenticate SNTP. Ingress additionally waits for a successful SNTP sync callback in this boot and requires that callback to be at most one monotonic hour old. SNTP spoofing, time jumps and lack of a secure/rollback-resistant RTC remain limitations; TLS and signed timestamps do not independently prove the clock. Default false is the safe setting when that assumption cannot be made. No HTTP Date or event timestamp becomes a trusted clock. The ordinary outgoing gateway's pre-existing TLS time guard is unchanged.
+
+For each candidate, the worker independently verifies:
+
+1. Strict seven-field kind-1 Nostr event, ID/BIP340 signature, required 0012 tags/base version/path/created-at/deadline, and canonical extension bytes. Original strings, tag/extension order, signatures and typed Base64 reversals are preserved.
+2. Exactly one identity and one BSAF original-reference extension. Original URI must identify an exact `did:plc` Bot and `app.bsky.feed.post` record key; CID must be canonical CIDv1 dag-cbor/SHA-256. All six BSAF core tags are unique/nonempty, type comes from its unique `type:` tag, and Bot/type must match the explicit local selection.
+3. **One direct root→importer leaf certificate only.** Intermediates/longer paths are unsupported, never promoted into roots. Exact wire fields, root ID/key, valid compressed points, compact low-S ECDSA signature, importer role, no delegation, exact single organization, root Scope containment, period <=366 days, receive-time and event-time validity are required. Unknown/self-signed roots and scope escalation fail closed.
+4. Exact legacy Android binding declaration/consent, padded standard Base64 ECDSA signature **and** BIP340 binding signature. Certificate DID/atproto key, binding DID/keys, event Nostr key and commit DID must all match. The canonical v3 commit, CID link and compact low-S ECDSA commit signature are checked. This is **not current PLC authentication, original Bot repository signature verification, or MST inclusion proof**.
+5. A fresh root-signed complete-CRL snapshot at **receive time**, not event creation time. Certificate/deadline/snapshot eligibility is checked again when the worker completes, before save, and **after persistence before advertisement**. Expiry during the write leaves the complete bundle cold, with no advertisement/accepted callback.
+
+Certificate identity describes the **importer**, not a signature by JMA/the original Bot. UI text says `Importer checked at ingress`; serial observations include root/leaf IDs, Bot/type, organization, snapshot sequence/issuedAt/validUntil/checkedAt and independent `authorSignature`, `binding`, `chainScope`, `certificateTime`, `revocation=fresh-as-of` statuses. Failed/unperformed checks are not treated as success. Ordinary mesh receipt or reboot does not restore this observation as a current official-authentication badge.
+
+#### Snapshot high-water / persistence
+
+`/ingress-state` contains the latest verified signed snapshot and bounded issuer-serial observations, tied to the configured root ID, canonical encoded and SHA-256 checksummed for corruption detection. It is written to `/ingress-tmp`, flushed/closed, atomically renamed and read back **before any newly verified event is saved/advertised**. Filesystem work stays on the main loop; the network worker never opens LittleFS. A failed checkpoint write latches new ingress off for this boot. A malformed/truncated/wrong-root checkpoint is not discarded or treated as a first install.
+
+- Reject sequence below `max(configuredMin, savedSequence)`; same sequence requires identical body hash, even when re-signed. Higher sequences require nondecreasing issuedAt and a superset of both revocation lists. Expired snapshots do not erase the high-water/revocations. A valid root-revoking snapshot is persisted without admitting events; that root cannot automatically revive itself.
+- Same root issuer+serial with a different certificate body becomes a sticky conflict. Serial observations survive reboot and are not silently evicted. Valid root-signed certificate observations may consume registry capacity even if later binding/scope/time/admission checks fail.
+- A successful HTTP response containing an invalid/rollback/equivocating snapshot rejects that fetch. On transport/HTTP failure, the last **still-fresh, signature-verified** cached snapshot may be used only until its original validUntil. No stale-cache grace period, truncated CRL, unsigned response, or timestamp repair.
+- Checksum is corruption detection, not protection against an attacker with flash access. Restoring an old flash backup can restore old high-water state; initial state loss retains the protocol's minSequence/at-most-one-hour replay-window limitation. Do not delete/reset state to bypass revocation, serial limits or migration errors. Root replacement requires an explicit out-of-band migration/recovery plan; a new root is not automatically trusted because it appears in an event.
+
+#### On-request download, priority and mesh custody
+
+In a configured gateway build, **press A** (or call main-loop `gatewayRequestIngress()`) to coalesce one download request. It waits for the current network job, Wi-Fi, clock readiness and RAM. There is **no periodic background import or live subscription**.
+
+The worker requests `MOSIMO-REQ` with `order:"priority-v1"`, kind `[1]`, `#t:["mosimo.oriom.dev"]`, and **limit 8**. It optimistically tries the extension without trusting NIP-11. Unsupported/error/CLOSED/no EOSE/timeout causes a new TLS connection and ordinary `REQ` using the **distinct** subscription ID `esp-fallback` (`esp-priority` for MOSIMO). Standard REQ has no custom ordering field. Partial/incomplete results are not reported as an empty success. Both paths require matched finite EVENT/EOSE responses and close the subscription/connection.
+
+Among at most eight returned **new, independently authorized** events, choose highest local effective priority, then newest created_at, then lexicographically lowest full ID. Valid single priority hint 0..3 is honored only after authorization; missing/duplicate/schema-invalid hints use level 1, and failed authorization never grants a level above 1 or any mesh admission. Relay-provided order, BSAF value and organization name cannot raise privilege. This is **highest within the bounded returned window, not a guarantee of the relay's/global highest event**, especially with fallback or different relay trust policy.
+
+Retained full IDs are skipped. The existing <=1024-entry 8-byte seen-prefix index is copied as an additional conservative acquisition filter (<=8 KiB); a rare prefix collision can suppress a new candidate, but can never authorize/ACK one. Final custody dedup still checks full stored/journal event IDs. This prevents repeated already-evicted top results from dominating every request without copying an unbounded/full-ID history into TLS RAM.
+
+The verified original event becomes the existing canonical 7-element CBOR payload and ordinary CRC32C BPv7 bundle (anonymous source, hop 0, age 0, lifetime <=24h and the remaining signed delivery deadline). The **normal verified save/readback path** runs before inventory dirtying/display. Full caches of pending uploads are not evicted to admit an urgent import, and outstanding BLE WANT reservations keep their capacity ahead of a new download. Snapshot/serial checkpoint advancement does not claim bundle custody. Duplicate, invalid, expired, persistence-failed or quota-refused events are never advertised as received. An admitted public event participates in the existing normal upload/retention policy; it may be redundantly uploaded after fetch/reboot and still requires positive OK for outgoing completion.
+
+#### Smaller ESP32 profile limits / remaining validation
+
+- One root; direct leaf only; no AIA/OCSP/delta CRL/root discovery. Root Scope <=8 orgs, <=8 Bots, <=8 types/Bot, <=16 total pairs. One presented chain, one identity/bsafV1; optional BSAF botDefinition metadata is currently unsupported. No arbitrary original-record/network fetch.
+- Nostr JSON frame <=6,144 bytes; content <=2,048; <=64 tags, <=8 cells/tag and <=16 extensions, additionally limited by a **128-node / depth-12 / 12-KiB decoded-string budget per strict JSON/CBOR tree**. Snapshot <=4,096 CBOR bytes and <=32 total revocations; identity <=4,096 CBOR bytes; canonical document/payload <=8,192 bytes. All maxima need not fit simultaneously; unsupported/resource-limit is rejection, never truncation or weakened verification.
+- BSAF original tags <=8 ×640 bytes, langs <=3. Language tags support the conservative BCP-47 subset `language[-script][-region]` (primary 2..8 letters; optional 4-letter script; optional 2-letter/3-digit region). Other valid BCP-47 forms are unsupported, not rewritten. Existing record/source/deadline timestamps accept UTC Z with up to 9 fractional digits; certificate/snapshot timestamps are exact second-precision UTC. Leap seconds/24:00 are conservatively unsupported for ingress.
+- Persistent issuer-serial registry <=16; checkpoint <=8 KiB plus one <=8 KiB temp. No automatic registry/CRL forgetting. Capacity exhaustion requires deliberate operator migration, not silently reopening revoked/reused identities.
+- One job, existing 16 KiB worker stack. Ingress starts only with >=130,000 free heap bytes; frame parsing and verification have additional free/contiguous-heap guards (70/65 KiB). Intermediate trees are released in phases. <=24 inbound frames/pass, <=8 events/pass, no fragmentation/binary data; priority phase budget 8 seconds, fallback 15 seconds, plus bounded TLS/HTTP/SDK waits in the **worker**, not BLE callbacks/main-loop upload poll. Verification, normal final bundle validation, flash and UI work are bounded, not a hard real-time BLE latency guarantee. Actual TLS/heap/stack/radio coexistence peaks still need measurement on the physical M5Stack.
+
+`test_bundle/test_ingress.py` uses independent Python canonical CBOR, low-S ECDSA and BIP340 signers with public TEST ONLY secrets (root=7, atproto=5, Nostr=3), then executes the real C++ verifier with ASan/UBSan. [`test_bundle/wire-v1-fixture.json`](test_bundle/wire-v1-fixture.json) publishes canonical certificate/binding/snapshot bytes/hashes, cert/root IDs, signed event and exact expected mesh payload for the parent Node/Kotlin implementations to consume. Python/ESP32 agreement is tested. A second frozen public fixture, `test_bundle/wire-v1-node-fixture.json`, was copied unchanged from the Android worker's `bundle-core/src/test/resources/wire-v1.json` (producer `apps/android/wire-v1-fixture.mjs`, using `@ipld/dag-cbor` / `@noble/curves`). The real Node producer's read-only validation and this C++ verifier both pass that independent fixture: canonical certificate/snapshot/record/commit bytes, IDs/hashes, signatures, original event and exact mesh payload agree. Neither primitive fixture is production trust; no claim is made here about running the Android/Kotlin suite or the complete server runtime. **Actual server interop is additionally covered by `test_bundle/wire-v1-server-fixture.json`**, reproducibly created by the real `pds/public-information.mjs:createImporterEvent` with real importer/genesis/binding/certificate/snapshot exports. It contains two successive events whose nonempty second `base` references the first commit; actual PDS `reconstruct` and an independent Python block-hash/MST traversal both verify one-record then two-record roots. Both events pass the real C++ checker separately and sequentially across persisted trust state. See `test_bundle/README.md` for the test-only generator, source provenance, exact Windows/WSL commands and safety limits. This does not turn fixture MST auditing into an on-device inclusion-proof claim. Negative cases include binding/key/DID/signature mismatches, high-S/DER, unknown roots, unsupported chains, scope expansion, time/clock boundaries, stale/future snapshots, rollback/equivocation/revocation removal, sticky serial conflict, unselected Bot/type, and priority without authorization. Relay tests additionally inject checkpoint/write/read/rename failures, expiry during persistence, duplicate/full-cache and persist-before-advertise boundaries. No tests fetch public events, submit operations or flash a device.
+
+From repository root, reusing the exact retained WSL dependencies described in `test_bundle/README.md` (Git Bash requires `MSYS_NO_PATHCONV=1`):
+
+```sh
+MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- timeout 180s env PYTHONPATH=/home/mchiba/.cache/mesh-bundle-host/deps/usr/lib/python3/dist-packages python3 apps/esp32/test_bundle/test_ingress.py --mbedtls-include /home/mchiba/.cache/mesh-bundle-host/deps/usr/include --mbedtls-library /home/mchiba/.cache/mesh-bundle-host/deps/usr/lib/x86_64-linux-gnu/libmbedcrypto.a
+```
+
+Prior `test_gateway.py`, `test_relay.py`, `test_bundle.py --host ...`, Base64 and main-controls commands remain valid and are rerun for regression validation. Firmware: `.venv/Scripts/pio.exe run -e m5stack-basic-gateway-check` from `apps/esp32` compiles/links the complete ingress path without real credentials. Normal/gateway/diagnostic profiles must also build. No live MOSIMO-REQ/REQ negotiation, HTTPS root snapshot fetch, real SNTP/clock attack, hardware upgrade/power cut, or independent server→ESP32→phone admission is claimed. Before deployment, generate/approve the real public root Scope and exact JMA selection, run the shared fixture against the parent server implementation, then validate the real path with approved public test data.
 
 ## 日本語の単体読み上げ（評価専用）
 
