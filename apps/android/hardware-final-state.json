@@ -1,0 +1,32 @@
+{
+  "at": "2026-10-18T14:13:34.710456+09:00",
+  "deviceSerial": "T4AIOC732121JRB",
+  "apps": {
+    "org.mndt.demo": {
+      "pid": "23633",
+      "node": "5f79af9ec7048549",
+      "relay": "stopped via UI",
+      "onlineEnabled": false
+    },
+    "org.mndt.demo.peer": {
+      "pid": "23922",
+      "node": "335dd31ddbad9006",
+      "relay": "stopped via UI",
+      "onlineEnabled": true
+    }
+  },
+  "radio": {
+    "airplane_mode_on": "1",
+    "wifi_on": "0",
+    "bluetooth_on": "1",
+    "mobile_data": "1"
+  },
+  "espCommand": "peers 5f79af9ec7048549 335dd31ddbad9006",
+  "espUart": [
+    "mesh: TEST peer filter count=2",
+    "mesh: TEST command accepted",
+    "alive uptime_ms=1624175 heap=100628 stored=16 stack_free=28048 radio=1 muted=0"
+  ],
+  "com3": "closed",
+  "warning": "Demo online policy intentionally OFF to quarantine its unapproved typo post; Peer policy restored ON. Installed APKs retain ESP-only/test-author-only isolation."
+}

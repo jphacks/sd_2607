@@ -20,6 +20,9 @@ void esp_fill_random(void* data, size_t size) {
     for (size_t i = 0; i < size; ++i) bytes[i] = static_cast<uint8_t>(i);
 }
 struct MockSerial {
+    std::string input;
+    int available() { return static_cast<int>(input.size()); }
+    int read() { const char c = input[0]; input.erase(0, 1); return static_cast<unsigned char>(c); }
     void begin(unsigned) {}
     template<class... Args> void printf(const char*, Args...) {}
 } Serial;
@@ -91,6 +94,8 @@ struct Speech {
 };
 struct Relay {
     unsigned begins = 0, acceptedCalls = 0;
+    std::vector<std::vector<std::string>> peerFilters;
+    bool setAllowedPeers(const std::vector<std::string>& nodes) { peerFilters.push_back(nodes); return true; }
     std::string node;
     std::function<bool(const uint8_t*, size_t)> send;
     std::function<void(const BundleInfo&)> accepted;
@@ -136,6 +141,7 @@ static void acceptFresh(const std::string& id, const std::string& text) {
     ble.nextAccepted = mesh::BundleInfo();
     ble.nextAccepted.id = id;
     ble.nextAccepted.text = text;
+    ble.nextAccepted.kind = 1;
     ble.pending = true;
     const unsigned accepted = relay.acceptedCalls, polls = ble.polls;
     const size_t previews = M5.Display.previews.size();
@@ -161,6 +167,23 @@ int main() {
     acceptFresh("11111111-first", "Before mute");
     CHECK(speech.enqueued.size() == 1);
     CHECK(speech.enqueued.back() == std::make_pair(std::string("11111111-first"), std::string("Before mute")));
+
+    // PLC genesis, deletion and unknown control bodies are not human notices.
+    // They remain accepted by Relay but must not replace/speak the latest post.
+    for (uint16_t kind : {uint16_t(8173), uint16_t(5), uint16_t(0), uint16_t(65535)}) {
+        const size_t previews = M5.Display.previews.size(), headings = M5.Display.headings.size();
+        const size_t queued = speech.enqueued.size();
+        const unsigned accepted = relay.acceptedCalls;
+        ble.nextAccepted = mesh::BundleInfo();
+        ble.nextAccepted.id = "control-event";
+        ble.nextAccepted.text = "{\"type\":\"plc_operation\"}";
+        ble.nextAccepted.kind = kind;
+        ble.pending = true;
+        loop();
+        CHECK(relay.acceptedCalls == accepted + 1 && !ble.pending);
+        CHECK(M5.Display.previews.size() == previews && M5.Display.headings.size() == headings);
+        CHECK(speech.enqueued.size() == queued);
+    }
 
     press(M5.BtnC); // Exercise actual wasPressed -> toggleMuted path.
     CHECK(speech.muted() && speech.toggles == 1);
@@ -206,6 +229,19 @@ int main() {
     press(M5.BtnC);
     CHECK(!ble.enabled() && !speech.muted());
     CHECK(ble.enableCalls == std::vector<bool>({false, true, false}));
+#ifdef MESH_TEST_DIAGNOSTICS
+    Serial.input = "peers 707b1f7b29e16363 07a6b6ee338d7419\r\n";
+    loop();
+    CHECK(relay.peerFilters.size() == 1);
+    CHECK(relay.peerFilters.back() == std::vector<std::string>({"707b1f7b29e16363", "07a6b6ee338d7419"}));
+    Serial.input = "peers *\n"; loop();
+    CHECK(relay.peerFilters.size() == 2 && relay.peerFilters.back().empty());
+    Serial.input = "peers \n"; loop();
+    CHECK(relay.peerFilters.size() == 2);
+    Serial.input = "peers " + std::string(180, 'a') + "\n";
+    loop(); loop(); loop();
+    CHECK(relay.peerFilters.size() == 2); // Overflow cannot change isolation.
+#endif
     fakeMs = 5000; loop(); // Exercise heartbeat dependencies as well.
     std::cout << "PASS main controls: " << checks << " assertions (actual main.cpp, host boundaries)\n";
 }

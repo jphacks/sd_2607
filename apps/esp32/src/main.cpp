@@ -36,6 +36,8 @@ void showControls() {
 }
 
 void showMessage(const mesh::BundleInfo& message) {
+    // Control events (e.g. PLC genesis JSON) still relay, but are not notices.
+    if (message.kind != 1) return;
     const int cursorX = M5.Display.getCursorX();
     const int cursorY = M5.Display.getCursorY();
     M5.Display.setTextScroll(false);
@@ -63,6 +65,35 @@ void note(const std::string& text) {
     Serial.printf("mesh: %s\n", text.c_str());
     M5.Display.println(text.c_str());
 }
+#ifdef MESH_TEST_DIAGNOSTICS
+void testCommands() {
+    static std::string line;
+    static bool overflow = false;
+    for (unsigned count = 0; count < 64 && Serial.available(); ++count) {
+        const char c = static_cast<char>(Serial.read());
+        if (c == '\r') continue;
+        if (c != '\n') {
+            if (line.size() < 160) line += c;
+            else overflow = true;
+            continue;
+        }
+        bool ok = false;
+        if (!overflow && line == "peers *") ok = relay.setAllowedPeers({});
+        else if (!overflow && line.compare(0, 6, "peers ") == 0) {
+            std::vector<std::string> nodes;
+            for (size_t at = 6; at < line.size();) {
+                const size_t end = line.find(' ', at);
+                nodes.push_back(line.substr(at, end == std::string::npos ? end : end - at));
+                if (end == std::string::npos) break;
+                at = end + 1;
+            }
+            if (!nodes.empty()) ok = relay.setAllowedPeers(nodes);
+        }
+        note(ok ? "TEST command accepted" : "TEST command rejected");
+        line.clear(); overflow = false;
+    }
+}
+#endif
 }
 
 void setup() {
@@ -89,6 +120,10 @@ void setup() {
 
     uint8_t random[8];
     esp_fill_random(random, sizeof(random));
+#ifdef MESH_TEST_NODE_ID
+    // Test-only stable node avoids changing the paired Android allowlist on reset.
+    for (size_t i = 0; i < sizeof(random); ++i) random[i] = (MESH_TEST_NODE_ID >> (8 * (7 - i))) & 255;
+#endif
     char node[17];
     for (size_t i = 0; i < sizeof(random); ++i) snprintf(node + i * 2, 3, "%02x", random[i]);
     Serial.printf("mesh node=%s profile=android-experimental-v1 peripheral-only\n", node);
@@ -101,6 +136,9 @@ void setup() {
 
 void loop() {
     M5.update();
+#ifdef MESH_TEST_DIAGNOSTICS
+    testCommands();
+#endif
 
     if (M5.BtnA.wasPressed()) {
         const bool queued = speechReady && speech.test();

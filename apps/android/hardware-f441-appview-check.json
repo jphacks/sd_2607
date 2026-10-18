@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-18T14:09:05.997569+09:00",
+  "command": [
+    "node",
+    "appview/happyview/verify-production.mjs",
+    "did:plc:uhgusj7lhdpjq3vpbxns4oam",
+    "3my4rrjels2rd"
+  ],
+  "exitCode": 1,
+  "stdout": "",
+  "stderr": "AssertionError [ERR_ASSERTION]: https://pds.oriom.dev/xrpc/com.atproto.sync.getLatestCommit must return 200\n\n404 !== 200\n\n    at get (file:///C:/Users/chiba/Documents/src/jphacks/worktrees/sd_2607/protocol/sd_2607/appview/happyview/verify-production.mjs:19:10)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async file:///C:/Users/chiba/Documents/src/jphacks/worktrees/sd_2607/protocol/sd_2607/appview/happyview/verify-production.mjs:25:16 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 404,\n  expected: 200,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n"
+}

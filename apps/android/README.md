@@ -1,6 +1,6 @@
 # Android メッシュデモ（実験実装）
 
-`protocol/` を正とする。投稿のタグ・メッシュ用 CBOR は 0012 §3.2.4・§4、名前は 0014 に従う。リンク・制御メッセージ等の未確定部分は [mndt.md §9](../../protocol/mndt.md#9-android-実装の暫定値提案未採用) の暫定値を使う。完成した共通 wire 仕様の実装ではない。
+`protocol/` を正とする。投稿のタグ・メッシュ用 CBOR は 0012 §3.2.4・§4、名前は 0014 に従う。リンク・制御メッセージは [mndt.md §9](../../protocol/mndt.md#9-android-実装の暫定値提案未採用) の実験形式を使い、最新 §3 の合意済み CBOR 交換・CREDIT・連番付き GATT フレームには未対応。§9 の値は採用済み標準ではなく、新形式と接続内で混在できない。[2026-10-18 Android 監査・統合条件](AUDIT-2026-10-18.md)を参照。
 
 ## 構成
 
@@ -14,7 +14,7 @@
 - `app`: Compose の投稿・中継開始・リレー一覧・診断表示。
 - `../../third_party/sd_2607-dtn7-kotlin`: BPv7 コーデックの固定スナップショット。
 
-store-carry-forward（バケツリレー）: 受信した Bundle は署名検証後に暗号化保存され、後で接続した端末へ hop を1増やして渡される。接触中に全経路がつながっている必要はない。
+store-carry-forward（バケツリレー）: 受信した Bundle は署名検証後に暗号化保存され、保存成功後だけ ACK・所持広告・オンライン搬出を行う。後で接続した端末へ hop を1増やして渡され、接触中に全経路がつながっている必要はない。
 
 ## ビルド
 
@@ -29,6 +29,12 @@ apps/android/gradlew -p apps/android \
 成果物は `app/build/outputs/apk/{demo,peer}/debug/`（`org.mndt.demo` / `org.mndt.demo.peer`）。Google Play 開発者サービスは不要。
 
 本番公開を検証する専用 flavor は `:app:assembleVerificationDebug`（`org.mndt.demo.verification`、表示名 `mosimo Public Network Test`）。既存アプリとは別の鍵・保存領域を使い、ネイティブ Instrumentation から実 Coordinator を駆動する。実 PLC 登録と公開投稿を伴うため、通常のローカルテストとして実行しない。[実機検証報告](../../docs/android-production-verification-2026-10-18.md)と[検証メモ](VERIFICATION.md)を参照。
+
+### 隔離実機試験用の任意ビルド設定
+
+`-PmndtTestPeerNode=<16桁小文字hex>` で対象の一時 node のみに制限する。`-PmndtTestAuthor=<64桁Nostr公開鍵>` で広告・Bundle 提供・オンライン搬出・代理登録をその著者に限定する。既存保存データは削除しない。両設定とも既定は空（通常動作）であり、認証・本番アクセス制御ではない。BLE の役割・MTU 交渉は通常経路のまま。未解決だった central-only／MTU フォールバック実験は最終コードから除去した。
+
+2026-10-18 14:19 の最終端末 APK は制限なしの通常ビルドへ復元済みで、Demo/Peer とも中継・オンライン搬出 OFF。保持中の未承認テスト/他者イベントがあるため、搬出を有効にする前に[監査の最終状態](AUDIT-2026-10-18.md)を確認する。node はプロセスごとの一時値で、過去の試験用 allowlist はそのまま再利用できない。
 
 ## 動作
 

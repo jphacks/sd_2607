@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-18T14:19:29.916372+09:00",
+  "normalMetadataVerified": true,
+  "artifacts": [
+    {
+      "apk": "apps/android/app/build/outputs/apk/demo/debug/app-demo-debug.apk",
+      "sha256": "fbf2568e97f4a762585dcce723d6a063219d3706a65f792194a7d2d10af965e7",
+      "testMetadata": [
+        "            A: http://schemas.android.com/apk/res/android:name(0x01010003)=\"mndt.test.peer.node\" (Raw: \"mndt.test.peer.node\")\n            A: http://schemas.android.com/apk/res/android:value(0x01010024)=\"\"",
+        "            A: http://schemas.android.com/apk/res/android:name(0x01010003)=\"mndt.test.author.pubkey\" (Raw: \"mndt.test.author.pubkey\")\n            A: http://schemas.android.com/apk/res/android:value(0x01010024)=\"\""
+      ]
+    },
+    {
+      "apk": "apps/android/app/build/outputs/apk/peer/debug/app-peer-debug.apk",
+      "sha256": "8ba775888917f85e36a5abb0450c85beb8488512a94c2baee35275eaee968aa2",
+      "testMetadata": [
+        "            A: http://schemas.android.com/apk/res/android:name(0x01010003)=\"mndt.test.peer.node\" (Raw: \"mndt.test.peer.node\")\n            A: http://schemas.android.com/apk/res/android:value(0x01010024)=\"\"",
+        "            A: http://schemas.android.com/apk/res/android:name(0x01010003)=\"mndt.test.author.pubkey\" (Raw: \"mndt.test.author.pubkey\")\n            A: http://schemas.android.com/apk/res/android:value(0x01010024)=\"\""
+      ]
+    }
+  ]
+}

@@ -208,9 +208,22 @@ void Relay::fail(const char* reason) {
     disconnect_ = true;
     note(reason);
 }
+bool Relay::setAllowedPeers(const std::vector<std::string>& nodes) {
+    if (nodes.size() > 8) return false;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        if (!hexId(nodes[i], 16) || nodes[i] == node_) return false;
+        for (size_t j = 0; j < i; ++j) if (nodes[i] == nodes[j]) return false;
+    }
+    allowedPeers_ = nodes;
+    note("TEST peer filter count=" + std::to_string(nodes.size()));
+    if (active_ && peerHello_ && !nodes.empty() && !contains(nodes, peerNode_))
+        fail("TEST current peer excluded");
+    return true;
+}
 void Relay::resetSession() {
     helloPending_ = peerHello_ = inventoryDirty_ = blocked_ = false;
     peerMax_ = 0;
+    peerNode_.clear();
     beganMs_ = inventoryMs_ = windowMs_ = blockedMs_ = retryMs_ = 0;
     rxBytes_ = txBytes_ = 0;
     rxWindow_ = txWindow_ = rxMessages_ = txMessages_ = 0;
@@ -473,7 +486,17 @@ void Relay::receive(const uint8_t* data, size_t size) {
 }
 void Relay::control(const uint8_t* data, size_t size, uint64_t now) {
     JsonShape shape(data, size);
-    if (!shape.check()) { fail("mesh JSON invalid"); return; }
+    const bool validShape = shape.check();
+#ifdef MESH_TEST_DIAGNOSTICS
+    if (!peerHello_ && size <= 256) {
+        static const char* hex = "0123456789abcdef";
+        std::string encoded;
+        for (size_t i = 0; i < size; ++i) { encoded += hex[data[i] >> 4]; encoded += hex[data[i] & 15]; }
+        note("TEST initial control bytes=" + std::to_string(size) + " valid=" +
+             std::to_string(validShape) + " at=" + std::to_string(shape.at) + " hex=" + encoded);
+    }
+#endif
+    if (!validShape) { fail("mesh JSON invalid"); return; }
     JsonBudget budget;
     JsonDocument doc(&budget);
     if (deserializeJson(doc, reinterpret_cast<const char*>(data), size,
@@ -489,6 +512,11 @@ void Relay::control(const uint8_t* data, size_t size, uint64_t now) {
             !doc["max"].is<unsigned>() || doc["max"].as<unsigned>() < 1 || doc["max"].as<unsigned>() > 32768) {
             fail("mesh HELLO invalid"); return;
         }
+        if (!allowedPeers_.empty() && !contains(allowedPeers_, peer)) {
+            note("TEST peer rejected node=" + peer);
+            fail("TEST peer not allowed"); return;
+        }
+        peerNode_ = peer;
         peerHello_ = true;
         peerMax_ = doc["max"].as<unsigned>();
         inventoryDirty_ = true;

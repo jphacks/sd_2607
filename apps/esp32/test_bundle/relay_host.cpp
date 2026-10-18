@@ -50,6 +50,18 @@ void seedFullCache(const std::string& dir){
 int main(int argc,char**argv){
  CHECK(argc==2);std::string dir=argv[1];auto bytes=load(dir+"/0.bin");std::string id=idOf(bytes);
 
+ // Test isolation is opt-in and can exclude an already connected foreign peer.
+ {
+  Env e;e.start();CHECK(e.relay.setAllowedPeers({"1111111111111111"}));
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="TEST current peer excluded");
+  e.relay.disconnected();e.relay.connected();e.rx(hello);
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="TEST peer not allowed");
+  CHECK(!e.relay.setAllowedPeers({"bad"}));
+  CHECK(!e.relay.setAllowedPeers({"1111111111111111","1111111111111111"}));
+  CHECK(e.relay.setAllowedPeers({"fedcba9876543210","1111111111111111"}));
+  e.relay.disconnected();e.start();CHECK(!e.relay.disconnectRequested());
+  CHECK(e.relay.setAllowedPeers({}));e.relay.disconnected();e.start();CHECK(!e.relay.disconnectRequested());
+ }
  // Provisioning superblock requires components <=32 and whole paths <=63.
  // Check both sides of rename, without modifying the source on failure.
  {
@@ -70,12 +82,23 @@ int main(int argc,char**argv){
  {
   Env e;e.start();e.request(id);e.rx(bytes);if(LittleFS.renameNameErrors)std::cerr<<"mock rename: exceeds provisioned name_max=32, errno="<<ENAMETOOLONG<<"\n";CHECK(e.relay.storedCount()==1);CHECK(LittleFS.files.size()==1);CHECK(LittleFS.files.count("/mesh/00")==1);checkStoredPaths();CHECK(!LittleFS.files.count("/mesh/.incoming"));CHECK(LittleFS.flushes==1&&LittleFS.renames==1);CHECK(e.type()=="want");
     CHECK(e.received.size()==1);CHECK(e.received[0].id==id);
-    mesh::BundleInfo expected;std::string error;CHECK(mesh::validateBundle(bytes.data(),bytes.size(),expected,error));CHECK(e.received[0].text==expected.text);
+    mesh::BundleInfo expected;std::string error;CHECK(mesh::validateBundle(bytes.data(),bytes.size(),expected,error));CHECK(e.received[0].text==expected.text);CHECK(e.received[0].kind==1);
   e.allow=false;e.relay.tick();CHECK(e.type()=="want");CHECK(!e.relay.disconnectRequested());fakeNow+=250;e.allow=true;e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==1);
   auto saved=LittleFS.files.begin()->second;fakeNow+=1000;e.rx(bytes);e.relay.tick();CHECK(e.type()=="ack");CHECK(LittleFS.files.begin()->second==saved);CHECK(LittleFS.renames==1);CHECK(e.received.size()==1);
   e.relay.disconnected();e.start();CHECK(e.ids()==1);e.rx(control("want",{id}));e.relay.tick();CHECK(e.type()=="bundle");mesh::BundleInfo sent;std::string err;CHECK(mesh::validateBundle(e.out.back().data(),e.out.back().size(),sent,err));CHECK(sent.id==id&&sent.hop==1&&sent.age==1250);
   e.rx(control("ack",{id}));size_t count=e.out.size();fakeNow+=10000;e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();CHECK(e.out.size()==count+1);
   Env reboot(false);CHECK(reboot.relay.storedCount()==1);CHECK(reboot.received.empty());reboot.start();CHECK(reboot.ids()==0);count=reboot.out.size();reboot.rx(control("inventory",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(control("want",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(bytes);CHECK(reboot.relay.disconnectRequested());
+ }
+ // UI filtering must not discard PLC control events from the store/relay.
+ {
+  Env e;e.start();auto controlBytes=load(dir+"/control.bin");const std::string controlId=idOf(controlBytes);
+  e.request(controlId);e.rx(controlBytes);CHECK(!e.relay.disconnectRequested());
+  CHECK(e.received.size()==1&&e.received[0].kind==8173);CHECK(e.relay.storedCount()==1);
+  e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==1);
+  e.rx(control("want",{controlId}));e.relay.tick();CHECK(e.type()=="bundle");
+  mesh::BundleInfo forwarded;std::string error;
+  CHECK(mesh::validateBundle(e.out.back().data(),e.out.back().size(),forwarded,error));
+  CHECK(forwarded.kind==8173&&forwarded.id==controlId&&forwarded.text==e.received[0].text);
  }
  {Env e;e.start();e.rx(bytes);CHECK(e.relay.disconnectRequested());CHECK(e.relay.storedCount()==0);CHECK(e.received.empty());}
  // Every failed stage must be the FINAL diagnostic, preserve the original

@@ -289,6 +289,7 @@ bool event(Slice payload, BundleInfo& info, std::string& error) {
     uint8_t digest[32];
     if (!h.finish(digest) || !verifySchnorr(pub, sig, digest)) { error = "invalid event signature"; return false; }
     info.id = hex({digest, 32}); info.text = string(content);
+    info.kind = static_cast<uint16_t>(kind);
     return true;
 }
 

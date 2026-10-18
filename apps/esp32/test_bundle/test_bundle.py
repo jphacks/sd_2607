@@ -91,7 +91,7 @@ def b64encode(raw):
     return base64.b64encode(raw).decode().rstrip("=")
 
 
-def event(text='日本語 🌐 "quote" \\ slash/\n\b\t\f\r\x00\x01\x1f\u2028', tags=None):
+def event(text='日本語 🌐 "quote" \\ slash/\n\b\t\f\r\x00\x01\x1f\u2028', tags=None, kind=1):
     if tags is None:
         tags = [["t", "mosimo.oriom.dev"], [PREFIX + "version", "1"],
                 [PREFIX + "commit", b64encode(b"\x00\x01\xfe\xff")],
@@ -99,7 +99,7 @@ def event(text='日本語 🌐 "quote" \\ slash/\n\b\t\f\r\x00\x01\x1f\u2028', t
                 ["unknown", "", "unchanged", "日本語"],
                 [DEADLINE, "2030-10-18T12:34:56.123456789Z"]]
     pub = mul(3)[0].to_bytes(32, "big")
-    canonical = json.dumps([0, pub.hex(), 1792326896, 1, tags, text],
+    canonical = json.dumps([0, pub.hex(), 1792326896, kind, tags, text],
                            ensure_ascii=False, separators=(",", ":")).encode()
     digest = sha(canonical)
     pub, sig = sign(digest)
@@ -119,7 +119,7 @@ def event(text='日本語 🌐 "quote" \\ slash/\n\b\t\f\r\x00\x01\x1f\u2028', t
                     tag[1] = raw
             except ValueError:
                 pass
-    return [1, pub, 1792326896, 1, typed, text, sig], digest.hex(), canonical
+    return [1, pub, 1792326896, kind, typed, text, sig], digest.hex(), canonical
 
 
 def crc(data, kind):

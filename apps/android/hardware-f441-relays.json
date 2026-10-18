@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-18T05:10:31.823Z",
+  "readOnly": true,
+  "eventId": "f44162129aa31843a58af01310d78b61fba6505d23aeed2590ad1862ac2f4c8f",
+  "results": [
+    {
+      "relay": "wss://pds.oriom.dev",
+      "ok": true,
+      "signedEventIdentical": true
+    },
+    {
+      "relay": "wss://relay.damus.io",
+      "ok": true,
+      "signedEventIdentical": true
+    },
+    {
+      "relay": "wss://nos.lol",
+      "ok": true,
+      "signedEventIdentical": true
+    }
+  ]
+}

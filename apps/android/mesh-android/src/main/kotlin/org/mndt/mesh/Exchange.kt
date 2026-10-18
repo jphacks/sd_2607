@@ -26,6 +26,9 @@ internal class Exchange(
     private val now: () -> Long,
     private val elapsed: () -> Long,
     private val note: (String) -> Unit = {},
+    private val allowedPeerNode: String? = null,
+    private val allowedAuthor: String? = null,
+    // Must durably save before returning; failures must stop the coordinator's links.
     private val accepted: (StoredBundle) -> Unit = {},
 ) {
     val sessions = linkedMapOf<Pair<Link, String>, Session>()
@@ -67,7 +70,7 @@ internal class Exchange(
     private fun control(s: Session, c: Control) {
         if (c.type == "hello") {
             require(s.peerNode == null) { "Duplicate HELLO" }
-            if (c.node == node) { drop(s); return }
+            if (c.node == node || allowedPeerNode != null && c.node != allowedPeerNode) { drop(s); return }
             s.peerNode = c.node; s.peerMax = c.max
             s.link.identified(s.handle, c.node)
             log("hello from ${c.node} on ${s.link.name}:${s.handle}")
@@ -87,7 +90,7 @@ internal class Exchange(
                 val wanted = c.ids.toSet()
                 log("want ${c.ids.size} from ${s.peerNode}")
                 val eligible = engine.inventory(now(), elapsed()).toSet()
-                engine.entries().filter { it.event.id in eligible && it.event.id in wanted }
+                engine.entries().filter { it.event.id in eligible && it.event.id in wanted && (allowedAuthor == null || it.event.pubkey == allowedAuthor) }
                     .sortedWith(compareBy<StoredBundle> { AtRepository.deliveryExpiresAt(it.event) }.thenBy { it.bytes.size })
                     .forEach { entry ->
                         val id = entry.event.id
@@ -105,17 +108,20 @@ internal class Exchange(
     private fun bundle(s: Session, bytes: ByteArray) {
         require(s.peerNode != null) { "HELLO required" }
         val entry = engine.accept(bytes, now(), elapsed())
-        log("bundle ${bytes.size}B from ${s.peerNode}: ${if (entry == null) "duplicate" else "accepted ${entry.event.id.take(8)}"}")
+        log("bundle ${bytes.size}B from ${s.peerNode}: ${if (entry == null) "duplicate" else "accepted ${entry.event.id}"}")
         if (entry == null) { inventory(s); return }
+        accepted(entry)
         send(s, Wire.encode(Control("ack", listOf(entry.event.id))))
         note("署名検証・保存 ${entry.event.id.take(8)} / 観測 hop ${entry.hop}")
-        accepted(entry)
         broadcastInventory()
     }
 
     // android.util.Log throws "not mocked" in JVM unit tests; runCatching keeps Exchange testable there.
     private fun log(text: String) { runCatching { Log.i("Exchange", text) } }
-    private fun inventory(s: Session) { send(s, Wire.encode(Control("inventory", engine.inventory(now(), elapsed()).takeLast(128)))) }
+    private fun inventory(s: Session) {
+        val allowed = engine.entries().filter { allowedAuthor == null || it.event.pubkey == allowedAuthor }.map { it.event.id }.toSet()
+        send(s, Wire.encode(Control("inventory", engine.inventory(now(), elapsed()).filter { it in allowed }.takeLast(128))))
+    }
     private fun send(s: Session, frame: ByteArray): Boolean = s.link.send(s.handle, frame)
     private fun drop(s: Session) { sessions.remove(s.link to s.handle); s.link.disconnect(s.handle) }
 

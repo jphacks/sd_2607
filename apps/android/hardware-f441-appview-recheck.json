@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-18T14:09:46.195360+09:00",
+  "command": [
+    "node",
+    "appview/happyview/verify-production.mjs",
+    "did:plc:uhgusj7lhdpjq3vpbxns4oam",
+    "3my4rrjels2rd"
+  ],
+  "exitCode": 0,
+  "stdout": "{\n  \"checkedAt\": \"2026-10-18T05:09:45.640Z\",\n  \"readOnly\": true,\n  \"did\": \"did:plc:uhgusj7lhdpjq3vpbxns4oam\",\n  \"endpoints\": {\n    \"pds\": \"https://pds.oriom.dev\",\n    \"relay\": \"https://bsky.network\",\n    \"appview\": \"https://appview.oriom.dev\"\n  },\n  \"head\": {\n    \"cid\": \"bafyreiefg7inlbu4ar7hxj6prqsk6d6uzlm4exub2s2b2hrxzokn6rhjke\",\n    \"rev\": \"3my4rrjels2rd\"\n  },\n  \"matchedRecords\": 1,\n  \"cors\": true,\n  \"webJavaScriptRendering\": true,\n  \"boundaries\": \"Existing public records only; no BLE/live firehose/restart/independent signature or browser-layout verification\"\n}\n",
+  "stderr": ""
+}

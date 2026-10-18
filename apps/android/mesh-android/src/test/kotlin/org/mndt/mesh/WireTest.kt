@@ -46,6 +46,23 @@ class WireTest {
         assertTrue(runCatching { Wire.encode(Control("inventory", List(129) { id })) }.isFailure)
     }
 
+    @Test fun observedHardwareNodeHellosHaveExactJsonAndSurviveEveryGattChunkSize() {
+        for (node in listOf("707b1f7b29e16363", "07a6b6ee338d7419")) {
+            val bytes = Wire.encode(Control("hello", node = node, max = 24_000))
+            val expected = "{\"v\":1,\"type\":\"hello\",\"node\":\"$node\",\"max\":24000}"
+            assertEquals(expected, bytes.toString(Charsets.UTF_8))
+            assertEquals(60, bytes.size)
+            val framed = Frames.encode(bytes)
+            assertArrayEquals(byteArrayOf(0, 0, 0, 60), framed.copyOf(4))
+            for (chunkSize in 1..64) {
+                val reader = FrameReader()
+                val decoded = framed.toList().chunked(chunkSize).flatMap { reader.feed(it.toByteArray()) }
+                assertEquals(1, decoded.size)
+                assertArrayEquals(bytes, decoded.single())
+            }
+        }
+    }
+
     @Test fun boundedReadsWorkWithoutNewAndroidJavaApis() {
         assertArrayEquals(byteArrayOf(1, 2, 3), byteArrayOf(1, 2, 3).inputStream().readBounded(3))
         assertArrayEquals(byteArrayOf(), byteArrayOf().inputStream().readBounded(0))

@@ -1,5 +1,24 @@
 # Android 検証メモ
 
+## 最終 APK 復元（2026-10-18 14:19 JST）
+
+**Demo/Peer とも通常・無制限ビルドへ `adb install -r` で復元済み。両方の中継 OFF・搬出 OFF、DID 維持を UI で確認後、両プロセスを force-stop。** 実 APK の Manifest でも peer-node/author 制限が空であることを確認。未実証の MTU フォールバック／central-only 実験をコードから除去し、任意の最小フィルタと保存順序修正のみ保持した。32 core＋46 mesh テスト・通常 Demo/Peer ビルド成功。復元中は無線設定・COM3 を変更していない。以下は過去の検証経緯で、現在のインストール状態は[監査の最終 APK 復元節](AUDIT-2026-10-18.md)を優先する。
+
+## 最終の実機・公開検証（2026-10-18 14:13 JST）
+
+**部分成功。完全な BLE→Web の実証ではない。** 既存 Peer 投稿 `f44162129aa31843a58af01310d78b61fba6505d23aeed2590ad1862ac2f4c8f` を直接オンライン搬出し、PDS・Damus・nos.lol の同一署名イベント、実 PLC 鍵による commit 署名、PDS レコード/CID、bsky.network head、AppView と実 Web JS の同一本文描画を外部確認した。atURI は `at://did:plc:uhgusj7lhdpjq3vpbxns4oam/dev.oriom.mosimo.post/3my4rrjels2rd`。
+
+ESP32→Demo の隔離中継はサービス探索/CCCD 前の GATT 初期化で未達。過去の JSON 拒否は未解明であり、現在の正確な HELLO は実 ESP32 parser が受理した。新規投稿は追加せず同じ投稿を再利用した。ASUS の無線設定を基準値へ復元し、両中継サービスを UI 停止、COM3 を解放した。OPPO の後からの ADB 接続は今回の試験に使っていない。
+
+最終 `bundle-core` 32件・`mesh-android` 46件は失敗/skipなし、Demo/Peer APK ビルド成功。端末には ESP-only/テスト著者限定 APK が入っており、Demo のオンライン搬出は未承認文面の流出防止のため OFF。[最終監査・実際の境界・証拠ファイル](AUDIT-2026-10-18.md#final-hardwarepublic-network-result--1413-local-supersedes-intermediate-statuses)を参照。以下の節は各時点の過去記録。
+
+## 期限前監査・保存応答順序の修正（2026-10-18）
+
+- 受信 Bundle の暗号化保存を ACK・所持広告・オンライン搬出より先に完了するよう修正。未登録発信者の PLC 初期操作も広告前に保存する。
+- 保存前の送信禁止と保存失敗時の ACK／広告抑止の回帰2件は、修正前に失敗・修正後に成功。`--rerun-tasks` で `bundle-core` 32件・`mesh-android` 43件を再実行し、失敗・skip なし。Demo／Peer／Verification の全 APK ビルドも成功。
+- 今回は端末のインストール・設定・公開投稿を変更せず、ADB 一覧で ASUSAI2501H 1台だけを確認。過去の実機試験と今回の JVM 検証を区別する。
+- [監査結果・合意済み仕様との差分・正確な統合条件](AUDIT-2026-10-18.md)を参照。最新 MNDT §3 の CBOR 交換とは未互換であり、ESP32 との現行接続は §9 の実験形式。
+
 ## 実機・本番検証（2026-10-18 03:09–03:12 UTC）
 
 **成功。** 別アプリ ID `org.mndt.demo.verification` の実 `MeshCoordinator` で、オフライン生成した初回・継続投稿2件をプロセス終了後に復元。Wi-Fi 復帰後、PDS・Damus・nos.lol の全3リレーへ配送し、別クライアントから同じ署名付きイベントを取得できた。
