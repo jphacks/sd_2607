@@ -28,7 +28,7 @@ NIP-01 の標準イベントと WebSocket の投稿・取得・購読を提供�
 
 初期仕様の変換方向は Nostr から atproto への復元・公開とする。端末署名済み commit と必要なレコード等を配送し、PDS は著者の commit を再署名しない。atproto から Nostr への逆変換を目的に atproto レコードへ Nostr 署名を格納する要件は設けない。保持済みの元 Nostr イベントをそのまま再配信することは可能である。Nostr の署名対象外トップレベル拡張の案は未採用である。
 
-削除要求は NIP-09 の `kind: 5` を用いる。PLC 初期操作・鍵対応宣言等の制御データは本文投稿とは別のイベントとして定義し、その kind・参照・配送形式は今後決定する。
+削除要求は NIP-09 の `kind: 5` を用いる。PLC 初期操作・一般の独立鍵対応宣言等の制御イベントのkind・参照・配送形式は今後決定する。BSAF importerの0020経路では、鍵対応宣言をidentity拡張へ埋め込み、独立制御イベントの取得を前提にしない。
 
 通常投稿と訂正・補足・追認は、1件につき発信者自身の1レコード追加・1 commit・1 Nostr 投稿イベントを基本単位とする。Label の発行・配信は別の仕組みであり、詳細は [投稿と注釈・Label](0008-posts-and-labels.md) を参照する。
 
@@ -88,7 +88,13 @@ Nostr 等で発見した未知の候補は信頼済み一覧と区別し、接�
 
 一覧発行者への信頼は接続先候補の選定に関するもので、投稿内容、公的情報の取り込みサーバー、論理 PDS の参加権限への信頼を付与しない。候補一覧の署名・発行者認証・版管理・更新・失効と、AppView 上のレコード形式は今後定義する。
 
-## 6. 参照
+## 6. Experimental wire-v1 のBSAF取得とpriority
+
+[0020](0020-wire-v1.md) はroot認可されたBSAF importerのkind1投稿、receiverの独立検証とfail-closed ingress、任意のpriority-order取得を定義する。通常の `REQ` はNIP-01の保存イベント順（created_at降順、同時刻id辞書順昇順）を維持し、priority順に変更しない。
+
+明示opt-inの `MOSIMO-REQ` は有限snapshot取得であり、`effectivePriority`降順→created_at降順→id昇順でsort後にlimitを適用する。対応はNIP-11の `mosimo: {wire:1, priority_order:["priority-v1"]}` に示す。正確なmessage/schema・fallbackは0020 §8、capabilityの自己申告と認可の分離も同書に従う。root/binding/CRLを全一般投稿の受理条件にするものではない。
+
+## 7. 参照
 
 - [NIP-01: Basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md)（2026-10-17 確認）
 - [NIP-09: Event Deletion Request](https://github.com/nostr-protocol/nips/blob/master/09.md)

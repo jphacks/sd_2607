@@ -2,7 +2,7 @@
 
 状態: draft-00（方針合意、データ形式は未決定）
 
-形式別のデータ構造・処理の流れと BSAF 互換性は [0013](0013-public-information.md) に整理する。本書は信頼と配送同値性の方針を扱う。
+形式別のデータ構造・処理の流れと BSAF 互換性は [0013](0013-public-information.md) に整理する。本書は信頼と配送同値性の方針を扱う。**BSAF server importerの実装経路は [0020: experimental wire-v1](0020-wire-v1.md)** に具体化した。事前rootからのimport-only証明とローカルBot/type選択、fresh root-signed CRLを新規ingressの条件とし、単なるDID allowlistや受信証明からの自動root採用では代用しない。
 
 ## 1. 信頼モデル
 
