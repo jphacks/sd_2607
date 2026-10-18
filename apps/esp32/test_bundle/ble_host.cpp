@@ -216,8 +216,143 @@ static void transitionPoison() {
     }
 }
 
+static void idleDisable() {
+    Env e;
+    const uint8_t byte = 42;
+    CHECK(e.ble.enabled());
+    e.ble.setEnabled(false, e.relay);
+    CHECK(!e.ble.enabled() && !mockAdvertising.active);
+    CHECK(mockAdvertising.stops == 1 && mockAdvertising.starts == 1);
+    CHECK(queueResets == 1 && mockQueues.back()->items.empty());
+    CHECK(mockServer.disconnects.empty());
+    const unsigned ticks = e.relay.ticks, drops = e.relay.disconnections;
+    e.ble.setEnabled(false, e.relay);
+    for (unsigned i = 0; i < 3; ++i) {
+        CHECK(!e.ble.send(&byte, 1));
+        e.poll(30001);
+    }
+    CHECK(e.relay.ticks == ticks && e.relay.disconnections == drops);
+    CHECK(e.relay.frames.empty() && e.tx().attempts.empty());
+    CHECK(!mockAdvertising.active && mockAdvertising.starts == 1);
+    e.ble.setEnabled(true, e.relay);
+    CHECK(e.ble.enabled() && mockAdvertising.active && mockAdvertising.starts == 2);
+    e.ble.setEnabled(true, e.relay);
+    CHECK(mockAdvertising.starts == 2);
+    CHECK(!e.ble.send(&byte, 1)); // Enabled is not yet subscribed/connected.
+}
+
+static void disableDiscardsSession() {
+    // Exercise both a split length prefix and a partially received body.
+    for (size_t partial : {size_t(2), size_t(6)}) {
+        Env e; e.connect();
+        const std::vector<uint8_t> old(53, 0xa5);
+        const auto wire = frame(old);
+        CHECK(e.ble.send(old.data(), old.size()));
+        CHECK(e.ble.send(old.data(), old.size())); // Also discard a whole queued TX frame.
+        mockServer.write({wire.begin(), wire.begin() + partial}); e.poll();
+        CHECK(e.tx().attempts.size() == 1 && e.sent().size() == 20);
+        CHECK(e.relay.frames.empty());
+        // These events have not reached the parser when the user disables radio.
+        mockServer.write({wire.begin() + partial, wire.end()});
+        mockServer.write(frame({0xde, 0xad}));
+        const unsigned ticks = e.relay.ticks;
+        e.ble.setEnabled(false, e.relay);
+        CHECK(!e.ble.enabled() && !mockAdvertising.active);
+        CHECK(mockServer.disconnectPending && mockServer.disconnects.back() == 7);
+        CHECK(queueResets == 0); // Do not reset before the physical callback is quiescent.
+        for (unsigned i = 0; i < 3; ++i) {
+            CHECK(!e.ble.send(old.data(), old.size()));
+            mockServer.write(frame({0xba, 0xd0}));
+            e.poll(30001);
+        }
+        CHECK(e.relay.ticks == ticks && e.relay.frames.empty());
+        CHECK(e.tx().attempts.size() == 1 && mockAdvertising.starts == 1);
+        mockServer.down(); e.poll();
+        CHECK(queueResets == 1 && mockQueues.back()->items.empty());
+        e.poll(30001);
+        CHECK(!e.ble.enabled() && !mockAdvertising.active && mockAdvertising.starts == 1);
+        CHECK(e.relay.ticks == ticks && e.relay.frames.empty());
+        CHECK(!e.ble.send(old.data(), old.size()));
+
+        e.tx().attempts.clear();
+        e.ble.setEnabled(true, e.relay);
+        CHECK(mockAdvertising.active && mockAdvertising.starts == 2);
+        mockServer.up(41); mockServer.subscribe(); e.poll();
+        CHECK(e.relay.connections == 2 && e.tx().attempts.empty());
+        const std::vector<uint8_t> fresh{9, 8, 7};
+        const auto freshWire = frame(fresh);
+        for (uint8_t byte : freshWire) { mockServer.write({byte}); e.poll(); }
+        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({fresh}));
+        CHECK(e.ble.send(fresh.data(), fresh.size()));
+        for (unsigned i = 0; i < 10; ++i) e.poll(10);
+        CHECK(e.sent() == freshWire); // Fresh prefix, no old tail or queued frame.
+        CHECK(e.tx().attempts.size() == 1 && e.tx().attempts[0].handle == 41);
+    }
+}
+
+static void disableDuringDisconnectAndRapidToggle() {
+    {
+        Env e; e.connect();
+        mockServer.down(); // Ordinary disconnect queued just before the button press.
+        e.ble.setEnabled(false, e.relay); e.poll();
+        CHECK(!e.ble.enabled() && !mockAdvertising.active);
+        CHECK(mockAdvertising.starts == 1 && queueResets == 1);
+        CHECK(mockQueues.back()->items.empty() && mockServer.disconnects.empty());
+        const unsigned ticks = e.relay.ticks;
+        e.poll(60001);
+        CHECK(e.relay.ticks == ticks && !mockAdvertising.active);
+        e.ble.setEnabled(true, e.relay);
+        mockServer.up(42); mockServer.subscribe(); e.poll();
+        CHECK(e.ble.enabled() && e.relay.connections == 2);
+    }
+    {
+        Env e; e.connect();
+        const uint8_t old = 0xee;
+        CHECK(e.ble.send(&old, 1));
+        mockServer.write({0, 0}); e.poll();
+        e.tx().attempts.clear();
+        mockServer.write(frame({old})); // Stale callback event must be discarded.
+        e.ble.setEnabled(false, e.relay);
+        e.ble.setEnabled(true, e.relay);
+        CHECK(e.ble.enabled() && mockServer.disconnectPending);
+        CHECK(!mockAdvertising.active && queueResets == 0);
+        CHECK(!e.ble.send(&old, 1));
+        const unsigned ticks = e.relay.ticks;
+        e.poll(60001);
+        CHECK(mockAdvertising.starts == 1 && queueResets == 0);
+        CHECK(e.relay.ticks == ticks && e.relay.frames.empty() && e.tx().attempts.empty());
+        // A new connection can arrive synchronously when advertising resumes.
+        mockAdvertising.onStart = [&] { mockServer.up(43); mockServer.subscribe(); };
+        mockServer.down(); e.poll();
+        CHECK(queueResets == 1 && mockAdvertising.starts == 2);
+        CHECK(mockServer.alive && !mockAdvertising.active);
+        e.poll();
+        CHECK(e.relay.connections == 2 && e.tx().attempts.empty());
+        mockServer.write(frame({1, 2, 3})); e.poll();
+        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({{1, 2, 3}}));
+        const uint8_t fresh = 4;
+        CHECK(e.ble.send(&fresh, 1)); e.poll(10);
+        CHECK(e.sent() == frame({fresh}) && e.tx().attempts.back().handle == 43);
+    }
+}
+
+static void busyReceiveYieldsToControls() {
+    Env e; e.connect();
+    e.relay.duringReceive = [&] {
+        if (e.relay.frames.size() < 40) mockServer.write(frame({1}));
+    };
+    mockServer.write(frame({1}));
+    e.poll();
+    CHECK(!e.relay.frames.empty() && e.relay.frames.size() <= 4);
+    for (unsigned i = 0; i < 40 && e.relay.frames.size() < 40; ++i) e.poll();
+    CHECK(e.relay.frames.size() == 40);
+    CHECK(!mockServer.disconnectPending);
+}
+
 int main() {
+    busyReceiveYieldsToControls();
     notifications(); retries(); fragmentation(); overflowDuringReceive();
     lifecycleLoss(); invalidFramesAndDisconnects(); transitionPoison();
+    idleDisable(); disableDiscardsSession(); disableDuringDisconnectAndRapidToggle();
     std::cout << "PASS MeshBle: " << checks << " assertions (production transport, mock NimBLE/FreeRTOS/Relay)\n";
 }

@@ -100,12 +100,22 @@ bool Ble::recover(Relay& relay) {
         xQueueReset(events_);
         overflow_.store(false);
         recovering_ = false;
-        NimBLEDevice::getAdvertising()->start();
+        if (enabled_) NimBLEDevice::getAdvertising()->start();
     }
     return true;
 }
+void Ble::setEnabled(bool enabled, Relay& relay) {
+    if (!server_ || enabled == enabled_) return;
+    enabled_ = enabled;
+    if (!enabled_) {
+        drop(relay, "RX/TX disabled by user");
+        recover(relay);
+    } else if (!recovering_) {
+        NimBLEDevice::getAdvertising()->start();
+    }
+}
 bool Ble::send(const uint8_t* bytes, size_t size) {
-    if (!ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() ||
+    if (!enabled_ || !ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() ||
         !bytes || !size || size > MAX_BUNDLE_BYTES || out_.size() >= MAX_QUEUE ||
         size + 4 > MAX_QUEUED_BYTES - queuedBytes_) return false;
     std::vector<uint8_t> frame(size + 4);
@@ -141,7 +151,7 @@ bool Ble::feed(Relay& relay, const uint8_t* bytes, size_t size) {
     return true;
 }
 void Ble::pump(Relay& relay) {
-    if (!ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() || out_.empty()) return;
+    if (!enabled_ || !ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() || out_.empty()) return;
     const uint32_t now = millis();
     if (txBlocked_ && now - blockedMs_ >= 10000) { drop(relay, "notify queue timeout"); return; }
     if (txAttempted_ && now - txMs_ < 10) return;
@@ -163,8 +173,11 @@ void Ble::pump(Relay& relay) {
 }
 void Ble::poll(Relay& relay) {
     if (recover(relay)) return;
+    if (!enabled_) return;
     Event event;
-    while (xQueueReceive(events_, &event, 0) == pdTRUE) {
+    // A busy peer can replenish the queue while verification/storage runs.
+    // Return to the main loop regularly so mute/radio buttons remain usable.
+    for (unsigned handled = 0; handled < 4 && xQueueReceive(events_, &event, 0) == pdTRUE; ++handled) {
         if (recover(relay)) return;
         if (event.kind == Down && event.handle == callbackHandle_.load()) {
             Serial.printf("BLE disconnected reason=%d\n", event.status);

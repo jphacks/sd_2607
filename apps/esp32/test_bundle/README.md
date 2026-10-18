@@ -209,17 +209,19 @@ python3 apps/esp32/test_bundle/test_ble.py --sanitize
 ```
 
 Relay compiles the production codec/exchange with ArduinoJson 7.4.2, mocking only
-LittleFS and monotonic time. Its 1,622 assertions cover verification before writes,
+LittleFS and monotonic time. Its 3,596 assertions cover verification before writes,
 ACK after readback, the provisioned 32-character filename limit, numeric slots,
 cold restoration, bounded cache replacement, duplicate age preservation, queue
 backpressure, protocol limits, and failed I/O without false ACKs. Accepted-message
 callbacks fire only for verified, successfully saved new events, not duplicates,
-failed saves or reboot-restored entries.
+failed saves or reboot-restored entries. Same-session 17th receipt and bounded
+128-ID completion history have dedicated regressions.
 
-BLE compiles production `MeshBle.cpp` with mocked NimBLE/FreeRTOS/Relay. Its 215
+BLE compiles production `MeshBle.cpp` with mocked NimBLE/FreeRTOS/Relay. Its 316
 assertions cover nonzero handles, notification queue acceptance versus application
 ACK, split length headers, frame bounds, pacing, retry, overflow during a blocked
-receiver, physical disconnect and clean reconnection. Neither host mock proves
+receiver, physical disconnect, radio disable/re-enable, bounded busy-peer polling,
+and clean reconnection. Neither host mock proves
 radio delivery or actual power-loss durability.
 
 With the WSL environment above, Relay accepts
@@ -228,6 +230,17 @@ With the WSL environment above, Relay accepts
 Use the same `PYTHONPATH` environment as for the codec suite. `test_ble.py` needs
 no external libraries. Both harnesses build in temporary directories and run
 ASan/UBSan by default (BLE requires `--sanitize` to enable them).
+
+## Main-loop controls
+
+```sh
+python3 apps/esp32/test_bundle/test_main_controls.py --sanitize
+```
+
+73 assertions compile the actual `main.cpp` with host hardware boundaries: C
+changes only audio mute, reception still updates the preview while muted, B toggles
+radio without changing mute, and A queues a speech test. Physical button timing
+and LCD appearance still require device inspection.
 
 ## Message preview
 

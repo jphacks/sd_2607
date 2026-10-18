@@ -17,6 +17,8 @@ public:
     bool begin(const std::string& node);
     bool send(const uint8_t* bytes, size_t size);
     void poll(Relay& relay);
+    void setEnabled(bool enabled, Relay& relay);
+    bool enabled() const { return enabled_; }
 
 private:
     enum Kind : uint8_t { Up, Down, Subscribe, Rx, Mtu };
@@ -35,6 +37,7 @@ private:
     NimBLECharacteristic* tx_ = nullptr;
     uint16_t handle_ = BLE_HS_CONN_HANDLE_NONE, mtu_ = 23;
     bool subscribed_ = false, ready_ = false, recovering_ = false;
+    bool enabled_ = true;
         bool txAttempted_ = false, txBlocked_ = false;
     std::deque<std::vector<uint8_t>> out_;
     size_t queuedBytes_ = 0, offset_ = 0;
