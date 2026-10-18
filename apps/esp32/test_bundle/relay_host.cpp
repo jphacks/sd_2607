@@ -50,6 +50,18 @@ void seedFullCache(const std::string& dir){
 int main(int argc,char**argv){
  CHECK(argc==2);std::string dir=argv[1];auto bytes=load(dir+"/0.bin");std::string id=idOf(bytes);
 
+ // Test isolation is opt-in and can exclude an already connected foreign peer.
+ {
+  Env e;e.start();CHECK(e.relay.setAllowedPeers({"1111111111111111"}));
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="TEST current peer excluded");
+  e.relay.disconnected();e.relay.connected();e.rx(hello);
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="TEST peer not allowed");
+  CHECK(!e.relay.setAllowedPeers({"bad"}));
+  CHECK(!e.relay.setAllowedPeers({"1111111111111111","1111111111111111"}));
+  CHECK(e.relay.setAllowedPeers({"fedcba9876543210","1111111111111111"}));
+  e.relay.disconnected();e.start();CHECK(!e.relay.disconnectRequested());
+  CHECK(e.relay.setAllowedPeers({}));e.relay.disconnected();e.start();CHECK(!e.relay.disconnectRequested());
+ }
  // Provisioning superblock requires components <=32 and whole paths <=63.
  // Check both sides of rename, without modifying the source on failure.
  {

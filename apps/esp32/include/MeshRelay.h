@@ -27,6 +27,9 @@ public:
     void disconnected();
     void receive(const uint8_t* data, size_t size);
     void tick();
+    // Opt-in test isolation only, not authentication. Empty list restores normal
+    // unrestricted interoperability. Invalid lists leave the current filter intact.
+    bool setAllowedPeers(const std::vector<std::string>& nodes);
     // Validated live + cold entries; invalid diagnostic files still consume
     // disk capacity but are not included in this count.
     size_t storedCount() const { return entries_.size(); }
@@ -83,7 +86,8 @@ private:
         unsigned attempts = 0;
     };
 
-    std::string node_;
+    std::string node_, peerNode_;
+    std::vector<std::string> allowedPeers_;
     std::function<bool(const uint8_t*, size_t)> send_;
     std::function<void(const std::string&)> note_;
     // Saved, verified NEW events only. Called on the main loop; must not reenter.
