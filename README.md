@@ -60,7 +60,7 @@
 ## 動画リンク
 [プレゼンテーション](https://youtu.be/GTZUnUww7xk)
 
-[アプリデモ](https://www.youtube.com/watch?v=RMGZ6aHQX2k)
+[実機デモ](https://youtu.be/r5K6OZ4kwUs)
 
 [M5Stackデモ](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
 
