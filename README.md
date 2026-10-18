@@ -10,9 +10,11 @@
   [![JPHacks 2026](https://img.shields.io/badge/JPHacks%202026-Audience%20Award-gold?style=for-the-badge&logo=rocket)](https://github.com/jphacks/sd_2607)
   [![三菱重工業株式会社 航空機・飛昇体事業部賞](https://img.shields.io/badge/Sponsor%20Award-三菱重工業株式会社%20航空機・飛昇体事業部-orange?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
 
-</div>
+  <br/>
 
-[![Used Skills](https://skillicons.dev/icons?i=kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
+  [![Used Skills](https://skillicons.dev/icons?i=kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
+
+</div>
 
 ## Live Demo
 **被災地からの投稿を閲覧できるWeb Client**: https://mosimo.oriom.dev
