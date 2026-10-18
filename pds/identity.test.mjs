@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Secp256k1Keypair } from '@atproto/crypto';
-import { createIdentityResolver } from './identity.mjs';
+import { createIdentityResolver, parseNetworkJson, fetchBytes } from './identity.mjs';
+
+test('network JSON rejects duplicate/escaped duplicate keys, invalid UTF-8 and excessive nesting', () => {
+  for (const text of ['{"a":1,"a":2}', '{"nested":{"a":1,"\\u0061":2}}', '['.repeat(66) + '0' + ']'.repeat(66)]) {
+    assert.throws(() => parseNetworkJson(Buffer.from(text)));
+  }
+  assert.throws(() => parseNetworkJson(Uint8Array.of(34, 255, 34)));
+  assert.deepEqual(parseNetworkJson(Buffer.from('{"a":[{"x":"a,b}\\\""},{"x":2}]}')), { a: [{ x: 'a,b}"' }, { x: 2 }] });
+});
+
+test('bounded snapshot fetch enforces CBOR type, size, timeout and no redirects', async t => {
+  const mocked = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
+    return new Response(Uint8Array.of(1, 2), { headers: { 'content-type': 'application/cbor' } });
+  });
+  assert.deepEqual(await fetchBytes('https://trust.invalid/snapshot', { contentType: 'application/cbor', maxBytes: 2 }), Buffer.from([1, 2]));
+  await assert.rejects(fetchBytes('https://trust.invalid/snapshot', { maxBytes: 1 }), /too large/);
+  mocked.mock.mockImplementation(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+  await assert.rejects(fetchBytes('https://trust.invalid/snapshot', { contentType: 'application/cbor' }), /content type/);
+});
 
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
 const key = await Secp256k1Keypair.create();

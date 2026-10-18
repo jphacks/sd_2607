@@ -50,6 +50,63 @@ CARは公式ライブラリで生成し、元commit/CID/rev/署名を維持す�
 現在時刻より5分超先のrevは署名を書き換えず保留・再試行し、head/streamへ公開しない。
 stream履歴は現状全保持であり、独自の履歴切り詰め・欠損の隠蔽を行わない。
 
+## Opt-in wire-v1 priority history
+
+NIP-11 advertises `mosimo.wire: 1` and `mosimo.priority_order: ["priority-v1"]`.
+Standard `REQ` is unchanged: newest `created_at` first, then ascending event ID,
+with ordinary filters, limits and live subscriptions. Unknown filter fields never opt in.
+
+```json
+["MOSIMO-REQ", "priority-history", {"order":"priority-v1","filter":{"kinds":[1],"#t":["mosimo.oriom.dev"],"limit":100}}]
+```
+
+This custom verb returns a **finite stored snapshot**, sorted by freshly evaluated
+`effectivePriority DESC, created_at DESC, id ASC` **before** applying limit.
+Only one filter is allowed; limit must be 1..min(100, `maxResults`). IDs must be
+1..64 printable ASCII bytes and cannot collide with an existing subscription.
+Replies are standard `EVENT`, then `EOSE`; the ID is released, with no live subscription.
+`CLOSE` cancels pending work. Invalid requests, ID conflicts, unavailable durable state
+or resource exhaustion return bounded `CLOSED` reasons, never a truncated newest-only
+priority result. Fall back with a **different ID** to standard `REQ` if unsupported/closed.
+After sorting, the relay rechecks **every candidate** against current durable trust and
+the current clock. Any priority change closes the request before sending events rather
+than serving stale ordering. A final synchronous deadline check covers certificate,
+snapshot and delivery expiry while the recheck itself was queued/running.
+
+Budgets are one active priority request per process, at most 1,000 matching candidates,
+8 MiB candidate JSON, and five seconds for scanning and both authorization passes
+after initial snapshot retrieval.
+Exceeding a budget closes the request before sending events. Snapshot retrieval is
+bounded separately per root (10 seconds, 32,768 bytes, no redirects, CBOR only),
+coalesced by the process-wide priority slot and attempted at most every 30 seconds
+per root. A fresh persisted snapshot remains usable during a fetch failure; expiry
+removes authority, not the stored Nostr event. Each configured root updates independently.
+Due refreshes run before the candidate scan, even when its resource budget later rejects
+the request; repeated requests do not postpone a root's next refresh.
+
+`publicInformation` defaults to `{ "roots": [], "selection": [] }`, granting **no**
+elevated priority. Only explicitly enabled public roots and selected Bot/type pairs
+can authorize hints above one. The shared `verifyPublicInformation` helper validates
+author signature, chain, binding, commit, scope, time and fresh revocation state.
+Authorization failures cap hints at one (zero stays zero); self-declared priority or
+BSAF source/severity alone never grants authority. Receivers must independently verify:
+relay ordering is not an ingress authorization or a claim of current JMA authorship.
+
+SQLite/PostgreSQL persist complete signed snapshots (sequence, body hash derivable
+from canonical body, issuedAt and cumulative CRL) and issuer+serial → certificate ID.
+Snapshot updates commit **before** event authorization, including root revocation;
+rollback, equivocation, earlier issue time, CRL removal and serial reuse are rejected.
+Issuer+serial conflicts commit a sticky `trust_serial_conflicts` marker in their own
+transaction **before** rejecting authorization. Both the original and conflicting
+certificate bodies remain unauthorized after restart; re-presenting A after A→B never
+restores A. The marker is bounded to one row per recorded issuer/serial pair. A marker
+write/commit failure closes the priority request, never degrades into authorization.
+Expired/disabled-root state is retained across restarts. Security state is never evicted
+to authorize new events: 64 historical roots and 100,000 issuer/serial pairs are hard
+caps; capacity/write failures close priority requests. Back up the entire database;
+restoring an old backup can roll back security state without external rollback protection.
+See [deployment.md](deployment.md#public-wire-v1-trust-configuration) for provisioning.
+
 ## 起動とテスト
 
 ```sh

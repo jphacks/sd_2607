@@ -1,7 +1,44 @@
-// Only the configured PLC directory is contacted; untrusted DID documents never choose a fetch URL.
-export async function fetchJson(url, { maxBytes = 262144, ...options } = {}) {
+// Validate text before JSON.parse loses duplicate object keys or invalid UTF-8 bytes.
+export function parseNetworkJson(bytes) {
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const value = JSON.parse(text);
+  const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g) ?? [];
+  let offset = 0;
+  let items = 0;
+  function walk(depth) {
+    if (depth > 64 || ++items > 32768) throw new Error('JSON resource limit');
+    const token = tokens[offset++];
+    if (token === '{') {
+      const keys = new Set();
+      while (tokens[offset] !== '}') {
+        const key = JSON.parse(tokens[offset++]);
+        if (keys.has(key)) throw new Error('Duplicate JSON key');
+        keys.add(key);
+        offset++; // colon; syntax was already checked by JSON.parse
+        walk(depth + 1);
+        if (tokens[offset] === ',') offset++;
+      }
+      offset++;
+    } else if (token === '[') {
+      while (tokens[offset] !== ']') {
+        walk(depth + 1);
+        if (tokens[offset] === ',') offset++;
+      }
+      offset++;
+    }
+  }
+  walk(0);
+  return value;
+}
+
+// Only configured URLs are contacted; untrusted documents never choose a fetch URL.
+export async function fetchBytes(url, { maxBytes = 262144, contentType, ...options } = {}) {
   const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`Upstream HTTP ${response.status}`);
+  if (contentType && response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== contentType) {
+    await response.body?.cancel();
+    throw new Error('Unexpected upstream content type');
+  }
   let size = 0;
   const chunks = [];
   for await (const chunk of response.body) {
@@ -9,7 +46,11 @@ export async function fetchJson(url, { maxBytes = 262144, ...options } = {}) {
     if (size > maxBytes) throw new Error('Upstream response too large');
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  return Buffer.concat(chunks);
+}
+
+export async function fetchJson(url, options) {
+  return parseNetworkJson(await fetchBytes(url, options));
 }
 
 export function createIdentityResolver(config, getJson = fetchJson) {

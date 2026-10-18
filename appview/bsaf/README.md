@@ -1,11 +1,13 @@
 # 登録済み発信元のBSAF投稿をHappyViewへ収集
 
 [0019 §5.1](../../protocol/0019-bsaf.md)の既存BSAF収集に対応する。
-**Mosimoへの変換、Nostr/BPv7への再配信、BSAFとしての再投稿はしない。**
+収集と署名付き再配信は別プロセス・別opt-in。collectorだけではMosimoへの変換・投稿はしない。
+任意のpublisherは[0020 wire-v1](../../protocol/0020-wire-v1.md)に従い、既存collector DBからPDSへNostr `EVENT`をpushする。
 
 HappyView 2.16.0の既存SQLite DBを使うNode.js 24の型付きサイドカー。
 HappyView本体をforkせず、投稿レコードとquery scriptの既存保存形式へ接続する。
-独立したDB・HTTPサーバー・著者秘密鍵・管理APIキーは不要。
+collectorには独立したDB・HTTPサーバー・著者秘密鍵・管理APIキーは不要。
+publisherだけが独立したimporter鍵を必要とする。root秘密鍵をオンラインサービスへ置かない。
 
 ## 登録と有効化
 
@@ -34,6 +36,21 @@ services.mosimo-bsaf = {
 - 既存の`dev.oriom.mosimo.getFeed`（target `dev.oriom.mosimo.post`）が必要。
   独自query scriptがある場合は勝手に上書きせず準備処理を失敗させる。
   導入後の管理対象scriptを手動編集した場合も同様。
+
+追加候補の明示例（未デプロイ）:
+
+```nix
+authors = [
+  "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" # @jma-alert-bot.bsky.social（地震・津波・火山の固定5種）
+  "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" # @bsaf-kikikuru-bot.bsky.social（気象の固定23種）
+];
+```
+
+署名再配信は別途 `publisher.selectJmaDefaults` / `publisher.selectKikikuruDefaults` で個別に選択する。
+両方の明示選択で28組。既存JMAプリセットを自動拡張しない。
+[原bot-definition](https://raw.githubusercontent.com/osprey74/bsaf-kikikuru-bot/main/bot-definition.json) のDID・23種別を確認済み。
+固定一覧・custom選択との排他・鍵/証明書の発行手順は [PUBLISHER.md](PUBLISHER.md) を参照。
+気象の優先度は既定1。JMA XMLの復元・地域や警戒レベルの推測・新種別の自動追加は行わない。
 
 これは収集元のローカル許可リストであり、公的機関認証やネットワーク全体のBot登録ではない。
 収集の許可は、0019 §5.2の「Bot DID＋情報種別」の自動再配信許可を意味しない。
@@ -83,7 +100,7 @@ Bot定義の取得、構造化フィルタ、地域の推測、Bot間の重複�
 - rootful HappyView volumeに合わせてrootで動くが、書込範囲はそのvolumeのみ、capabilityは空。
   DBはローカルSQLite専用。先に整合性のあるバックアップを取り、HappyView更新時は隔離試験を実行する。
 - HappyViewの汎用record hooks/labeler/ref索引処理はこの収集経路では実行しない。
-  取り込み後の自動投稿は一切ない。Luaのfail-open record hookを認可境界に使わない。
+  collector自体は取り込み後に投稿しない。Luaのfail-open record hookを認可境界に使わない。
 - 既存query scriptの単件不在はLuaエラーになるため、標準処理の404ではなく非200のscriptエラーを返す。
 
 ## 検証

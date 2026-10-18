@@ -15,7 +15,22 @@ export interface Store extends Session {
   close(): Promise<void>;
 }
 
-export const schema = `
+const trustSchema = `
+CREATE TABLE IF NOT EXISTS trust_snapshots (
+  root_id text PRIMARY KEY NOT NULL, snapshot text NOT NULL
+);
+CREATE TABLE IF NOT EXISTS trust_serials (
+  issuer text NOT NULL, serial text NOT NULL, cert_id text NOT NULL,
+  PRIMARY KEY(issuer, serial)
+);
+CREATE TABLE IF NOT EXISTS trust_serial_conflicts (
+  issuer text NOT NULL, serial text NOT NULL,
+  PRIMARY KEY(issuer, serial),
+  FOREIGN KEY(issuer, serial) REFERENCES trust_serials(issuer, serial)
+);
+`;
+
+export const schema = `${trustSchema}
 CREATE TABLE IF NOT EXISTS events (
   id text PRIMARY KEY, pubkey text NOT NULL, created_at bigint NOT NULL,
   kind int NOT NULL, event jsonb NOT NULL, arrival bigserial UNIQUE NOT NULL
@@ -54,7 +69,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 // ISO UTC text keeps retry ordering and Date parsing identical across backends.
 export const sqliteNow = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-export const sqliteSchema = `
+export const sqliteSchema = `${trustSchema}
 CREATE TABLE IF NOT EXISTS events (
   arrival INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
   pubkey TEXT NOT NULL, created_at INTEGER NOT NULL, kind INTEGER NOT NULL,
