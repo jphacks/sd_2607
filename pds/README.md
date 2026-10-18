@@ -26,7 +26,7 @@ EVENTを保存・REQ配信・peer転送するが、atproto検証job・commit保�
 流さない。構造分類はroot鮮度やimporter DID許可リストに依存しない。不正なBSAF拡張も
 atproto側へfail-closedし、更新前から残るpending/retry jobにも同じ分類を適用する。
 `original`のない通常のBSAFユーザー投稿は従来のatproto経路を維持する。
-既存のcommit/streamは削除・巻き戻ししない。表示側は管理対象feed v2で過去の重複再配信を除外する。
+既存のcommit/streamは削除・巻き戻ししない。AppViewの表示・queryは変更せず、過去レコードも保持する。
 
 SQLiteは**単一物理ノード・永続ローカルディスク専用**。ネットワーク・共有ファイルシステムへ
 置かず、同じ論理PDSを別々のSQLite DBで負荷分散しない。複数物理ノードで同じ論理PDSを

@@ -1,4 +1,4 @@
--- mosimo-bsaf-feed:v2 (managed by appview/bsaf/prepare.mts)
+-- mosimo-bsaf-feed:v1 (managed by appview/bsaf/prepare.mts)
 function handle()
   local limit = tonumber(params.limit or "20")
   local offset = tonumber(params.cursor or "0")
@@ -23,18 +23,6 @@ function handle()
     SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at,
            NULL AS fetched_at, NULL AS source_url
     FROM happyview_records r WHERE r.collection = 'dev.oriom.mosimo.post'
-      AND CASE WHEN json_valid(r.record) THEN
-        NOT EXISTS (
-          SELECT 1 FROM json_each(
-            CASE WHEN json_type(r.record, '$.extensions') = 'array'
-              THEN json_extract(r.record, '$.extensions') ELSE '[]' END
-          ) ext
-          WHERE CASE WHEN ext.type = 'object' THEN
-            json_extract(ext.value, '$.$type') = 'dev.oriom.mosimo.defs#bsafV1'
-            AND json_type(ext.value, '$.original') IS NOT NULL
-          ELSE 0 END
-        )
-      ELSE 0 END
   ]] .. filter .. [[
     UNION ALL
     SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at,

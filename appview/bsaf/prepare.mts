@@ -20,8 +20,6 @@ export function prepare(config: Config): void {
     const script = db.prepare('SELECT body,script_type FROM happyview_scripts WHERE id = ?').get(trigger);
     if (script) {
       const managed = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mosimo_bsaf_installation'").get();
-      // A saved managed v1 body may advance to v2; the live body must still
-      // match that exact saved version, never just a spoofable version marker.
       const previous = managed ? db.prepare('SELECT body FROM mosimo_bsaf_installation WHERE id = 1').get() : undefined;
       if (script.script_type !== 'lua' || script.body !== (previous?.body ?? body)) {
         throw new Error('Refusing to replace an independently edited getFeed script');
@@ -51,5 +49,5 @@ if (import.meta.main) {
   const config: unknown = JSON.parse(readFileSync(process.env.CONFIG_FILE ?? '', 'utf8'));
   validateConfig(config);
   prepare(config);
-  console.log(JSON.stringify({ status: 'prepared', feedVersion: 2, approvedAuthors: config.authors.length }));
+  console.log(JSON.stringify({ status: 'prepared', approvedAuthors: config.authors.length }));
 }
