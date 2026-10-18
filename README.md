@@ -2,6 +2,28 @@
 
 [![いつものアプリがもしもの通信網になる](./assets/mosimo_protocol.png)](https://www.youtube.com/watch?v=piaNsc6ilBI)
 
+
+<div align="center">
+
+  ## 🎉 JPHACKS 2026 受賞結果 🎉
+  ### **🏆 Hack Day (仙台会場)**
+  [![JPHacks 2026](https://img.shields.io/badge/JPHacks%202026-Audience%20Award-gold?style=for-the-badge&logo=rocket)](https://github.com/jphacks/sd_2607)
+  [![三菱重工業株式会社 航空機・飛昇体事業部賞](https://img.shields.io/badge/Sponsor%20Award-三菱重工業株式会社%20航空機・飛昇体事業部-orange?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
+
+  <br/>
+
+  [![Used Skills](https://skillicons.dev/icons?i=kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
+
+</div>
+
+## Live Demo
+**被災地からの投稿を閲覧できるWeb Client**: https://mosimo.oriom.dev
+
+以下は内部的に使っているサーバー
++ **AT Protocol PDS 兼 nostr Relay**: https://pds.oriom.dev
++ **AT Protocol AppView**: https://appview.oriom.dev
+
+
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
 
