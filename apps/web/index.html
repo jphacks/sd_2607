@@ -27,10 +27,20 @@
 <main>
   <header>Mosimo タイムライン</header>
   <div id="feed"></div>
+  <p id="status" class="status" role="status" aria-live="polite">読み込み中…</p>
+  <button id="more" type="button" hidden>以前の投稿を読み込む</button></button>
 </main>
 <script>
 const APPVIEW = new URLSearchParams(location.search).get('appview') || 'https://appview.oriom.dev';
-const FEED = `${APPVIEW}/xrpc/dev.oriom.mosimo.getFeed?limit=50`;
+const FEED = new URL('/xrpc/dev.oriom.mosimo.getFeed', APPVIEW);
+FEED.searchParams.set('limit', '50');
+// A DID/URI filter makes a delayed mesh delivery directly inspectable.
+for (const key of ['did', 'uri']) {
+  const value = new URLSearchParams(location.search).get(key);
+  if (value) FEED.searchParams.set(key, value);
+}
+const status = document.getElementById('status');
+const more = document.getElementById('more');
 const feed = document.getElementById('feed');
 const handles = new Map(); // did -> handle (resolved)
 const lookups = new Map(); // did -> Promise
@@ -41,7 +51,7 @@ const name = did => handles.get(did) || short(did);
 // ponytail: shows the PLC alsoKnownAs handle without the bidirectional DNS/well-known check; add it if handles must be trusted.
 function resolve(did) {
   if (!did.startsWith('did:plc:') || lookups.has(did)) return;
-  lookups.set(did, fetch(`https://plc.directory/${encodeURIComponent(did)}`)
+  lookups.set(did, fetch(`https://plc.directory/${encodeURIComponent(did)}`, { signal: AbortSignal.timeout(10000) })
     .then(r => r.ok ? r.json() : null)
     .then(doc => {
       const aka = doc?.alsoKnownAs?.find(a => a.startsWith('at://'));
@@ -91,6 +101,7 @@ function render(records) {
     meta.append(el('span', 'name'), time);
     const body = el('div', 'body');
     body.append(meta, el('div', 'text', r.text));
+    if (r.$type === 'app.bsky.feed.post') body.append(el('div', 'time', 'BSAF 原投稿（収集元の認証を意味しません）'));
     a.append(avatar, body);
     render.fill(a, did);
     return a;
@@ -103,20 +114,41 @@ render.fill = (a, did) => {
 };
 
 let busy = false;
+let pages = 1;
+more.addEventListener('click', () => { if (!busy) { pages++; load(); } });
 async function load() {
   if (busy) return;
   busy = true;
+  more.disabled = true;
   try {
-    const res = await fetch(FEED);
-    if (!res.ok) throw new Error(res.status);
-    const { records = [] } = await res.json();
-    render(records
-      .filter(r => typeof r.uri === 'string' && typeof r.text === 'string' && typeof r.createdAt === 'string')
-      .sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt)));
+    const records = new Map();
+    const url = new URL(FEED);
+    let cursor;
+    // Re-read visible pages on refresh: do not retain removed records or reuse
+    // an old offset after new mesh deliveries shift the combined feed.
+    for (let page = 0; page < pages; page++) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const rows = data.record ? [data.record] : data.records;
+      if (!Array.isArray(rows)) throw new Error('Invalid feed response');
+      for (const r of rows) {
+        if (r && typeof r.uri === 'string' && typeof r.text === 'string' && typeof r.createdAt === 'string') records.set(r.uri, r);
+      }
+      cursor = data.cursor;
+      if (cursor == null) break;
+      if (typeof cursor !== 'string' || cursor === url.searchParams.get('cursor')) throw new Error('Invalid cursor');
+      url.searchParams.set('cursor', cursor);
+    }
+    // Keep AppView's indexed order: old offline posts can arrive just now.
+    render([...records.values()]);
+    more.hidden = cursor == null;
+    status.textContent = `最終取得 ${new Date().toLocaleTimeString('ja-JP')}（投稿内容の正確性を保証するものではありません）`;
   } catch {
-    if (!feed.querySelector('article')) feed.replaceChildren(el('div', 'status', '読み込めませんでした'));
+    status.textContent = '更新できませんでした。接続を確認してください（表示中の投稿は前回取得分です）';
   } finally {
     busy = false;
+    more.disabled = false;
   }
 }
 load();
