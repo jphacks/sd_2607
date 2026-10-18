@@ -85,7 +85,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 ### 活用した技術
 
-**Nostrで署名付き投稿を受け渡し、AT Protocolでオンラインの公開・閲覧につなぎます。圏外では、BPv7を使って端末間で投稿を保存・中継します。**
+**技術構成: Nostr・AT Protocolによるオンライン公開・閲覧と、BPv7による圏外中継**
 
 | 技術 | Mosimoでの役割 |
 |---|---|
@@ -96,27 +96,25 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 #### API・データ
 
-**Nostr・AT Protocolを投稿の送受信・公開に使い、PLC Directoryで公開鍵と公開先を確認します。**
+**投稿基盤: Nostr・AT Protocolによる送受信・公開と、PLC Directoryによる公開鍵・公開先の確認**
 
 * [Nostr](https://nostr.com/)：署名付き投稿をリレーへ送信・購読。
 * [AT Protocol](https://atproto.com/)：端末で署名したリポジトリをPDSで復元・検証し、`com.atproto.sync` / `com.atproto.repo` のXRPC APIとfirehoseで公開。
 * [PLC Directory](https://plc.directory/)：`did:plc`の登録・解決、署名公開鍵とPDSエンドポイントの確認。
 
-**防災情報は、気象庁XMLをもとにしたBotのBluesky投稿をJetstream経由で収集します。**
+**防災情報の収集: BSAF JMA BotのBluesky投稿のJetstream経由での取得**
 
 * [Bluesky Jetstream](https://github.com/bluesky-social/jetstream)：登録済み発信元の `app.bsky.feed.post` を購読し、`bsaf:v1` タグ付きのBSAF投稿を収集。
 * [BSAF JMA Bot](https://github.com/osprey74/bsaf-jma-bot)：気象庁の地震・津波・火山関連情報をBSAF形式でBlueskyへ投稿する非公式Bot。情報取得元として利用し、Jetstream経由で投稿を収集。
 * [気象庁防災情報XML](https://xml.kishou.go.jp/)：防災情報の原データ。現在はBSAF JMA Botによる投稿を通じて間接的に取得。
 
-**閲覧用には、Mosimo投稿と収集済みBSAF投稿を取得できる独自APIを実装しています。**
+**閲覧API: Mosimo投稿と収集済みBSAF投稿の取得**
 
 * 独自AppView API `dev.oriom.mosimo.getFeed`：Webクライアント向けにタイムラインの投稿を提供。
 
 #### フレームワーク・ライブラリ・モジュール
 
-##### データ形式：署名付き投稿を保持し、交換する
-
-**オンラインではNostrイベントとatprotoリポジトリ、圏外の中継ではCBOR・BPv7を使い、元の署名付き投稿を保持します。**
+**データ形式: Nostr・atprotoとCBOR・BPv7による署名付き投稿の保持・交換**
 
 * Nostrイベント（JSON）：本文・タグ・署名を保持し、atprotoレコードと端末署名済みcommitの復元情報を格納。
 * [CBOR](https://www.rfc-editor.org/rfc/rfc8949) / [Bundle Protocol Version 7（BPv7）](https://www.rfc-editor.org/rfc/rfc9171)：署名付きイベントをコンパクトに符号化し、オフライン中継用のBundleとして転送。
@@ -124,24 +122,20 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 * [DAG-CBOR](https://ipld.io/specs/codecs/dag-cbor/spec/) / [CID](https://github.com/multiformats/cid) / [MST](https://atproto.com/specs/repository) / [CAR](https://ipld.io/specs/transport/car/)：atprotoリポジトリの内容識別・整合性検証・同期。
 * [BSAF（Bluesky Structured Alert Feed）](https://github.com/osprey74/bsaf-protocol)（`bsaf:v1`）：防災情報などを構造化タグ付きのBluesky投稿として扱う規約。原投稿のレコード・タグ・CID・URIを保持して収集。
 
-**仕様草案で扱う防災情報形式**
+**防災情報形式: CAP・EDXL-DE・気象庁XMLによる警報・防災情報の表現**
 
-* [CAP（Common Alerting Protocol）1.2](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html)：警報の内容・対象地域・有効期間・更新取消を表すXML規格。Mosimo投稿への変換と構造化情報の保持を[仕様草案](./protocol/0015-cap.md)で定義。
-* [EDXL-DE（Emergency Data Exchange Language Distribution Element）1.0](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf)：CAPなどの緊急情報を包み、配布先・公開条件・更新取消を表すXML規格。内包情報の取り込みを[仕様草案](./protocol/0016-edxl-de.md)で定義。
-* [気象庁防災情報XML](https://xml.kishou.go.jp/)：地震・津波・火山・気象などの防災情報を記述するXML形式。地震関連電文の構造化情報の保持を[緊急地震速報](./protocol/0017-jma-eew.md)・[地震情報](./protocol/0018-jma-earthquake.md)の仕様草案で定義。
+* [CAP（Common Alerting Protocol）1.2](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html)：警報の内容・対象地域・有効期間・更新取消を表すXML規格。
+* [EDXL-DE（Emergency Data Exchange Language Distribution Element）1.0](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf)：CAPなどの緊急情報を包み、配布先・公開条件・更新取消を表すXML規格。
+* [気象庁防災情報XML](https://xml.kishou.go.jp/)：地震・津波・火山・気象などの防災情報を記述するXML形式。
 
-##### ネットワーク：圏外の端末間通信からオンラインへつなぐ
-
-**BLEや同一LANで端末同士をつなぎ、保存して持ち運ぶ中継と、オンライン時の送受信を組み合わせます。**
+**ネットワーク: BLE・LANによる端末間中継と、HTTPS・WebSocketによるオンライン通信**
 
 * BLE（Bluetooth Low Energy）GATT：Android端末間、およびAndroid・ESP32間の近距離通信。
 * mDNS / DNS-SD（[Android NSD](https://developer.android.com/develop/connectivity/wifi/use-nsd)）＋TCP：同一LAN上のAndroid端末を発見してBundleを交換。
 * [DTN](https://www.rfc-editor.org/rfc/rfc4838)（store-carry-forward）：Bundleを保存して持ち運び、後から接触した端末へ中継。
 * HTTPS / WebSocket：PLC・XRPC APIへのアクセス、Nostrリレー・atproto firehose・Jetstreamとの通信。
 
-##### Androidアプリ：投稿を作成・署名し、中継する
-
-**投稿作成・署名・暗号化保存から、BLE・LANでの中継とオンライン送信までをAndroid端末で担います。**
+**Androidアプリ: 投稿の作成・署名・暗号化保存、BLE・LAN中継、オンライン送信**
 
 * Kotlin（Android / JVM）、Jetpack Compose・Material 3：投稿・中継操作・診断画面。
 * [Kotlin Coroutines](https://github.com/Kotlin/kotlinx.coroutines)：非同期処理。
@@ -151,9 +145,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 * [secp256k1-kmp](https://github.com/ACINQ/secp256k1-kmp)：NostrのBIP-340署名とatprotoのECDSA署名。
 * [Android Keystore](https://developer.android.com/privacy-and-security/keystore) / AES-GCM：鍵・投稿・中継状態の暗号化保存。
 
-##### ESP32：小型機器で保存・中継し、表示・読み上げる
-
-**Android端末から受け取った投稿を小型機器で検証・保存・中継し、画面と音声でも伝えます。**
+**ESP32: Android端末から受け取った投稿の検証・保存・中継と、画面表示・音声読み上げ**
 
 * C++ / [Arduino framework（ESP32）](https://github.com/espressif/arduino-esp32) / [PlatformIO](https://platformio.org/)：ESP32向けファームウェア。
 * [M5Unified](https://github.com/m5stack/M5Unified) / [M5GFX](https://github.com/m5stack/M5GFX)：M5Stackの画面・ボタン・スピーカー制御。
@@ -162,9 +154,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 * [mbedTLS](https://github.com/Mbed-TLS/mbedtls)：署名検証・SHA-256ハッシュ計算。
 * [AquesTalk ESP32（Small辞書版）](https://www.a-quest.com/)：受信メッセージの音声読み上げ。
 
-##### Nostrリレー兼PDS：投稿を収集・検証・公開する
-
-**Nostrで受け取った投稿から端末署名済みのatprotoデータを復元・検証し、APIとfirehoseで公開します。**
+**Nostrリレー兼PDS: Nostrで受け取った端末署名済みatprotoデータの復元・検証と、API・firehoseでの公開**
 
 * Node.js 24 / JavaScript・TypeScript：独自PDSと内蔵Nostrリレー（[`pds/`](./pds/)）。
 * [`nostr-tools`](https://github.com/nbd-wtf/nostr-tools) / [`ws`](https://github.com/websockets/ws)：Nostrイベントの署名検証とWebSocket通信。
@@ -172,34 +162,26 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 * [`@ipld/dag-cbor`](https://github.com/ipld/js-dag-cbor) / [`multiformats`](https://github.com/multiformats/js-multiformats)：DAG-CBORとCIDの処理。
 * SQLite（[`node:sqlite`](https://nodejs.org/api/sqlite.html)）/ PostgreSQL（[`pg`](https://node-postgres.com/)）：イベント・リポジトリ・配信履歴の保存。
 
-##### AppView：投稿を索引化し、フィードを提供する
-
-**HappyViewで投稿を索引化し、Mosimo投稿と収集済みBSAF投稿を同じフィードから取得できるようにします。**
+**AppView: HappyViewによる投稿の索引化と、Mosimo・BSAF投稿の統合フィードの提供**
 
 * [HappyView](https://happyview.dev/) 2.16.0 / SQLite：AT ProtocolのAppViewとして投稿を索引化・配信（[`appview/happyview/`](./appview/happyview/)）。
 * Node.js 24 / TypeScript / [`ws`](https://github.com/websockets/ws)：JetstreamからBSAF投稿を収集するサイドカー（[`appview/bsaf/`](./appview/bsaf/)）。
 * [`@atproto/lex-cbor`](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-cbor) / [`@atproto/lex-data`](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-data)：収集したレコードのCID整合性確認。
 * Lua：HappyViewのクエリスクリプトでMosimo・BSAFの統合フィードを提供。
 
-##### Webクライアント：投稿を取得・表示する
-
-**AppViewのフィードを取得し、投稿と発信者のハンドルをタイムラインに表示します。**
+**Webクライアント: AppViewから取得した投稿と発信者ハンドルのタイムライン表示**
 
 * HTML / CSS / JavaScript：タイムライン画面（[`apps/web/index.html`](./apps/web/index.html)）。
 * Fetch API / DOM API：AppViewから投稿を取得・表示し、PLC Directoryから表示用ハンドルを解決。
 
-##### サーバー運用：構成とサービスを管理する
-
-**NixOSでサーバー構成を宣言的に管理し、サービスの実行とHTTPS公開を支えます。**
+**サーバー運用: NixOSによる構成の宣言的管理と、サービス実行・HTTPS公開**
 
 以前から個人開発していた運用基盤 [podman-cluster-config](https://github.com/oriom-dev/podman-cluster-config) を活用しています。
 
 * [NixOS](https://nixos.org/) / [Nix](https://nix.dev/)：OS設定・サービス・パッケージの構成を宣言的に定義。
 * [systemd](https://systemd.io/) / [Caddy](https://caddyserver.com/) / [Podman](https://podman.io/)：サービス管理・HTTPS公開・HappyViewコンテナの実行。
 
-#### デバイス
-
-**Androidスマートフォン・M5Stack・VPSを使い、投稿の作成・圏外中継・オンライン公開・閲覧をつなぐデモを構成しています。**
+**デバイス: Androidスマートフォン・M5Stack・VPSによる投稿作成・圏外中継・オンライン公開・閲覧のデモ**
 
 * Androidスマートフォン（約4台）：投稿の作成・表示、BLE・LAN中継、オンライン時のNostrリレーへの送信。
 * ESP32（M5Stack Basic Development Kit）：Bundleの保存・中継、画面表示、AquesTalkによる音声読み上げ。
