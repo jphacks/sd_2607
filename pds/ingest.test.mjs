@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import http from 'node:http';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { PGlite } from '@electric-sql/pglite';
-import { MST, MemoryBlockstore, readCar } from '@atproto/repo';
+import { MST, MemoryBlockstore, readCar, verifyProofs } from '@atproto/repo';
+import { TID } from '@atproto/common-web';
 import { Secp256k1Keypair, verifySignature } from '@atproto/crypto';
 import * as cbor from '@ipld/dag-cbor';
 import { decodeFirst } from 'cborg';
@@ -18,6 +19,7 @@ import { schema, openSqliteStore, sqliteNow } from './store.mjs';
 import { validateConfig } from './config.mjs';
 import { createIngestion } from './ingest.mjs';
 import { createServer } from './server.mjs';
+import { startNetwork } from './network.mjs';
 
 const namespace = 'mosimo.oriom.dev';
 const collection = 'dev.oriom.mosimo.post';
@@ -34,8 +36,8 @@ const signEvent = (event, key = nostrKey) => finalizeEvent({
 const envelope = event => JSON.parse(JSON.stringify(event));
 
 async function fixture({ index = 0, parent = null, key = repoKey, identity = did,
-  badRoot = false, badSignature = false, author = nostrKey, rev } = {}) {
-  const record = { $type: collection, text: `避難所 ${index}\r\nか\u3099 🏠`,
+  badRoot = false, badSignature = false, author = nostrKey, rev, text } = {}) {
+  const record = { $type: collection, text: text ?? `避難所 ${index}\r\nか\u3099 🏠`,
     createdAt: '2026-10-17T12:34:56.120Z', deliveryExpiresAt: '2026-10-18T12:34:56Z', extensions: [] };
   const path = `${collection}/3jzfcijpj2z2${'234567abcdefghijklmnopqrstuvwxyz'[index]}`;
   const recordBytes = new Uint8Array(cbor.encode(record));
@@ -57,6 +59,34 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
   ] }, author);
   return { event, record, path, recordBytes, recordCid, commit, commitBytes, commitCid,
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
+}
+
+async function assertRepositoryCar(bytes, source, { proof = false } = {}) {
+  const car = await readCar(bytes);
+  assert.deepEqual(car.roots.map(cid => cid.toString()), [source.commitCid.toString()]);
+  for (const { cid, bytes } of car.blocks.entries()) assert.ok((await cidFor(bytes)).equals(cid));
+  assert.deepEqual(Buffer.from(car.blocks.get(source.commitCid)), Buffer.from(source.commitBytes));
+  const { sig, ...unsigned } = cbor.decode(car.blocks.get(source.commitCid));
+  assert.equal(await verifySignature(repoKey.did(), cbor.encode(unsigned), sig), true);
+  const storage = new MemoryBlockstore();
+  for (const { cid, bytes } of car.blocks.entries()) await storage.putBlock(cid, bytes);
+  const tree = MST.load(storage, unsigned.data);
+  if (proof) {
+    const claim = { collection, rkey: source.path.split('/')[1], cid: source.recordCid };
+    assert.deepEqual(await verifyProofs(bytes, [claim], did, repoKey.did()), { verified: [claim], unverified: [] });
+    // Covering proofs must also support removing the create to recover the previous root.
+    const previous = await tree.delete(source.path);
+    let expected = await MST.create(new MemoryBlockstore());
+    for (const entry of source.entries.filter(entry => entry.key !== source.path)) expected = await expected.add(entry.key, entry.value);
+    assert.ok((await previous.getPointer()).equals(await expected.getPointer()));
+    assert.deepEqual(Buffer.from(car.blocks.get(source.recordCid)), Buffer.from(source.recordBytes));
+    return;
+  }
+  const entries = await tree.list();
+  assert.deepEqual(entries.map(({ key, value }) => [key, value.toString()]),
+    source.entries.map(({ key, value }) => [key, value.toString()]).sort(([a], [b]) => a.localeCompare(b)));
+  for (const { value } of entries) assert.equal(cbor.decode(car.blocks.get(value)).$type, collection);
+  assert.deepEqual(Buffer.from(car.blocks.get(source.recordCid)), Buffer.from(source.recordBytes));
 }
 
 for (const dialect of ['postgres', 'sqlite']) describe(dialect, () => {
@@ -251,6 +281,64 @@ test('out-of-order child retries, then a verified base immediately unblocks it',
   assert.equal((await head()).head, third.commitCid.toString());
 });
 
+test('missing-base retries survive reopen and resume a gap-free byte-exact firehose', async t => {
+  const first = await fixture();
+  const second = await fixture({ index: 1, parent: first });
+  const third = await fixture({ index: 2, parent: second });
+  assert.equal((await process(third)).status, 'retry');
+  assert.equal((await process(second)).status, 'retry');
+  const pending = await rows('SELECT * FROM jobs ORDER BY event_id');
+  await db.close();
+  await openDatabase();
+  ingestion = createIngestion({ config, store, resolveIdentity });
+  assert.deepEqual(await rows('SELECT * FROM jobs ORDER BY event_id'), pending);
+  assert.equal((await ingestion.ingest(third.event)).duplicate, true);
+  assert.equal((await process(first)).status, 'validated');
+  for (let count = 0; count < 5 && await ingestion.processOne(); count++) {}
+  for (const source of [first, second, third]) assert.equal((await job(source)).status, 'validated');
+  assert.equal((await head()).head, third.commitCid.toString());
+  const saved = await rows('SELECT * FROM streams ORDER BY seq');
+  assert.deepEqual(saved.map(row => Number(row.seq)), [1, 2, 3, 4, 5]);
+  await db.close();
+  await openDatabase();
+  ingestion = createIngestion({ config, store, resolveIdentity });
+  assert.deepEqual(await rows('SELECT * FROM streams ORDER BY seq'), saved);
+  const app = createServer({ config: { ...config, pollIntervalMs: 10, maxResults: 2 }, store,
+    ingest: ingestion.ingest, resolveIdentity });
+  t.after(() => app.close());
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=2');
+  for (const [index, source] of [first, second, third].entries()) {
+    const frame = await client.next();
+    assert.deepEqual(frame, Buffer.from(saved[index + 2].frame));
+    const [header, body] = decodeFirst(frame, cbor.decodeOptions);
+    assert.deepEqual(header, { op: 1, t: '#commit' });
+    assert.equal(cbor.decode(body).seq, index + 3);
+    await assertRepositoryCar(cbor.decode(body).blocks, source, { proof: true });
+  }
+  const fourth = await fixture({ index: 3, parent: third });
+  assert.equal((await process(fourth)).status, 'validated');
+  const [header, body] = decodeFirst(await client.next(), cbor.decodeOptions);
+  assert.deepEqual(header, { op: 1, t: '#commit' });
+  assert.equal(cbor.decode(body).seq, 6);
+  await assertRepositoryCar(cbor.decode(body).blocks, fourth, { proof: true });
+  assert.deepEqual((await rows('SELECT seq FROM streams ORDER BY seq')).map(row => Number(row.seq)), [1, 2, 3, 4, 5, 6]);
+});
+
+test('re-signed changed content cannot bypass the signed MST and changed commit bytes cannot bypass its signature', async () => {
+  const source = await fixture();
+  const content = { ...source, event: signEvent({ ...source.event, content: 'changed but validly Nostr-signed' }) };
+  assert.equal((await process(content)).status, 'invalid');
+  assert.match((await job(content)).error, /MST root/);
+  const commitBytes = cbor.encode({ ...source.commit, rev: '3jzfcijpj2z23' });
+  const commit = { ...source, event: signEvent({ ...source.event,
+    tags: source.event.tags.map(tag => tag[0] === `${namespace}:commit` ? [tag[0], b64(commitBytes)] : tag) }) };
+  assert.equal((await process(commit)).status, 'retry');
+  assert.match((await job(commit)).error, /Signature\/key state/);
+  for (const table of ['commits', 'blocks', 'repos', 'streams']) assert.deepEqual(await rows(`SELECT * FROM ${table}`), []);
+});
+
 test('identity failures and bad repository signatures retry without canonical state or blocks', async () => {
   const first = await fixture();
   resolutionError = new Error('offline');
@@ -376,6 +464,7 @@ test('real SQL-backed server routes serve complete repository data and isolate g
   });
   const repo = await request('com.atproto.sync.getRepo', { did });
   assert.equal(repo.status, 200);
+  await assertRepositoryCar(repo.bytes, second);
   assert.deepEqual(Buffer.from((await readCar(repo.bytes)).blocks.get(first.recordCid)), Buffer.from(first.recordBytes));
   const record = await request('com.atproto.repo.getRecord', { repo: did, collection, rkey: first.path.split('/')[1] });
   assert.equal(record.status, 200);
@@ -419,6 +508,65 @@ async function connect(t, app, path = '/', host = 'alpha.example') {
     }),
   };
 }
+
+test('real relay EVENT acknowledgement is separate from repository validation and rejects arbitrary kinds', async t => {
+  const app = createServer({ config, store, ingest: ingestion.ingest, resolveIdentity });
+  t.after(() => app.close());
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  const client = await connect(t, app);
+  for (const kind of [0, 2, 7, 30023]) {
+    const event = signEvent({ kind, content: `kind ${kind}` });
+    client.send(['EVENT', event]);
+    const ack = await client.next();
+    assert.deepEqual(ack.slice(0, 3), ['OK', event.id, false]);
+    assert.match(ack[3], /kind 1 or 5/);
+  }
+  assert.deepEqual(await rows('SELECT * FROM events'), []);
+  const source = await fixture({ badRoot: true });
+  client.send(['EVENT', source.event]);
+  const ack = await client.next();
+  assert.deepEqual(ack.slice(0, 3), ['OK', source.event.id, true]);
+  assert.match(ack[3], /asynchronous/);
+  assert.equal((await job(source)).status, 'pending');
+  assert.equal(await head(), undefined);
+  assert.equal(await ingestion.processOne(), true);
+  assert.equal((await job(source)).status, 'invalid');
+  assert.equal(await head(), undefined);
+  assert.deepEqual(await rows('SELECT * FROM streams'), []);
+});
+
+test('configured upstream WebSocket feeds signed events into real SQL ingestion and repository reconstruction', { timeout: 10000 }, async t => {
+  const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(upstream, 'listening');
+  t.after(async () => {
+    for (const socket of upstream.clients) socket.terminate();
+    await new Promise(resolve => upstream.close(resolve));
+  });
+  const connected = once(upstream, 'connection');
+  const delivered = Promise.withResolvers();
+  const network = startNetwork({ config: { ...config, peers: [],
+    relays: [`ws://127.0.0.1:${upstream.address().port}`] }, store,
+    ingest: async event => {
+      try { delivered.resolve(await ingestion.ingest(event)); }
+      catch (error) { delivered.reject(error); throw error; }
+    } });
+  t.after(() => network.close());
+  const [socket] = await connected;
+  const [request] = await once(socket, 'message', { signal: AbortSignal.timeout(5000) });
+  assert.deepEqual(JSON.parse(request.toString()), ['REQ', 'mosimo',
+    { kinds: [1], '#t': [namespace] }, { kinds: [5] }]);
+  const source = await fixture();
+  socket.send(JSON.stringify(['EVENT', 'mosimo', source.event]));
+  assert.equal((await delivered.promise).accepted, true);
+  assert.deepEqual((await rows('SELECT event FROM events'))[0].event, envelope(source.event));
+  assert.equal((await job(source)).status, 'pending');
+  assert.equal(await ingestion.processOne(), true);
+  assert.equal((await job(source)).status, 'validated');
+  assert.equal((await head()).head, source.commitCid.toString());
+  await assertRepositoryCar((await rows('SELECT car FROM commits'))[0].car, source);
+  await network.close();
+});
 
 test('real Nostr history SQL applies tag filters and only original-author deletions hide posts', async t => {
   const source = await fixture();
@@ -477,8 +625,13 @@ test('SQL-backed subscribeRepos replays persisted bytes and maintains independen
   t.after(() => app.close());
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
-  const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
-  for (const row of saved) assert.deepEqual(await client.next(), Buffer.from(row.frame));
+  // No cursor and explicit zero both replay the persisted stream from sequence zero.
+  const client = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos');
+  const explicitZero = await connect(t, app, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
+  for (const row of saved) {
+    assert.deepEqual(await client.next(), Buffer.from(row.frame));
+    assert.deepEqual(await explicitZero.next(), Buffer.from(row.frame));
+  }
   identityEndpoint = 'https://alpha.example';
   const second = await fixture({ index: 12, parent: first });
   await process(second);
@@ -487,6 +640,84 @@ test('SQL-backed subscribeRepos replays persisted bytes and maintains independen
   const [header, bodyBytes] = decodeFirst(frame, cbor.decodeOptions);
   assert.deepEqual(header, { op: 1, t: '#commit' });
   assert.ok(cbor.decode(bodyBytes).commit.equals(second.commitCid));
+});
+
+test('full snapshots above 900KB retain all records while publishing compact nonempty commit proofs', async () => {
+  let source;
+  for (let index = 0; index < 14; index++) {
+    source = await fixture({ index, parent: source, text: `${index}:` + 'x'.repeat(72_000) });
+    assert.ok(Buffer.byteLength(JSON.stringify(source.event)) < config.maxEventBytes);
+    assert.equal((await process(source)).status, 'validated');
+  }
+  const saved = (await rows('SELECT * FROM commits WHERE cid=$1', [source.commitCid.toString()]))[0];
+  assert.ok(saved.car.length > 900_000);
+  await assertRepositoryCar(saved.car, source);
+  const stream = (await rows('SELECT frame FROM streams ORDER BY seq DESC LIMIT 1'))[0].frame;
+  assert.ok(stream.length <= config.maxBufferedBytes);
+  const [header, bodyBytes] = decodeFirst(stream, cbor.decodeOptions);
+  const body = cbor.decode(bodyBytes);
+  assert.equal(header.t, '#commit');
+  assert.equal(body.tooBig, false);
+  assert.ok(body.blocks.length > 0 && body.blocks.length < 100_000);
+  assert.deepEqual(body.ops, [{ action: 'create', path: source.path, cid: source.recordCid }]);
+  await assertRepositoryCar(body.blocks, source, { proof: true });
+  const full = await readCar(saved.car);
+  const storage = new MemoryBlockstore(full.blocks);
+  const previousRoot = await MST.load(storage, source.commit.data).delete(source.path);
+  assert.ok(body.prevData.equals(await previousRoot.getPointer()));
+});
+
+for (const offset of [-365 * 24 * 3600_000, 0, 300_000]) {
+  test(`revision time offset ${offset}ms is tolerated without rewriting signed bytes`, async () => {
+    const now = Date.UTC(2026, 9, 18);
+    ingestion = createIngestion({ config, store, resolveIdentity, clock: () => now });
+    const source = await fixture({ rev: TID.fromTime((now + offset) * 1000, 0).toString() });
+    assert.equal((await process(source)).status, 'validated');
+    assert.equal((await head()).head, source.commitCid.toString());
+    const saved = (await rows('SELECT commit_bytes FROM commits'))[0];
+    assert.deepEqual(Buffer.from(saved.commit_bytes), Buffer.from(source.commitBytes));
+  });
+}
+
+test('future revision retries without repository writes and becomes valid at the five-minute boundary', async () => {
+  let now = Date.UTC(2026, 9, 18);
+  const rev = TID.fromTime((now + 300_000) * 1000 + 1, 0).toString();
+  ingestion = createIngestion({ config, store, resolveIdentity, clock: () => now });
+  const source = await fixture({ rev });
+  const before = Date.now();
+  const pending = await process(source);
+  assert.equal(pending.status, 'retry');
+  assert.match(pending.error, /Future revision/);
+  assert.equal(pending.attempts, 1);
+  assert.ok(new Date(pending.next_attempt).getTime() >= before);
+  assert.ok(new Date(pending.next_attempt).getTime() <= Date.now() + 3600_000);
+  for (const table of ['commits', 'blocks', 'repo_blocks', 'repos', 'streams', 'group_sequences']) {
+    assert.deepEqual(await rows(`SELECT * FROM ${table}`), []);
+  }
+  assert.deepEqual((await rows('SELECT event FROM events'))[0].event, envelope(source.event));
+  now += 1;
+  await store.query(`UPDATE jobs SET next_attempt=${dialect === 'sqlite' ? sqliteNow : 'now()'} WHERE event_id=$1`, [source.event.id]);
+  assert.equal(await ingestion.processOne(), true);
+  assert.equal((await job(source)).status, 'validated');
+  assert.equal((await head()).head, source.commitCid.toString());
+  const saved = (await rows('SELECT commit_bytes FROM commits'))[0];
+  assert.deepEqual(Buffer.from(saved.commit_bytes), Buffer.from(source.commitBytes));
+});
+
+test('configured frame budget triggers sync rather than publishing an undeliverable commit', async () => {
+  config.maxBufferedBytes = 1500;
+  const source = await fixture({ text: 'x'.repeat(5000) });
+  assert.equal((await process(source)).status, 'validated');
+  const saved = await rows('SELECT frame FROM streams ORDER BY seq');
+  assert.ok(saved.every(row => row.frame.length <= config.maxBufferedBytes));
+  const [header, bytes] = decodeFirst(saved[2].frame, cbor.decodeOptions);
+  assert.equal(header.t, '#sync');
+  const body = cbor.decode(bytes);
+  assert.deepEqual(Object.keys(body).sort(), ['blocks', 'did', 'rev', 'seq', 'time']);
+  const car = await readCar(body.blocks);
+  assert.equal(car.blocks.size, 1);
+  assert.deepEqual(Buffer.from(car.blocks.get(source.commitCid)), Buffer.from(source.commitBytes));
+  await assertRepositoryCar((await rows('SELECT car FROM commits'))[0].car, source);
 });
 
 test('processing errors roll back commit, blocks, streams, head and job status atomically', async () => {

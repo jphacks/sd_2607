@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mosimo タイムライン</title>
+<style>
+  :root { --bg: #fff; --fg: #0b0f14; --sub: #66788a; --line: #e5e9ee; --accent: #0085ff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161e27; --fg: #f1f3f5; --sub: #8c9eb2; --line: #2e4052; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  main { max-width: 600px; margin: 0 auto; min-height: 100vh; border-inline: 1px solid var(--line); }
+  header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); padding: 14px 16px; font-weight: 700; font-size: 18px; }
+  article { display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .avatar { flex: none; width: 42px; height: 42px; border-radius: 50%; color: #fff; display: grid; place-items: center; font-weight: 700; }
+  .body { min-width: 0; flex: 1; }
+  .meta { display: flex; gap: 6px; white-space: nowrap; }
+  .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+  .time { color: var(--sub); }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+  .status { color: var(--sub); text-align: center; padding: 24px 16px; }
+</style>
+</head>
+<body>
+<main>
+  <header>Mosimo タイムライン</header>
+  <div id="feed"></div>
+</main>
+<script>
+const APPVIEW = new URLSearchParams(location.search).get('appview') || 'https://appview.oriom.dev';
+const FEED = `${APPVIEW}/xrpc/dev.oriom.mosimo.getFeed?limit=50`;
+const feed = document.getElementById('feed');
+const handles = new Map(); // did -> handle (resolved)
+const lookups = new Map(); // did -> Promise
+
+const short = did => did.length > 20 ? did.slice(0, 16) + '…' : did;
+const name = did => handles.get(did) || short(did);
+
+// ponytail: shows the PLC alsoKnownAs handle without the bidirectional DNS/well-known check; add it if handles must be trusted.
+function resolve(did) {
+  if (!did.startsWith('did:plc:') || lookups.has(did)) return;
+  lookups.set(did, fetch(`https://plc.directory/${encodeURIComponent(did)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(doc => {
+      const aka = doc?.alsoKnownAs?.find(a => a.startsWith('at://'));
+      if (!aka) return;
+      handles.set(did, '@' + aka.slice(5));
+      for (const el of feed.querySelectorAll('[data-did]')) {
+        if (el.dataset.did === did) render.fill(el, did);
+      }
+    })
+    .catch(() => {}));
+}
+
+function color(did) {
+  let h = 0;
+  for (const c of did) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360} 55% 50%)`;
+}
+
+function rel(s) {
+  const sec = (Date.now() - Date.parse(s)) / 1000;
+  if (!(sec >= 0)) return '';
+  if (sec < 60) return `${Math.floor(sec)}秒`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}分`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}時間`;
+  return new Date(s).toLocaleDateString('ja-JP');
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function render(records) {
+  if (!records.length) return feed.replaceChildren(el('div', 'status', '投稿はまだありません'));
+  feed.replaceChildren(...records.map(r => {
+    const did = r.uri.split('/')[2] || '';
+    resolve(did);
+    const a = el('article');
+    a.dataset.did = did;
+    const avatar = el('div', 'avatar');
+    avatar.style.background = color(did);
+    const time = el('span', 'time', rel(r.createdAt));
+    time.title = r.createdAt;
+    const meta = el('div', 'meta');
+    meta.append(el('span', 'name'), time);
+    const body = el('div', 'body');
+    body.append(meta, el('div', 'text', r.text));
+    a.append(avatar, body);
+    render.fill(a, did);
+    return a;
+  }));
+}
+render.fill = (a, did) => {
+  const n = name(did);
+  a.querySelector('.name').textContent = n;
+  a.querySelector('.avatar').textContent = n.replace(/^@|^did:plc:/, '').charAt(0).toUpperCase();
+};
+
+let busy = false;
+async function load() {
+  if (busy) return;
+  busy = true;
+  try {
+    const res = await fetch(FEED);
+    if (!res.ok) throw new Error(res.status);
+    const { records = [] } = await res.json();
+    render(records
+      .filter(r => typeof r.uri === 'string' && typeof r.text === 'string' && typeof r.createdAt === 'string')
+      .sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt)));
+  } catch {
+    if (!feed.querySelector('article')) feed.replaceChildren(el('div', 'status', '読み込めませんでした'));
+  } finally {
+    busy = false;
+  }
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

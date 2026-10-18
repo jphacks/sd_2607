@@ -34,15 +34,20 @@ SQLiteは**単一物理ノード・永続ローカルディスク専用**。ネ�
 - NIP-09: 著者一致のevent ID削除要求を履歴・ライブ・peer取得で抑止し、再投入も拒否。
   kind 5自体は削除しない。atprotoの削除commitをサーバー側で捏造しない。
 - Hostで選択する論理グループの`com.atproto.sync.subscribeRepos`:
-  CBORのidentity/account/commitイベント、永続seq、cursor再送、遅い購読者の切断。
+  CBORのidentity/account/commit/syncイベント、永続seq、cursor再送、遅い購読者の切断。
+    cursor省略時は永続履歴の先頭から再送し、初回Relayの既存repo発見にも使う。
 - `com.atproto.sync`: `listRepos`, `getRepo`, `getCheckout`, `getHead`, `getLatestCommit`,
   `getRepoStatus`, `getBlocks`, `getRecord`, `listBlobs`, `getBlob`。
 - `com.atproto.repo`: `describeRepo`, `getRecord`, `listRecords`。
+- `com.atproto.server.describeServer`と`/.well-known/did.json`: 論理PDSのサービスDIDとendpoint。
 - `/internal/notify`と`/internal/events/<event-id>`: Bearer認証必須の実装固有peer API。
 - `/health`: プロセスの生存確認。
 
-CARは公式ライブラリで生成し、元commit/CID/rev/署名を維持する。同期用CARにはMSTと
-過去レコードも含める。大きな更新は標準`tooBig`イベントとgetRepoによる再同期へ誘導する。
+CARは公式ライブラリで生成し、元commit/CID/rev/署名を維持する。getRepoは完全CAR、
+通常のfirehoseは変更レコードとMST covering proofを含む差分CARを返す。
+2,000,000 bytes・200 opsまたは送信フレーム上限を超える更新は、空blocksの`tooBig`ではなく
+署名済みcommit CAR付き`#sync`で通知する。完全データはgetRepoから取得する。
+現在時刻より5分超先のrevは署名を書き換えず保留・再試行し、head/streamへ公開しない。
 stream履歴は現状全保持であり、独自の履歴切り詰め・欠損の隠蔽を行わない。
 
 ## 起動とテスト
@@ -74,6 +79,7 @@ SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`Me
 | `identity.mjs` | 固定PLC DirectoryからのDID解決。任意URLへアクセスしない |
 | `store.mts` / `store.mjs` | SQLite/PostgreSQL接続、スキーマ、トランザクション。Node.js 24のネイティブ型除去で実行 |
 | `ingest.mjs` | 受理、削除要求、復元ジョブ、公開head・firehose |
+| `sync.mts` | covering proof、上限内のcommit/syncフレーム生成、未来rev判定 |
 | `server.mjs` | Nostrリレー、標準XRPC、firehose、peer受信 |
 | `network.mjs` | 外部リレー収集、peer通知・取得・再試行 |
 | `config.mjs` / `main.mjs` | 設定検証、起動・終了 |
@@ -81,8 +87,10 @@ SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`Me
 ## 現時点の境界
 
 これはドラフトで合意された**公開テキスト・create専用プロファイル**の実装であり、
-一般の書き込み可能なBluesky PDS一式ではない。外部同期は標準API/データ形式を使うが、
-**実atproto Relayでの取り込み適合試験は未実施**。完全な互換性を確認済みとは主張しない。
+一般の書き込み可能なBluesky PDS一式ではない。2026-10-18の修正後、
+**実Relay `bsky.network`への登録・既存repo取り込み・新規commit中継を確認した**。
+全機能・全条件での完全な互換性を確認済みとは主張しない。
+kind 1/5以外のNostrイベントは拒否するため、汎用Nostrリレーでもない。
 
 - 本文を持つkind 1からの復元のみ。外部クライアントのcreateRecord/applyWrites、
   セッション/OAuth、メディア・blobの保存は提供しない。listBlobsは空、getBlobはBlobNotFound。
@@ -103,10 +111,14 @@ SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`Me
 - サイズ・購読・送信待機・接続数に上限はあるが、匿名投稿のレート制限やネットワークごとの
   濫用対策はCaddy/ネットワーク側にも設ける。削除は配信抑止であり、DBからの物理消去ではない。
 
-検証状況（既存のエージェント実施記録）: WSL NixOSでパッケージ・systemd unitのビルド、
-Windows/Node.js 24でランタイム確認・テストが成功している。実VPSはSSHホスト鍵の不一致で
-デプロイを阻まれており、本番稼働・低メモリ性能・負荷試験を完了したという意味ではない。
-詳細は[deployment.md](deployment.md#検証済み範囲と残る作業)を参照。
+2026-10-18、本番VPS・実PLC Directory・Damusを使い、8件の署名済みcommit復元、
+MST/CAR/firehose、順序逆転、外部履歴・ライブ収集、サービス再起動後の保持を検証した。
+初回検証時のRelay登録拒否は、その後の修正で解消。追加テスト投稿を含め9件のcommit、
+cursor省略の初期再送、切断再開、差分CARと完全getRepoを確認し、新規commitを実Relayでも受信した。
+ローカル133テスト・型チェックと、固定Indigoのcommit 41件/sync 4件の公式検証が成功。
+負荷試験と公開Relayでの大容量syncのend-to-end試験は未実施。
+初回の[本番動作検証報告](../docs/pds-production-verification-2026-10-18.md)と、
+修正後の[Relay互換修正・検証報告](../docs/research/pds-relay-fixes-2026-10-18.md)を参照。
 
 プロトコル根拠: [リポジトリモデル](../protocol/0001-repository-model.md)、
 [論理PDS](../protocol/0006-logical-pds.md)、[Nostrリレー](../protocol/0007-nostr-relay-profile.md)、
