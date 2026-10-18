@@ -137,18 +137,7 @@ private fun Demo(mesh: MeshCoordinator) {
                 }, style = MaterialTheme.typography.bodySmall)
                 Text("OS の省電力・強制停止時の即時配送は保証しません。ws:// は暗号化されません。", style = MaterialTheme.typography.bodySmall)
             }
-            item {
-                Text("公的情報のオンライン取得（認可された転載者のみ mesh 投入）", style = MaterialTheme.typography.titleSmall)
-                Text(state.publicStatus, style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = state.ready && !state.publicBusy, onClick = mesh::requestPublicInformation) {
-                        Text(if (state.publicBusy) "取得中…" else "公的情報を取得")
-                    }
-                    TextButton(enabled = state.ready, onClick = mesh::reloadPublicConfig) { Text("公開設定を再読込") }
-                }
-                Text("Bot DID/type の選択・root は公開設定 asset。初期状態は空で投入不可。認可は転載者の証言であり原Bot本人の署名・内容の真実性ではありません。", style = MaterialTheme.typography.bodySmall)
-                state.publicResults.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-            }
+
             item {
                 OutlinedTextField(draft, { if (it.toByteArray(Charsets.UTF_8).size <= 2_000) draft = it }, Modifier.fillMaxWidth(), label = { Text("公開する本文（最大 2000 UTF-8 bytes）") }, minLines = 3)
                 Button(enabled = state.ready && draft.isNotBlank() && !sending, onClick = { sending = true; mesh.clearError(); mesh.publish(draft) }) {
