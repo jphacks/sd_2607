@@ -21,6 +21,13 @@
    同一トランザクションで更新。過去commitや分岐でheadを巻き戻さない。
 7. 設定済みpeerへ小さな通知を送り、受信側が必要な元イベントだけを認証付きで取得・再検証。
 
+BSAF再配信は **Nostrのみ**。`bsafV1`拡張の`original`を持つイベントは元の署名付き
+EVENTを保存・REQ配信・peer転送するが、atproto検証job・commit保存・repo更新・firehoseへは
+流さない。構造分類はroot鮮度やimporter DID許可リストに依存しない。不正なBSAF拡張も
+atproto側へfail-closedし、更新前から残るpending/retry jobにも同じ分類を適用する。
+`original`のない通常のBSAFユーザー投稿は従来のatproto経路を維持する。
+既存のcommit/streamは削除・巻き戻ししない。AppViewの表示・queryは変更せず、過去レコードも保持する。
+
 SQLiteは**単一物理ノード・永続ローカルディスク専用**。ネットワーク・共有ファイルシステムへ
 置かず、同じ論理PDSを別々のSQLite DBで負荷分散しない。複数物理ノードで同じ論理PDSを
 提供する場合は共通PostgreSQLを使い、採番を直列化する。公開headとstreamは`group_id`で

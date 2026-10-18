@@ -86,6 +86,9 @@ export function openPublicationStore(path: string) {
     CREATE TABLE IF NOT EXISTS mosimo_bsaf_certificate_serials (issuer TEXT NOT NULL, serial TEXT NOT NULL, cert_id TEXT NOT NULL, PRIMARY KEY(issuer,serial));
     CREATE TABLE IF NOT EXISTS mosimo_bsaf_certificate_equivocations (issuer TEXT NOT NULL, serial TEXT NOT NULL, PRIMARY KEY(issuer,serial));
   `);
+  if (!db.prepare('PRAGMA table_info(mosimo_bsaf_publications)').all().some(column => column.name === 'hold_reason')) {
+    db.exec('ALTER TABLE mosimo_bsaf_publications ADD COLUMN hold_reason TEXT');
+  }
   let busy = false;
   // Security evidence must survive rollback of the publication that discovered it.
   const equivocations = new Map<string, [string, string]>();
@@ -238,7 +241,7 @@ export async function stageNext(store: PublicationStore, config: PublisherConfig
       const previous = db.prepare('SELECT * FROM mosimo_bsaf_repository WHERE id=1').get();
       if (previous && previous.identity !== identity) throw new Error('Repository identity changed; explicit migration required');
       const result = await createImporterEvent({ importer, chain: credentials.chain,
-        text: `${record.text}\n\n[BSAF再配信 / importer: ${importer.did}]\n原投稿著者: ${row.did}\n原投稿: ${row.uri}\n取得経路: AppView/Jetstream（原Bot・気象庁の署名を検証したものではありません）`,
+        text: record.text,
         extensions: [extension], nowSeconds, deliveryExpiresAt: deadline,
         state: previous ? JSON.parse(String(previous.state_json)) : undefined,
                 priority: publicationPriority(config, String(row.did), record.tags) });
@@ -277,6 +280,15 @@ export async function pushOnce(store: PublicationStore, config: PublisherConfig,
   const row = await stageNext(store, config, credentials, roots, nowSeconds);
   if (!row || Number(row.next_attempt) > nowSeconds) return false;
   const event = JSON.parse(String(row.event_json));
+  if (event.content !== JSON.parse(String(row.original_json)).text) {
+    await store.transaction(async () => {
+      store.db.prepare('UPDATE mosimo_bsaf_publications SET hold_reason=? WHERE seq=?')
+        .run('Original text mismatch; operator review required; signed EVENT retained', row.seq);
+    });
+    // Keep this base pending: neither re-sign the original nor skip its evidence chain.
+    if (!row.hold_reason) console.error('{"status":"publisher-held","reason":"original-text-mismatch"}');
+    return false;
+  }
   // Recheck freshness, revocation, selection and deadline at the actual send, including retries.
   await store.transaction(() => verifyPublicInformation(event, { roots, snapshots: snapshotStore(store, roots, nowSeconds), nowSeconds, selection: config.selection }));
   const accepted = await send(config.relayUrl, event, signal);

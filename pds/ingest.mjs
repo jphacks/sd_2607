@@ -3,7 +3,7 @@ import { sqliteNow } from './store.mjs';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { decodePost, verifyCommit, reconstruct } from './repository.mjs';
+import { decodePost, verifyCommit, reconstruct, isBsafImport } from './repository.mjs';
 import { commitFrame, encodeFrame, futureRevisionDelay } from './sync.mts';
 
 const namespace = 'mosimo.oriom.dev';
@@ -45,7 +45,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
               ON CONFLICT(event_id,pubkey) DO NOTHING`, [tag[1], event.pubkey, event.created_at]);
           }
         }
-      } else if (isPost(event)) {
+      } else if (isPost(event) && !isBsafImport(event)) {
         await tx.query('INSERT INTO jobs(event_id) VALUES($1)', [event.id]);
       }
       if (forward && (isPost(event) || event.kind === 5)) {
@@ -53,7 +53,8 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
           await tx.query('INSERT INTO outbox(peer,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [peer.url, event.id]);
         }
       }
-      return { accepted: true, message: 'stored: repository verification is asynchronous' };
+      return { accepted: true, message: isPost(event) && isBsafImport(event)
+        ? 'stored: Nostr-only BSAF import' : 'stored: repository verification is asynchronous' };
     });
   }
 
@@ -63,6 +64,10 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
         WHERE j.status IN ('pending','retry') AND j.next_attempt <= ${now}
         ORDER BY j.next_attempt ${sqlite ? '' : 'FOR UPDATE OF j SKIP LOCKED'} LIMIT 1`)).rows[0];
       if (!job) return false;
+      if (isBsafImport(job.event)) {
+        await tx.query("UPDATE jobs SET status='invalid',error='Nostr-only BSAF import; retained without atproto publication' WHERE event_id=$1", [job.event_id]);
+        return true;
+      }
       let decoded;
       try { decoded = await decodePost(job.event); }
       catch (error) {
