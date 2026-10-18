@@ -32,6 +32,8 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     private val stored = linkedMapOf<String, StoredBundle>()
     /** Event IDs already accepted by an online relay; such entries are evicted first once they stop forwarding. */
     var relayed: (String) -> Boolean = { false }
+    /** Local retention policy, independent of mesh forwarding eligibility and relay priority. */
+    var canEvict: (StoredBundle) -> Boolean = { true }
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
     private val sendRates = mutableMapOf<String, MutableList<Long>>()
@@ -146,6 +148,9 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         require(unknown.none { it.procV7flags and 0x04 != 0L }) { "unknown block requires bundle deletion" }
         bundle.canonicalBlocks.removeAll { it.blockType !in knownTypes && it.procV7flags and 0x10 != 0L }
         if (stored.containsKey(event.id)) return null
+        val victim = if (stored.size >= MeshPolicy.MAX_ENTRIES)
+            requireNotNull(victim(nowMillis, elapsedMillis)) { "storage capacity reached: all entries protected" }
+        else null
         if (applyRateLimit) {
             rates.values.forEach { samples -> samples.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it } }
             rates.entries.removeAll { it.value.isEmpty() }
@@ -154,16 +159,17 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
             samples.add(elapsedMillis)
         }
         val entry = StoredBundle(event, bundle.cborMarshal(), hop.count, nowMillis, elapsedMillis)
-        if (stored.size >= MeshPolicy.MAX_ENTRIES) stored.remove(victim(nowMillis, elapsedMillis))
+        if (victim != null) stored.remove(victim)
         stored[event.id] = entry
 
         return entry
     }
 
     // ponytail: no per-author fairness; the per-author accept rate is the only flood brake.
-    private fun victim(nowMillis: Long, elapsedMillis: Long): String {
-        val dead = stored.values.filterNot { eligible(it, nowMillis, elapsedMillis) }
-        return (dead.firstOrNull { relayed(it.event.id) } ?: dead.firstOrNull() ?: stored.values.first()).event.id
+    private fun victim(nowMillis: Long, elapsedMillis: Long): String? {
+        val candidates = stored.values.filter { canEvict(it) }
+        val dead = candidates.filterNot { eligible(it, nowMillis, elapsedMillis) }
+        return (dead.firstOrNull { relayed(it.event.id) } ?: dead.firstOrNull() ?: candidates.firstOrNull())?.event?.id
     }
 
     private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {

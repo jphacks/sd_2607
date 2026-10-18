@@ -28,6 +28,19 @@ internal fun nextRelayId(ids: List<String>, lastAttempt: String?, deferred: Map<
     return (ids.drop(start) + ids.take(start)).firstOrNull { now >= (deferred[it] ?: 0L) }
 }
 
+/** Select from the current round-robin position without changing the saved relay order. */
+internal fun nextRelayIndex(relays: List<String>, start: Int, pending: (String) -> List<String>,
+    deferred: Map<String, Map<String, Long>>, retryAt: Map<String, Long>, now: Long): Int? =
+    relays.indices.map { (start + it) % relays.size }.firstOrNull { index ->
+        val relay = relays[index]
+        now >= (retryAt[relay] ?: 0L) && nextRelayId(pending(relay), null, deferred[relay].orEmpty(), now) != null
+    }
+
+internal fun migrateDefaultRelays(relays: List<String>, migrated: Boolean,
+    maxRelays: Int = DiskState.MAX_RELAYS): List<String> =
+    if (!migrated && relays == DiskState.LEGACY_DEFAULT_RELAYS && relays.size < maxRelays)
+        listOf(DiskState.PDS_RELAY) + relays else relays
+
 internal fun onlineRelayAllowed(enabled: Boolean, foreground: Boolean, fatal: Boolean, hasRelay: Boolean,
     serviceRunning: Boolean = false): Boolean = enabled && (foreground || serviceRunning) && !fatal && hasRelay
 

@@ -102,6 +102,47 @@ class MeshEngineTest {
         assertThrows(Exception::class.java) { a.originate(post("rate limited"), now, 0) }
     }
 
+    @Test fun fullStoreSkipsProtectedPostsEvenWhenDeadAndAcceptedByAnotherRelay() {
+        val engine = MeshEngine()
+        val entries = List(MeshPolicy.MAX_ENTRIES) { index ->
+            engine.originate(post("saved $index"), now, index * 60_000L)
+        }
+        val protected = entries.first()
+        val pdsAccepted = entries.drop(1).map { it.event.id }.toSet()
+        engine.relayed = { it == protected.event.id }
+        engine.canEvict = { it.event.pubkey != author.nostrPubkey || it.event.id in pdsAccepted }
+        val added = engine.originate(post("new"), now, MeshPolicy.MAX_RESIDENCE_MILLIS + 1)
+        assertEquals(MeshPolicy.MAX_ENTRIES, engine.entries().size)
+        assertSame(protected, engine.entries().first())
+        assertFalse(engine.entries().any { it.event.id == entries[1].event.id })
+        assertSame(added, engine.entries().last())
+    }
+
+    @Test fun allProtectedRejectsOriginateAndAcceptWithoutChangingStoredPosts() {
+        val engine = MeshEngine()
+        repeat(MeshPolicy.MAX_ENTRIES) { index ->
+            engine.originate(post("saved $index"), now, index * 60_000L)
+        }
+        engine.canEvict = { false }
+        val before = engine.entries()
+        val next = post("capacity test")
+        val elapsed = MeshPolicy.MAX_RESIDENCE_MILLIS + 1
+        repeat(MeshPolicy.PER_AUTHOR_PER_MINUTE + 1) {
+            val error = assertThrows(IllegalArgumentException::class.java) { engine.originate(next, now, elapsed) }
+            assertTrue(error.message.orEmpty().contains("capacity"))
+            assertEquals(before, engine.entries())
+        }
+        val incoming = MeshEngine().originate(next, now, elapsed)
+        assertThrows(IllegalArgumentException::class.java) { engine.accept(incoming.bytes, now, elapsed) }
+        before.zip(engine.entries()).forEach { (expected, actual) -> assertSame(expected, actual) }
+        assertEquals(MeshPolicy.MAX_ENTRIES, engine.entries().size)
+        // A later PDS ACK can release one slot; rejected insertions must not consume the author rate limit.
+        engine.canEvict = { it.event.id == before.first().event.id }
+        assertEquals(next.id, engine.originate(next, now, elapsed).event.id)
+        assertEquals(before.drop(1), engine.entries().dropLast(1))
+        assertEquals(MeshPolicy.MAX_ENTRIES, engine.entries().size)
+    }
+
     @Test fun fullStoreEvictsDeadRelayedEntriesFirstThenOldest() {
         val a = MeshEngine()
         val authors = List(MeshPolicy.MAX_ENTRIES + 2) { Author(SecretKeys.generate(), "https://pds.invalid") }

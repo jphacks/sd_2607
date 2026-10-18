@@ -75,10 +75,10 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var relayReadDeadline = 0L
     private var relayPendingId: String? = null
     private var relayDeadline = 0L
-    private var relayRetryAt = 0L
-    private var relayFailures = 0
-    private val relayDeferred = mutableMapOf<String, Long>()
-    private var relayLastAttempt: String? = null
+    private val relayRetryAt = mutableMapOf<String, Long>()
+    private val relayFailures = mutableMapOf<String, Int>()
+    private val relayDeferred = mutableMapOf<String, MutableMap<String, Long>>()
+    private val relayLastAttempt = mutableMapOf<String, String>()
     private var registrationBusy = false
     private var registrationRetryAt = 0L
     private var registrationFailures = 0
@@ -100,6 +100,11 @@ class MeshCoordinator private constructor(private val context: Context) {
 
     init {
         engine.relayed = { id -> disk?.relayAccepted?.values?.any { id in it } == true }
+        // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
+        engine.canEvict = { entry ->
+            entry.event.pubkey != author?.nostrPubkey ||
+                disk?.relayAccepted?.get(DiskState.PDS_RELAY)?.contains(entry.event.id) == true
+        }
         scope.launch {
             for (action in inbox) {
                 try { action() }
@@ -196,7 +201,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             val post = checkNotNull(author).createPost(text, now(), current.repository)
             try { engine.originate(post.event, now(), elapsed()) }
             catch (_: IllegalArgumentException) {
-                issue("投稿の配送条件・サイズ・発信頻度の制限に達しました。保存・発信はしていません")
+                issue("投稿の保存容量・配送条件・サイズ・発信頻度の制限に達しました。保存・発信はしていません")
                 return@enqueue
             }
             // The repository head is saved before anything leaves the device, so a crash cannot reuse a TID/commit.
@@ -283,21 +288,26 @@ class MeshCoordinator private constructor(private val context: Context) {
         socket = null; socketOpen = false; relayPendingId = null; relayDeadline = 0
     }
     private fun relayFailure() {
-        relayPendingId?.let { relayDeferred[it] = elapsed() + backoff(relayFailures + 1) }
+        val failures = (relayFailures[activeRelay] ?: 0) + 1
+        relayFailures[activeRelay] = failures
+        val retry = elapsed() + backoff(failures)
+        relayPendingId?.let { relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[it] = retry }
+        relayRetryAt[activeRelay] = retry
         closeRelay(graceful = false)
         relayIndex++
-        relayRetryAt = elapsed() + backoff(++relayFailures)
         note("リレー未受理。キューを保持し、次のリレーで再試行")
     }
     private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mndt §6). */
     private fun drainRelay() {
         val current = disk ?: return
-        if (!onlineAllowed() || elapsed() < relayRetryAt || current.relays.isEmpty()) return
+        if (!onlineAllowed() || current.relays.isEmpty()) return
         if (socket == null) {
             val relays = current.relays
-            relayIndex = (0 until relays.size).map { (relayIndex + it) % relays.size }
-                .firstOrNull { pendingFor(relays[it]).isNotEmpty() } ?: (relayIndex % relays.size)
+            relayIndex = nextRelayIndex(relays, relayIndex, { pendingFor(it).map { entry -> entry.event.id } },
+                relayDeferred, relayRetryAt, elapsed())
+                ?: relays.indices.map { (relayIndex + it) % relays.size }
+                    .firstOrNull { elapsed() >= (relayRetryAt[relays[it]] ?: 0L) } ?: return
             activeRelay = relays[relayIndex]
             relaySubscription.clear()
             val gen = ++socketGeneration
@@ -330,19 +340,22 @@ class MeshCoordinator private constructor(private val context: Context) {
             })
             return
         }
+        if (!socketOpen || relayPendingId != null) return
         val pending = pendingFor(activeRelay)
-        if (pending.isEmpty()) {
-            // Done here: move on if another relay still lacks something, otherwise stay subscribed.
-            if (current.relays.any { it != activeRelay && pendingFor(it).isNotEmpty() }) { closeRelay(); relayIndex++ }
+        val deferred = relayDeferred.getOrPut(activeRelay) { mutableMapOf() }
+        val nextId = nextRelayId(pending.map { it.event.id }, relayLastAttempt[activeRelay], deferred, elapsed())
+        if (nextId == null) {
+            // Stay subscribed only while no other relay has a sendable event.
+            if (nextRelayIndex(current.relays, relayIndex + 1, { pendingFor(it).map { entry -> entry.event.id } },
+                    relayDeferred, relayRetryAt, elapsed()) != null) { closeRelay(); relayIndex++ }
             return
         }
-        val nextId = nextRelayId(pending.map { it.event.id }, relayLastAttempt, relayDeferred, elapsed()) ?: return
         val next = pending.first { it.event.id == nextId }
         if (socketOpen && relayPendingId == null) {
             // Forward the signed original; never re-author or add mutable route tags.
-            relayLastAttempt = next.event.id
+            relayLastAttempt[activeRelay] = next.event.id
             val frame = try { relayEventFrame(next.event.toJson()) } catch (_: IllegalArgumentException) {
-                relayDeferred[next.event.id] = elapsed() + 60_000
+                deferred[next.event.id] = elapsed() + 60_000
                 note("リレー形式のサイズ上限を超過。投稿を保持し、後続を優先")
                 return
             }
@@ -369,17 +382,22 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (reply.id != id) return
         relayPendingId = null; relayDeadline = 0
         if (!reply.accepted) {
-            relayDeferred[id] = elapsed() + backoff(++relayFailures)
+            val failures = (relayFailures[activeRelay] ?: 0) + 1
+            relayFailures[activeRelay] = failures
+            relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + backoff(failures)
             note("リレー拒否 ${id.take(8)}（$activeRelay）。投稿は保持")
+            closeRelay(); relayIndex++
             drainRelay()
             return
         }
         val current = checkNotNull(disk)
         current.relayAccepted[activeRelay].orEmpty().let { disk = current.copy(relayAccepted = current.relayAccepted + (activeRelay to it + id)) }
         dirty = true
-        relayFailures = 0
-        relayDeferred.remove(id)
+        relayFailures.remove(activeRelay)
+        relayRetryAt.remove(activeRelay)
+        relayDeferred[activeRelay]?.remove(id)
         note("リレー OK ${id.take(8)}（$activeRelay / PLC・PDS・AppView 完了ではない）")
+        closeRelay(); relayIndex++
         drainRelay()
     }
     private fun configuredHttps(value: String) = value.toHttpUrlOrNull()?.takeIf {
