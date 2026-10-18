@@ -1,10 +1,15 @@
-# サンプル（プロダクト名）
+# Moshimo Protocol
 
-[![IMAGE ALT TEXT HERE](https://jphacks.com/wp-content/uploads/2026/07/IMG_5316.png)](https://www.youtube.com/watch?v=piaNsc6ilBI)
+[![いつものアプリがもしもの通信網になる](./assets/moshimo_protocol.png)](https://www.youtube.com/watch?v=piaNsc6ilBI)
 
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
+
+
 ### 製品説明（具体的な製品の説明）
+
+![構成](./assets/diagram.png)
+
 ### 特長
 #### 1. 特長1
 #### 2. 特長2
