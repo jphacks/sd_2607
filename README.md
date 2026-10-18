@@ -117,7 +117,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 | 技術 | Mosimoでの役割 |
 |---|---|
 | ![Nostr](https://img.shields.io/badge/Nostr-blue?style=flat) | 投稿者の署名付きイベントを保持し、リレーを介して送受信する。 |
-| ![AT Protocol](https://img.shields.io/badge/AT%20Protocol-blue?style=flat) | 端末署名済みリポジトリを復元・検証し、投稿の公開・索引化につなぐ。 |
+| ![AT Protocol](https://img.shields.io/badge/AT%20Protocol-blue?style=flat&logo=bluesky&logoColor=white) | 端末署名済みリポジトリを復元・検証し、投稿の公開・索引化につなぐ。 |
 | ![CBOR](https://img.shields.io/badge/CBOR-blue?style=flat)・![BPv7](https://img.shields.io/badge/BPv7-blue?style=flat) | 署名付きイベントを符号化し、圏外で保存・持ち運び・中継する。 |
 | ![BLE GATT](https://img.shields.io/badge/BLE-GATT-blue?style=flat&logo=bluetooth&logoColor=white)・![mDNS](https://img.shields.io/badge/mDNS-blue?style=flat)／![TCP](https://img.shields.io/badge/TCP-blue?style=flat) | 近くの端末や同一LAN上の端末との通信を担う。 |
 
@@ -126,14 +126,14 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 **投稿基盤: Nostr・AT Protocolによる送受信・公開と、PLC Directoryによる公開鍵・公開先の確認**
 
 * [![Nostr](https://img.shields.io/badge/Nostr-blue?style=flat)](https://nostr.com/)：署名付き投稿をリレーへ送信・購読。
-* [![AT Protocol](https://img.shields.io/badge/AT%20Protocol-blue?style=flat)](https://atproto.com/)：端末で署名したリポジトリをPDSで復元・検証し、`com.atproto.sync` / `com.atproto.repo` のXRPC APIとfirehoseで公開。
-* [![PLC Directory](https://img.shields.io/badge/PLC%20Directory-blue?style=flat)](https://plc.directory/)：`did:plc`の登録・解決、署名公開鍵とPDSエンドポイントの確認。
+* [![AT Protocol](https://img.shields.io/badge/AT%20Protocol-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/)：端末で署名したリポジトリをPDSで復元・検証し、`com.atproto.sync` / `com.atproto.repo` のXRPC APIとfirehoseで公開。
+* [![PLC Directory](https://img.shields.io/badge/PLC%20Directory-blue?style=flat&logo=bluesky&logoColor=white)](https://plc.directory/)：`did:plc`の登録・解決、署名公開鍵とPDSエンドポイントの確認。
 
 **防災情報の収集: BSAF JMA BotのBluesky投稿のJetstream経由での取得**
 
 * [![Bluesky Jetstream](https://img.shields.io/badge/Bluesky%20Jetstream-blue?style=flat&logo=bluesky&logoColor=white)](https://github.com/bluesky-social/jetstream)：登録済み発信元の `app.bsky.feed.post` を購読し、`bsaf:v1` タグ付きのBSAF投稿を収集。
-* [![BSAF JMA Bot](https://img.shields.io/badge/BSAF%20JMA%20Bot-blue?style=flat)](https://github.com/osprey74/bsaf-jma-bot)：気象庁の地震・津波・火山関連情報をBSAF形式でBlueskyへ投稿する非公式Bot。情報取得元として利用し、Jetstream経由で投稿を収集。
-* [![気象庁防災情報XML](https://img.shields.io/badge/%E6%B0%97%E8%B1%A1%E5%BA%81%E9%98%B2%E7%81%BD%E6%83%85%E5%A0%B1XML-blue?style=flat)](https://xml.kishou.go.jp/)：防災情報の原データ。現在はBSAF JMA Botによる投稿を通じて間接的に取得。
+* [![BSAF JMA Bot](https://img.shields.io/badge/BSAF%20JMA%20Bot-blue?style=flat&logo=bluesky&logoColor=white)](https://github.com/osprey74/bsaf-jma-bot)：気象庁の地震・津波・火山関連情報をBSAF形式でBlueskyへ投稿する非公式Bot。情報取得元として利用し、Jetstream経由で投稿を収集。
+* [![気象庁防災情報XML](https://img.shields.io/badge/%E6%B0%97%E8%B1%A1%E5%BA%81%E9%98%B2%E7%81%BD%E6%83%85%E5%A0%B1XML-blue?style=flat&logo=xml&logoColor=white)](https://xml.kishou.go.jp/)：防災情報の原データ。現在はBSAF JMA Botによる投稿を通じて間接的に取得。
 
 **閲覧API: Mosimo投稿と収集済みBSAF投稿の取得**
 
@@ -143,17 +143,17 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 **データ形式: Nostr・atprotoとCBOR・BPv7による署名付き投稿の保持・交換**
 
-* ![Nostrイベント JSON](https://img.shields.io/badge/Nostr%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88-JSON-blue?style=flat)：本文・タグ・署名を保持し、atprotoレコードと端末署名済みcommitの復元情報を格納。
+* ![Nostrイベント JSON](https://img.shields.io/badge/Nostr%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88-JSON-blue?style=flat&logo=json&logoColor=white)：本文・タグ・署名を保持し、atprotoレコードと端末署名済みcommitの復元情報を格納。
 * [![CBOR](https://img.shields.io/badge/CBOR-blue?style=flat)](https://www.rfc-editor.org/rfc/rfc8949) / [![Bundle Protocol Version 7（BPv7）](https://img.shields.io/badge/Bundle%20Protocol-Version%207%EF%BC%88BPv7%EF%BC%89-blue?style=flat)](https://www.rfc-editor.org/rfc/rfc9171)：署名付きイベントをコンパクトに符号化し、オフライン中継用のBundleとして転送。
-* [![AT Protocol Lexicon](https://img.shields.io/badge/AT%20Protocol%20Lexicon-blue?style=flat)](https://atproto.com/specs/lexicon)：独自投稿レコード `dev.oriom.mosimo.post` とフィードAPIを定義。
-* [![DAG-CBOR](https://img.shields.io/badge/DAG--CBOR-blue?style=flat)](https://ipld.io/specs/codecs/dag-cbor/spec/) / [![CID](https://img.shields.io/badge/CID-blue?style=flat)](https://github.com/multiformats/cid) / [![MST](https://img.shields.io/badge/MST-blue?style=flat)](https://atproto.com/specs/repository) / [![CAR](https://img.shields.io/badge/CAR-blue?style=flat)](https://ipld.io/specs/transport/car/)：atprotoリポジトリの内容識別・整合性検証・同期。
-* [![BSAF bsaf:v1](https://img.shields.io/badge/BSAF-bsaf%3Av1-blue?style=flat)](https://github.com/osprey74/bsaf-protocol)（Bluesky Structured Alert Feed）：防災情報などを構造化タグ付きのBluesky投稿として扱う規約。原投稿のレコード・タグ・CID・URIを保持して収集。
+* [![AT Protocol Lexicon](https://img.shields.io/badge/AT%20Protocol%20Lexicon-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/specs/lexicon)：独自投稿レコード `dev.oriom.mosimo.post` とフィードAPIを定義。
+* [![DAG-CBOR](https://img.shields.io/badge/DAG--CBOR-blue?style=flat&logo=ipfs&logoColor=white)](https://ipld.io/specs/codecs/dag-cbor/spec/) / [![CID](https://img.shields.io/badge/CID-blue?style=flat&logo=ipfs&logoColor=white)](https://github.com/multiformats/cid) / [![MST](https://img.shields.io/badge/MST-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/specs/repository) / [![CAR](https://img.shields.io/badge/CAR-blue?style=flat&logo=ipfs&logoColor=white)](https://ipld.io/specs/transport/car/)：atprotoリポジトリの内容識別・整合性検証・同期。
+* [![BSAF bsaf:v1](https://img.shields.io/badge/BSAF-bsaf%3Av1-blue?style=flat&logo=bluesky&logoColor=white)](https://github.com/osprey74/bsaf-protocol)（Bluesky Structured Alert Feed）：防災情報などを構造化タグ付きのBluesky投稿として扱う規約。原投稿のレコード・タグ・CID・URIを保持して収集。
 
 **防災情報形式: CAP・EDXL-DE・気象庁XMLによる警報・防災情報の表現**
 
-* [![CAP 1.2](https://img.shields.io/badge/CAP-1.2-blue?style=flat)](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html)（Common Alerting Protocol）：警報の内容・対象地域・有効期間・更新取消を表すXML規格。
-* [![EDXL-DE 1.0](https://img.shields.io/badge/EDXL--DE-1.0-blue?style=flat)](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf)（Emergency Data Exchange Language Distribution Element）：CAPなどの緊急情報を包み、配布先・公開条件・更新取消を表すXML規格。
-* [![気象庁防災情報XML](https://img.shields.io/badge/%E6%B0%97%E8%B1%A1%E5%BA%81%E9%98%B2%E7%81%BD%E6%83%85%E5%A0%B1XML-blue?style=flat)](https://xml.kishou.go.jp/)：地震・津波・火山・気象などの防災情報を記述するXML形式。
+* [![CAP 1.2](https://img.shields.io/badge/CAP-1.2-blue?style=flat&logo=xml&logoColor=white)](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html)（Common Alerting Protocol）：警報の内容・対象地域・有効期間・更新取消を表すXML規格。
+* [![EDXL-DE 1.0](https://img.shields.io/badge/EDXL--DE-1.0-blue?style=flat&logo=xml&logoColor=white)](https://docs.oasis-open.org/emergency/edxl-de/v1.0/EDXL-DE_Spec_v1.0.pdf)（Emergency Data Exchange Language Distribution Element）：CAPなどの緊急情報を包み、配布先・公開条件・更新取消を表すXML規格。
+* [![気象庁防災情報XML](https://img.shields.io/badge/%E6%B0%97%E8%B1%A1%E5%BA%81%E9%98%B2%E7%81%BD%E6%83%85%E5%A0%B1XML-blue?style=flat&logo=xml&logoColor=white)](https://xml.kishou.go.jp/)：地震・津波・火山・気象などの防災情報を記述するXML形式。
 
 **ネットワーク: BLE・LANによる端末間中継と、HTTPS・WebSocketによるオンライン通信**
 
@@ -166,47 +166,47 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 * ![Kotlin Android / JVM](https://img.shields.io/badge/Kotlin-Android%20%2F%20JVM-green?style=flat&logo=kotlin&logoColor=white)、![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-green?style=flat&logo=jetpackcompose&logoColor=black)・![Material 3](https://img.shields.io/badge/Material-3-green?style=flat&logo=materialdesign&logoColor=white)：投稿・中継操作・診断画面。
 * [![Kotlin Coroutines](https://img.shields.io/badge/Kotlin%20Coroutines-green?style=flat&logo=kotlin&logoColor=black)](https://github.com/Kotlin/kotlinx.coroutines)：非同期処理。
-* [![dtn7-kotlin](https://img.shields.io/badge/dtn7--kotlin-green?style=flat)](https://github.com/jphacks/sd_2607-dtn7-kotlin)（[フォーク元](https://github.com/NodleCode/dtn7-kotlin)）：BPv7のエンコード・デコード。
-* [![Jackson Databind](https://img.shields.io/badge/Jackson%20Databind-green?style=flat)](https://github.com/FasterXML/jackson-databind) / [![Jackson CBOR](https://img.shields.io/badge/Jackson%20CBOR-green?style=flat)](https://github.com/FasterXML/jackson-dataformats-binary)：JSON・CBORの処理。
-* [![OkHttp](https://img.shields.io/badge/OkHttp-green?style=flat)](https://square.github.io/okhttp/)：HTTP / WebSocket通信。
-* [![secp256k1-kmp](https://img.shields.io/badge/secp256k1--kmp-green?style=flat)](https://github.com/ACINQ/secp256k1-kmp)：NostrのBIP-340署名とatprotoのECDSA署名。
+* [![dtn7-kotlin](https://img.shields.io/badge/dtn7--kotlin-green?style=flat&logo=kotlin&logoColor=black)](https://github.com/jphacks/sd_2607-dtn7-kotlin)（[フォーク元](https://github.com/NodleCode/dtn7-kotlin)）：BPv7のエンコード・デコード。
+* [![Jackson Databind](https://img.shields.io/badge/Jackson%20Databind-green?style=flat&logo=json&logoColor=black)](https://github.com/FasterXML/jackson-databind) / [![Jackson CBOR](https://img.shields.io/badge/Jackson%20CBOR-green?style=flat&logo=json&logoColor=black)](https://github.com/FasterXML/jackson-dataformats-binary)：JSON・CBORの処理。
+* [![OkHttp](https://img.shields.io/badge/OkHttp-green?style=flat&logo=square&logoColor=black)](https://square.github.io/okhttp/)：HTTP / WebSocket通信。
+* [![secp256k1-kmp](https://img.shields.io/badge/secp256k1--kmp-green?style=flat&logo=kotlin&logoColor=black)](https://github.com/ACINQ/secp256k1-kmp)：NostrのBIP-340署名とatprotoのECDSA署名。
 * [![Android Keystore](https://img.shields.io/badge/Android%20Keystore-green?style=flat&logo=android&logoColor=black)](https://developer.android.com/privacy-and-security/keystore) / ![AES-GCM](https://img.shields.io/badge/AES--GCM-green?style=flat)：鍵・投稿・中継状態の暗号化保存。
 
 **ESP32: Android端末から受け取った投稿の検証・保存・中継と、画面表示・音声読み上げ**
 
 * ![C++](https://img.shields.io/badge/C%2B%2B-orange?style=flat&logo=cplusplus&logoColor=black) / [![Arduino framework ESP32](https://img.shields.io/badge/Arduino%20framework-ESP32-orange?style=flat&logo=arduino&logoColor=white)](https://github.com/espressif/arduino-esp32) / [![PlatformIO](https://img.shields.io/badge/PlatformIO-orange?style=flat&logo=platformio&logoColor=black)](https://platformio.org/)：ESP32向けファームウェア。
 * [![M5Unified](https://img.shields.io/badge/M5Unified-orange?style=flat&logo=m5stack&logoColor=black)](https://github.com/m5stack/M5Unified) / [![M5GFX](https://img.shields.io/badge/M5GFX-orange?style=flat&logo=m5stack&logoColor=black)](https://github.com/m5stack/M5GFX)：M5Stackの画面・ボタン・スピーカー制御。
-* [![NimBLE-Arduino](https://img.shields.io/badge/NimBLE--Arduino-orange?style=flat)](https://github.com/h2zero/NimBLE-Arduino)：BLE GATTによるAndroid端末とのBundle交換。
-* [![ArduinoJson](https://img.shields.io/badge/ArduinoJson-orange?style=flat)](https://arduinojson.org/) / [![LittleFS](https://img.shields.io/badge/LittleFS-orange?style=flat)](https://github.com/littlefs-project/littlefs)：JSON処理と中継データの永続化。
+* [![NimBLE-Arduino](https://img.shields.io/badge/NimBLE--Arduino-orange?style=flat&logo=bluetooth&logoColor=black)](https://github.com/h2zero/NimBLE-Arduino)：BLE GATTによるAndroid端末とのBundle交換。
+* [![ArduinoJson](https://img.shields.io/badge/ArduinoJson-orange?style=flat&logo=arduino&logoColor=black)](https://arduinojson.org/) / [![LittleFS](https://img.shields.io/badge/LittleFS-orange?style=flat)](https://github.com/littlefs-project/littlefs)：JSON処理と中継データの永続化。
 * [![mbedTLS](https://img.shields.io/badge/mbedTLS-orange?style=flat)](https://github.com/Mbed-TLS/mbedtls)：署名検証・SHA-256ハッシュ計算。
-* [![AquesTalk ESP32 Small辞書版](https://img.shields.io/badge/AquesTalk%20ESP32-Small%E8%BE%9E%E6%9B%B8%E7%89%88-orange?style=flat)](https://www.a-quest.com/)：受信メッセージの音声読み上げ。
+* [![AquesTalk ESP32 Small辞書版](https://img.shields.io/badge/AquesTalk%20ESP32-Small%E8%BE%9E%E6%9B%B8%E7%89%88-orange?style=flat&logo=espressif&logoColor=white)](https://www.a-quest.com/)：受信メッセージの音声読み上げ。
 
 **Nostrリレー兼PDS: Nostrで受け取った端末署名済みatprotoデータの復元・検証と、API・firehoseでの公開**
 
 * ![Node.js 24](https://img.shields.io/badge/Node.js-24-purple?style=flat&logo=nodedotjs&logoColor=white) / ![JavaScript](https://img.shields.io/badge/JavaScript-purple?style=flat&logo=javascript&logoColor=white)・![TypeScript](https://img.shields.io/badge/TypeScript-purple?style=flat&logo=typescript&logoColor=white)：独自PDSと内蔵Nostrリレー（[`pds/`](./pds/)）。
-* [![nostr-tools](https://img.shields.io/badge/nostr--tools-purple?style=flat)](https://github.com/nbd-wtf/nostr-tools) / [![ws](https://img.shields.io/badge/ws-purple?style=flat)](https://github.com/websockets/ws)：Nostrイベントの署名検証とWebSocket通信。
-* [![@atproto/crypto](https://img.shields.io/badge/%40atproto%2Fcrypto-purple?style=flat)](https://github.com/bluesky-social/atproto/tree/main/packages/crypto) / [![@atproto/repo](https://img.shields.io/badge/%40atproto%2Frepo-purple?style=flat)](https://github.com/bluesky-social/atproto/tree/main/packages/repo)：端末署名済みcommitの検証、MSTの再構築、CARの生成。
-* [![@ipld/dag-cbor](https://img.shields.io/badge/%40ipld%2Fdag--cbor-purple?style=flat)](https://github.com/ipld/js-dag-cbor) / [![multiformats](https://img.shields.io/badge/multiformats-purple?style=flat)](https://github.com/multiformats/js-multiformats)：DAG-CBORとCIDの処理。
+* [![nostr-tools](https://img.shields.io/badge/nostr--tools-purple?style=flat)](https://github.com/nbd-wtf/nostr-tools) / [![ws](https://img.shields.io/badge/ws-purple?style=flat&logo=nodedotjs&logoColor=white)](https://github.com/websockets/ws)：Nostrイベントの署名検証とWebSocket通信。
+* [![@atproto/crypto](https://img.shields.io/badge/%40atproto%2Fcrypto-purple?style=flat&logo=bluesky&logoColor=white)](https://github.com/bluesky-social/atproto/tree/main/packages/crypto) / [![@atproto/repo](https://img.shields.io/badge/%40atproto%2Frepo-purple?style=flat&logo=bluesky&logoColor=white)](https://github.com/bluesky-social/atproto/tree/main/packages/repo)：端末署名済みcommitの検証、MSTの再構築、CARの生成。
+* [![@ipld/dag-cbor](https://img.shields.io/badge/%40ipld%2Fdag--cbor-purple?style=flat&logo=ipfs&logoColor=white)](https://github.com/ipld/js-dag-cbor) / [![multiformats](https://img.shields.io/badge/multiformats-purple?style=flat&logo=ipfs&logoColor=white)](https://github.com/multiformats/js-multiformats)：DAG-CBORとCIDの処理。
 * ![SQLite](https://img.shields.io/badge/SQLite-purple?style=flat&logo=sqlite&logoColor=white)（[`node:sqlite`](https://nodejs.org/api/sqlite.html)）/ ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-purple?style=flat&logo=postgresql&logoColor=white)（[`pg`](https://node-postgres.com/)）：イベント・リポジトリ・配信履歴の保存。
 
 **AppView: HappyViewによる投稿の索引化と、Mosimo・BSAF投稿の統合フィードの提供**
 
-* [![HappyView 2.16.0](https://img.shields.io/badge/HappyView-2.16.0-purple?style=flat)](https://happyview.dev/) / ![SQLite](https://img.shields.io/badge/SQLite-purple?style=flat&logo=sqlite&logoColor=white)：AT ProtocolのAppViewとして投稿を索引化・配信（[`appview/happyview/`](./appview/happyview/)）。
-* ![Node.js 24](https://img.shields.io/badge/Node.js-24-purple?style=flat&logo=nodedotjs&logoColor=white) / ![TypeScript](https://img.shields.io/badge/TypeScript-purple?style=flat&logo=typescript&logoColor=white) / [![ws](https://img.shields.io/badge/ws-purple?style=flat)](https://github.com/websockets/ws)：JetstreamからBSAF投稿を収集するサイドカー（[`appview/bsaf/`](./appview/bsaf/)）。
-* [![@atproto/lex-cbor](https://img.shields.io/badge/%40atproto%2Flex--cbor-purple?style=flat)](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-cbor) / [![@atproto/lex-data](https://img.shields.io/badge/%40atproto%2Flex--data-purple?style=flat)](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-data)：収集したレコードのCID整合性確認。
+* [![HappyView 2.16.0](https://img.shields.io/badge/HappyView-2.16.0-purple?style=flat&logo=bluesky&logoColor=white)](https://happyview.dev/) / ![SQLite](https://img.shields.io/badge/SQLite-purple?style=flat&logo=sqlite&logoColor=white)：AT ProtocolのAppViewとして投稿を索引化・配信（[`appview/happyview/`](./appview/happyview/)）。
+* ![Node.js 24](https://img.shields.io/badge/Node.js-24-purple?style=flat&logo=nodedotjs&logoColor=white) / ![TypeScript](https://img.shields.io/badge/TypeScript-purple?style=flat&logo=typescript&logoColor=white) / [![ws](https://img.shields.io/badge/ws-purple?style=flat&logo=nodedotjs&logoColor=white)](https://github.com/websockets/ws)：JetstreamからBSAF投稿を収集するサイドカー（[`appview/bsaf/`](./appview/bsaf/)）。
+* [![@atproto/lex-cbor](https://img.shields.io/badge/%40atproto%2Flex--cbor-purple?style=flat&logo=bluesky&logoColor=white)](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-cbor) / [![@atproto/lex-data](https://img.shields.io/badge/%40atproto%2Flex--data-purple?style=flat&logo=bluesky&logoColor=white)](https://github.com/bluesky-social/atproto/tree/main/packages/lex/lex-data)：収集したレコードのCID整合性確認。
 * ![Lua](https://img.shields.io/badge/Lua-purple?style=flat&logo=lua&logoColor=white)：HappyViewのクエリスクリプトでMosimo・BSAFの統合フィードを提供。
 
 **Webクライアント: AppViewから取得した投稿と発信者ハンドルのタイムライン表示**
 
 * ![HTML](https://img.shields.io/badge/HTML-yellow?style=flat&logo=html5&logoColor=black) / ![CSS](https://img.shields.io/badge/CSS-yellow?style=flat&logo=css&logoColor=black) / ![JavaScript](https://img.shields.io/badge/JavaScript-yellow?style=flat&logo=javascript&logoColor=black)：タイムライン画面（[`apps/web/index.html`](./apps/web/index.html)）。
-* ![Fetch API](https://img.shields.io/badge/Fetch%20API-yellow?style=flat) / ![DOM API](https://img.shields.io/badge/DOM%20API-yellow?style=flat)：AppViewから投稿を取得・表示し、PLC Directoryから表示用ハンドルを解決。
+* ![Fetch API](https://img.shields.io/badge/Fetch%20API-yellow?style=flat&logo=javascript&logoColor=black) / ![DOM API](https://img.shields.io/badge/DOM%20API-yellow?style=flat&logo=javascript&logoColor=black)：AppViewから投稿を取得・表示し、PLC Directoryから表示用ハンドルを解決。
 
 **サーバー運用: NixOSによる構成の宣言的管理と、サービス実行・HTTPS公開**
 
 以前から個人開発していた運用基盤 [podman-cluster-config](https://github.com/oriom-dev/podman-cluster-config) を活用しています。
 
 * [![NixOS](https://img.shields.io/badge/NixOS-grey?style=flat&logo=nixos&logoColor=white)](https://nixos.org/) / [![Nix](https://img.shields.io/badge/Nix-grey?style=flat&logo=nixos&logoColor=white)](https://nix.dev/)：OS設定・サービス・パッケージの構成を宣言的に定義。
-* [![systemd](https://img.shields.io/badge/systemd-grey?style=flat)](https://systemd.io/) / [![Caddy](https://img.shields.io/badge/Caddy-grey?style=flat&logo=caddy&logoColor=white)](https://caddyserver.com/) / [![Podman](https://img.shields.io/badge/Podman-grey?style=flat&logo=podman&logoColor=white)](https://podman.io/)：サービス管理・HTTPS公開・HappyViewコンテナの実行。
+* [![systemd](https://img.shields.io/badge/systemd-grey?style=flat&logo=linux&logoColor=white)](https://systemd.io/) / [![Caddy](https://img.shields.io/badge/Caddy-grey?style=flat&logo=caddy&logoColor=white)](https://caddyserver.com/) / [![Podman](https://img.shields.io/badge/Podman-grey?style=flat&logo=podman&logoColor=white)](https://podman.io/)：サービス管理・HTTPS公開・HappyViewコンテナの実行。
 
 **デバイス: Androidスマートフォン・M5Stack・VPSによる投稿作成・圏外中継・オンライン公開・閲覧のデモ**
 
