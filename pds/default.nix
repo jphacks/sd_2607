@@ -67,6 +67,11 @@ in
               };
             });
           };
+          publicInformation = mkOption {
+            type = json.type;
+            default = { roots = [ ]; selection = [ ]; };
+            description = "Public wire-v1 trust roots and Bot/type selection; empty grants no priority authority. Validated at startup. Never include private credentials.";
+          };
           plcUrl = mkOption { type = https; default = "https://plc.directory"; };
           maxEventBytes = mkOption { type = types.ints.positive; default = 131072; };
           maxSubscriptions = mkOption { type = types.ints.positive; default = 20; };
