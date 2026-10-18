@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="mosimo Public Network Test" tools:replace="android:label" />
+    <instrumentation
+        android:name="org.mndt.app.verification.VerificationRunner"
+        android:targetPackage="org.mndt.demo.verification"
+        android:label="Public-network MeshCoordinator verification"
+        android:functionalTest="true" />
+</manifest>

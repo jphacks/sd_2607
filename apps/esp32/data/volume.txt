@@ -1,0 +1,2 @@
+mosimo ESP32 relay LittleFS volume
+Do not upload this filesystem image over an existing message store without backing it up.

@@ -4,3 +4,11 @@
 **/local.properties
 *.hprof
 .DS_Store
+
+# ESP32 development
+apps/esp32/.venv/
+apps/esp32/**/__pycache__/
+apps/esp32/.pio/
+apps/esp32/.platformio/
+# Locally acquired proprietary evaluation SDK, dictionary, and generated firmware
+apps/esp32/private/

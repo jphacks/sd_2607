@@ -31,11 +31,13 @@ internal data class DiskState(
     // Historical matching-genesis observation only; never restores current authority/PDS acceptance.
     val plcRegistered: Boolean = false,
     val pdsEndpoint: String = "https://pds.invalid",
-    val onlineEnabled: Boolean = true
+    val onlineEnabled: Boolean = true,
+    val relayDefaultsMigrated: Boolean = true
 ) {
     companion object {
-        // TODO(undecided): bundled general relays (0007 §5) until a mosimo PDS relay exists.
-        val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
+        const val PDS_RELAY = "wss://pds.oriom.dev"
+        val LEGACY_DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
+        val DEFAULT_RELAYS = listOf(PDS_RELAY) + LEGACY_DEFAULT_RELAYS
         const val MAX_RELAYS = 8
     }
 }
@@ -97,7 +99,8 @@ internal class EncryptedStore(context: Context) {
             val clock = node.path("clockId")
             require(clock.isIntegralNumber && clock.intValue() in 0..1023)
             return DiskState(keys, RepositoryState(records, node["previous"]?.takeUnless { it.isNull }?.textValue(),
-                node.path("lastRev").longValue(), clock.intValue()), saved, relays.map { it.textValue() }, acks,
+                node.path("lastRev").longValue(), clock.intValue()), saved,
+                migrateDefaultRelays(relays.map { it.textValue() }, node.path("relayDefaultsMigrated").asBoolean(false)), acks,
                 node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"),
                 node.path("onlineEnabled").asBoolean(true))
         } finally { plain.fill(0) }
@@ -108,6 +111,7 @@ internal class EncryptedStore(context: Context) {
             .put("atproto", base64.encodeToString(state.keys.atproto))
             .put("plc", base64.encodeToString(state.keys.plc))
             .put("onlineEnabled", state.onlineEnabled).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
+            .put("relayDefaultsMigrated", state.relayDefaultsMigrated)
             .put("previous", state.repository.previousCommit).put("lastRev", state.repository.lastRevMicros)
             .put("clockId", state.repository.clockId)
         node.putArray("relays").also { a -> state.relays.forEach(a::add) }
