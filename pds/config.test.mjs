@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validateConfig } from './config.mjs';
+import { createRoot, JMA_SELECTION } from './public-information.mjs';
+
+test('public priority defaults grant no authority; provisioned roots and selection are bounded and explicit', () => {
+  assert.deepEqual(validateConfig(input()).publicInformation, { roots: [], selection: [] });
+  const { root } = createRoot({ scope: { orgIds: ['test'], bsaf: JMA_SELECTION }, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
+  assert.doesNotThrow(() => validateConfig(input({ publicInformation: { roots: [root], selection: JMA_SELECTION } })));
+  for (const patch of [{ enabled: undefined }, { minSequence: 0 }, { snapshotUrl: 'http://trust.invalid/snapshot' },
+    { snapshotUrl: 'https://user:secret@trust.invalid/snapshot' }, { snapshotUrl: 'https://trust.invalid/#fragment' }, { scope: {} }]) {
+    assert.throws(() => validateConfig(input({ publicInformation: { roots: [{ ...root, ...patch }], selection: [] } })));
+  }
+  for (const roots of [[root, root], Array(65).fill(root)]) {
+    assert.throws(() => validateConfig(input({ publicInformation: { roots, selection: [] } })));
+  }
+});
 
 const input = extra => ({ groups: [{ id: 'alpha', endpoint: 'https://PDS.example:443/' }], ...extra });
 

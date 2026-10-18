@@ -1,6 +1,9 @@
+import { rootId, validateScope } from './public-information.mjs';
+
 export function validateConfig(input, env = process.env) {
   const config = { plcUrl: 'https://plc.directory', relays: [], peers: [], maxEventBytes: 131072,
-    maxSubscriptions: 20, maxResults: 500, maxBufferedBytes: 4194304, maxEvents: 1000000, ...input };
+    maxSubscriptions: 20, maxResults: 500, maxBufferedBytes: 4194304, maxEvents: 1000000,
+    publicInformation: { roots: [], selection: [] }, ...input };
   function endpoint(value, protocols) {
     const url = new URL(value);
     if (!protocols.includes(url.protocol) || url.username || url.password || url.hash || url.search
@@ -25,5 +28,20 @@ export function validateConfig(input, env = process.env) {
   for (const key of ['maxEventBytes', 'maxSubscriptions', 'maxResults', 'maxBufferedBytes', 'maxEvents']) {
     if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`Invalid ${key}`);
   }
+  const pi = config.publicInformation;
+  if (!pi || !Array.isArray(pi.roots) || pi.roots.length > 64 || !Array.isArray(pi.selection)
+    || pi.selection.length > 16) throw new Error('Invalid publicInformation');
+  const ids = new Set();
+  for (const root of pi.roots) {
+    if (!root || typeof root.enabled !== 'boolean' || !/^(02|03)[0-9a-f]{64}$/.test(root.rootPubkey)
+      || !Number.isSafeInteger(root.minSequence) || root.minSequence < 1) throw new Error('Invalid public root');
+    validateScope(root.scope);
+    const url = new URL(root.snapshotUrl);
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Invalid snapshot URL');
+    const id = rootId(root.rootPubkey);
+    if (ids.has(id)) throw new Error('Duplicate public root');
+    ids.add(id);
+  }
+  if (pi.selection.length) validateScope({ orgIds: ['local-selection'], bsaf: pi.selection });
   return config;
 }

@@ -36,9 +36,9 @@ const signEvent = (event, key = nostrKey) => finalizeEvent({
 const envelope = event => JSON.parse(JSON.stringify(event));
 
 async function fixture({ index = 0, parent = null, key = repoKey, identity = did,
-  badRoot = false, badSignature = false, author = nostrKey, rev, text } = {}) {
+  badRoot = false, badSignature = false, author = nostrKey, rev, text, extensions = [] } = {}) {
   const record = { $type: collection, text: text ?? `避難所 ${index}\r\nか\u3099 🏠`,
-    createdAt: '2026-10-17T12:34:56.120Z', deliveryExpiresAt: '2026-10-18T12:34:56Z', extensions: [] };
+    createdAt: '2026-10-17T12:34:56.120Z', deliveryExpiresAt: '2026-10-18T12:34:56Z', extensions };
   const path = `${collection}/3jzfcijpj2z2${'234567abcdefghijklmnopqrstuvwxyz'[index]}`;
   const recordBytes = new Uint8Array(cbor.encode(record));
   const recordCid = await cidFor(recordBytes);
@@ -56,6 +56,7 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
     ['t', namespace], [`${namespace}:version`, '1'], [`${namespace}:commit`, b64(commitBytes)],
     [`${namespace}:base`, parent?.commitCid.toString() ?? ''], [`${namespace}:path`, path],
     [`${namespace}:created-at`, record.createdAt], [`${namespace}:delivery-expires-at`, record.deliveryExpiresAt],
+    ...extensions.map(({ $type, ...fields }) => [`${namespace}:ext:${$type}`, b64(cbor.encode(fields))]),
   ] }, author);
   return { event, record, path, recordBytes, recordCid, commit, commitBytes, commitCid,
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
@@ -165,6 +166,41 @@ beforeEach(async () => {
   identityEndpoint = 'https://alpha.example';
   resolutionError = null;
   ingestion = createIngestion({ config, store, resolveIdentity });
+});
+
+test('BSAF originals are Nostr-only even with expired delivery or untrusted identity; old queued jobs skip without history writes', async () => {
+  const extension = { $type: 'dev.oriom.mosimo.defs#bsafV1', tags: ['bsaf:v1'], langs: [],
+    original: { uri: `at://${did}/app.bsky.feed.post/one`, cid: (await fixture()).recordCid.toString(), createdAt: '2020-01-01T00:00:00Z' } };
+  const imported = await fixture({ extensions: [extension] });
+  resolutionError = new Error('Unregistered or stale identity must not affect routing');
+  assert.equal((await ingestion.ingest(imported.event)).accepted, true);
+  assert.deepEqual((await rows('SELECT event FROM events'))[0].event, envelope(imported.event));
+  assert.equal((await rows('SELECT * FROM outbox')).length, 1);
+  assert.equal((await rows('SELECT * FROM jobs')).length, 0);
+  assert.equal(await ingestion.processOne(), false);
+  await store.query('INSERT INTO jobs(event_id) VALUES($1)', [imported.event.id]);
+  assert.equal(await ingestion.processOne(), true);
+  const old = await job(imported);
+  assert.equal(old.status, 'invalid');
+  assert.match(old.error, /Nostr-only BSAF import/);
+  for (const table of ['commits','blocks','repo_blocks','repos','streams','group_sequences']) {
+    assert.equal((await rows(`SELECT * FROM ${table}`)).length, 0, table);
+  }
+  assert.equal((await ingestion.ingest(imported.event)).duplicate, true);
+  assert.equal((await rows('SELECT * FROM events')).length, 1);
+});
+
+test('malformed claimed BSAF import is fail-closed for atproto, ordinary BSAF without original still publishes', async () => {
+  const base = await fixture();
+  const tag = `${namespace}:ext:dev.oriom.mosimo.defs#bsafV1`;
+  for (const encoded of ['not-cbor', b64(cbor.encode({ original: null })), b64(cbor.encode(['invalid-fields']))]) {
+    const event = signEvent({ ...base.event, tags: [...base.event.tags, [tag, encoded]] });
+    assert.equal((await ingestion.ingest(event)).accepted, true);
+    assert.equal((await rows('SELECT * FROM jobs WHERE event_id=$1', [event.id])).length, 0);
+  }
+  const ordinary = await fixture({ extensions: [{ $type: 'dev.oriom.mosimo.defs#bsafV1', tags: ['bsaf:v1'], langs: [] }] });
+  assert.equal((await process(ordinary)).status, 'validated');
+  assert.equal((await rows('SELECT * FROM streams')).length, 3);
 });
 
 test('durable dedup survives database reopen; arrival follows receipt, not created_at', async () => {
@@ -512,6 +548,29 @@ async function connect(t, app, path = '/', host = 'alpha.example') {
     }),
   };
 }
+
+test('Nostr-only BSAF relay accepts EVENT, forwards outbox and delivers live/history REQ with zero atproto jobs', async t => {
+  const app = createServer({ config: { ...config, pollIntervalMs: 10 }, store, ingest: ingestion.ingest, resolveIdentity });
+  t.after(() => app.close());
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const reader = await connect(t, app);
+  reader.send(['REQ', 'live-imports', { kinds: [1], '#t': [namespace], limit: 0 }]);
+  assert.deepEqual(await reader.next(), ['EOSE', 'live-imports']);
+  resolutionError = new Error('No PLC/root authorization available');
+  const source = await fixture({ extensions: [{ $type: 'dev.oriom.mosimo.defs#bsafV1', original: { uri: 'at://source/post' }, tags: ['bsaf:v1'] }] });
+  const writer = await connect(t, app);
+  writer.send(['EVENT', source.event]);
+  const ack = await writer.next();
+  assert.deepEqual(ack.slice(0, 3), ['OK', source.event.id, true]);
+  assert.match(ack[3], /Nostr-only/);
+  assert.deepEqual(await reader.next(), ['EVENT', 'live-imports', envelope(source.event)]);
+  writer.send(['REQ', 'history', { ids: [source.event.id] }]);
+  assert.deepEqual(await writer.next(), ['EVENT', 'history', envelope(source.event)]);
+  assert.deepEqual(await writer.next(), ['EOSE', 'history']);
+  assert.equal((await rows('SELECT * FROM outbox')).length, 1);
+  assert.equal(await ingestion.processOne(), false);
+  for (const table of ['jobs','commits','repos','streams']) assert.equal((await rows(`SELECT * FROM ${table}`)).length, 0, table);
+});
 
 test('real relay EVENT acknowledgement is separate from repository validation and rejects arbitrary kinds', async t => {
   const app = createServer({ config, store, ingest: ingestion.ingest, resolveIdentity });

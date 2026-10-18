@@ -138,6 +138,75 @@ sops-nixでは`environmentFile = config.sops.templates."mosimo-pds.env".path;`�
 接続先を使い、TLS/CA・pg_hba・Headscale ACLを設定する。OCIではlocalhostはコンテナ自身を
 指すことに注意する。DBポートを公開しない。
 
+## Public wire-v1 trust configuration
+
+No root authority is enabled implicitly. JSON `CONFIG_FILE` and Nix
+`services.mosimo-pds.settings` accept the same public configuration:
+
+```json
+{"publicInformation":{"roots":[],"selection":[]}}
+```
+
+For explicit opt-in, assign `publicInformation.roots` the **public array** from the
+reviewed publisher `roots.json` (not credentials, certificate, or root-secret files).
+Each entry requires `rootPubkey` (compressed lowercase secp256k1 hex), `enabled`
+(boolean), `scope` (`{orgIds,bsaf:[{botDid,types}]}`), `snapshotUrl` (credential-free
+HTTPS URL without fragment), and `minSequence` (positive safe integer high-water floor).
+At most 64 distinct roots may be configured. Keep disabled roots disabled explicitly;
+removal does not erase their durable security history.
+
+`publicInformation.selection` is an explicit array of `{botDid,types}` (at most 16
+Bot entries, 32 types per Bot and 64 total pairs). Empty selection authorizes nothing even with trusted roots.
+To opt in to the fixed third-party JMA-source Bot subset, use:
+
+```json
+[{"botDid":"did:plc:vwi7zhfyamyvrg5v6ycjgzxi","types":["ashfall","earthquake","eruption","nankai-trough","tsunami"]}]
+```
+
+The independent weather source is `@bsaf-kikikuru-bot.bsky.social`, DID
+`did:plc:kxwz5cz7o6g4jlmxh6doyfsm`. Its fixed 23-type `KIKIKURU_SELECTION` is
+pinned separately from the unchanged five-type `JMA_SELECTION`; see
+[the publisher's exact list and primary definition](../appview/bsaf/PUBLISHER.md).
+Explicit combined opt-in is 28 pairs, not a widened JMA preset. Generate the public
+PDS fragment with `receiver-export --jma --kikikuru` only after root-scope approval,
+new-serial leaf issuance and a higher-sequence snapshot. Old certificates keep
+their signed historical scope. Weather defaults to priority 1; there is no inferred
+JMA XML, region or severity mapping. None of these local operations deploys settings.
+
+This is not a JMA-issued certificate or redistribution approval. Review root scope,
+Bot selection and permission out of band. Publish the root-signed canonical
+`snapshot.cbor` at **that configured URL**, with `Content-Type: application/cbor`,
+refreshing at least every 30 minutes; snapshot validity is at most one hour.
+Use a synchronized trusted system clock. The service never follows event-chosen
+URLs, discovers keys, accepts redirects, or copies HTTP Date into its clock.
+A broken root endpoint cannot suppress another root's independently committed CRL.
+Allow outbound HTTPS only to reviewed snapshot hosts and the existing PLC/peer/relay
+allowlist; proxy-side per-client request/connection limits remain necessary.
+
+Only public settings belong in the Nix store. Do not deploy the locally generated
+`appview/bsaf/private/` directory, importer credentials or any root/PLC private key to
+the PDS. Generated reserved-domain material is not live provisioning; the operator
+must supply the actual public URL, roots, selection and sufficiently recent minimum
+sequence, and publish fresh CBOR separately. No automatic publishing or deployment
+is performed. The Nostr endpoint is `wss://<physical-host>/`, **not `/nostr`** unless
+an explicitly configured proxy rewrite supplies that path.
+
+Both database backends create `trust_snapshots`, `trust_serials` and
+`trust_serial_conflicts` automatically on startup. The conflict table is an additive
+sidecar migration: existing serial mappings remain intact, with no destructive ALTER
+or reset. Previously discarded equivocation evidence cannot be reconstructed by this
+migration; reconcile known incidents out of band before trusting affected issuers.
+Conflicts commit independently before event rejection and permanently deny **both**
+bodies for that issuer/serial, including after restart. A failed marker write/commit
+fails the request closed. Preserve all three tables in backups/migrations together
+with events, including expired snapshots and disabled-root state. Never delete/evict
+CRLs, sequence history, serial mappings or conflict markers to recover capacity. At the 64 historical-root or 100,000 serial
+cap, stop new authorization and plan an audited migration. SQLite uses its existing
+FULL/WAL transactions; PostgreSQL serializes trust writes with an advisory transaction
+lock, including first insertion. Real PostgreSQL multi-process lock behavior and Nix
+module evaluation require validation in their deployment environments; local tests
+exercise PostgreSQL SQL via PGlite and durability via SQLite/PGlite reopen.
+
 ## Caddyと公開endpoint
 
 モジュールは`127.0.0.1:2583`にだけbindし、firewallを開かない。

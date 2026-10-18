@@ -7,7 +7,9 @@
   },
   "scripts": {
     "start": "node collector.mts",
-    "test": "node --test collector.test.mts",
+    "test": "node --test collector.test.mts publisher.test.mts",
+        "publisher": "node publisher.mts",
+        "identity": "node identity-cli.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

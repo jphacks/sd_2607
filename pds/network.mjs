@@ -1,6 +1,106 @@
 import { WebSocket, createWebSocketStream } from 'ws';
-import { fetchJson } from './identity.mjs';
+import { fetchJson, fetchBytes, parseNetworkJson } from './identity.mjs';
+import { decodeCanonical, rootId, verifySnapshot, verifyPublicInformation, effectivePriority, NS, IDENTITY } from './public-information.mjs';
 import { sqliteNow } from './store.mjs';
+
+// Security state is never evicted, even when a root is disabled or a snapshot expires.
+export function createPriorityPolicy({ config, store, getBytes = fetchBytes, now = () => Math.floor(Date.now() / 1000) }) {
+  const { roots = [], selection = [] } = config.publicInformation ?? {};
+  const enabled = roots.filter(root => root.enabled);
+  const fetchedAt = new Map();
+  const durable = async fn => {
+    try { return await fn(); }
+    catch (cause) { if (cause.trustAuthorization) throw cause; throw Object.assign(new Error('Trust persistence failed', { cause }), { trustStorage: true }); }
+  };
+  const adapter = () => ({
+    async get(id) {
+      const row = await durable(async () => (await store.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [id])).rows[0]);
+      if (!row) throw new Error('Snapshot unavailable');
+      return JSON.parse(row.snapshot);
+    },
+    async accept(id, snapshot) {
+      const root = enabled.find(root => rootId(root.rootPubkey) === id);
+      if (!root) throw new Error('Unknown root');
+      await durable(() => store.transaction(async tx => {
+        // PostgreSQL needs a lock even before the first row exists; SQLite uses BEGIN IMMEDIATE.
+        if (store.dialect !== 'sqlite') await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
+        const row = (await tx.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [id])).rows[0];
+        if (!row && Number((await tx.query('SELECT COUNT(*) AS count FROM trust_snapshots')).rows[0].count) >= 64) throw new Error('Root state capacity reached');
+        try { await verifySnapshot(snapshot, { root, nowSeconds: now(), previous: row ? JSON.parse(row.snapshot) : null }); }
+        catch (error) { error.trustAuthorization = true; throw error; }
+        await tx.query('INSERT INTO trust_snapshots(root_id,snapshot) VALUES($1,$2) ON CONFLICT(root_id) DO UPDATE SET snapshot=excluded.snapshot', [id, JSON.stringify(snapshot)]);
+      }));
+    },
+    async recordCertificate(issuer, serial, certId) {
+      const accepted = await durable(() => store.transaction(async tx => {
+        if (store.dialect !== 'sqlite') await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
+        const row = (await tx.query(`SELECT s.cert_id, EXISTS (
+          SELECT 1 FROM trust_serial_conflicts c WHERE c.issuer=s.issuer AND c.serial=s.serial
+        ) AS conflicted FROM trust_serials s WHERE s.issuer=$1 AND s.serial=$2`, [issuer, serial])).rows[0];
+        if (row) {
+          if (row.conflicted) return false;
+          if (row.cert_id === certId) return true;
+          await tx.query('INSERT INTO trust_serial_conflicts(issuer,serial) VALUES($1,$2) ON CONFLICT(issuer,serial) DO NOTHING', [issuer, serial]);
+          return false;
+        }
+        const count = (await tx.query('SELECT COUNT(*) AS count FROM trust_serials')).rows[0];
+        if (Number(count.count) >= 100000) throw new Error('Certificate state capacity reached');
+        await tx.query('INSERT INTO trust_serials(issuer,serial,cert_id) VALUES($1,$2,$3)', [issuer, serial, certId]);
+        return true;
+      }));
+      // Commit security evidence first; rejecting the event must not roll back the marker.
+      if (!accepted) throw Object.assign(new Error('Certificate serial conflict'), { trustAuthorization: true });
+    },
+  });
+  return {
+    async capture() {
+      const snapshots = adapter();
+      // Fetch each provisioned root independently; a failed root cannot suppress another's CRL.
+      const results = await Promise.allSettled(enabled.map(async root => {
+        const id = rootId(root.rootPubkey);
+        if (performance.now() - (fetchedAt.get(id) ?? -Infinity) < 30000) return;
+        fetchedAt.set(id, performance.now());
+        const snapshot = decodeCanonical(await getBytes(root.snapshotUrl, { maxBytes: 32768, contentType: 'application/cbor',
+          headers: { accept: 'application/cbor' } }));
+        await snapshots.accept(rootId(root.rootPubkey), snapshot);
+      }));
+      if (results.some(result => result.status === 'rejected' && result.reason.trustStorage)) throw new Error('Trust state update failed');
+      const captured = new Map();
+      for (const root of enabled) {
+        try { captured.set(rootId(root.rootPubkey), await snapshots.get(rootId(root.rootPubkey))); }
+        catch (error) { if (error.trustStorage) throw error; }
+      }
+      const frozen = { ...snapshots, async get(id) {
+        if (!captured.has(id)) throw new Error('Snapshot unavailable');
+        return captured.get(id);
+      } };
+      let checkedAt = 0;
+      let validUntil = Infinity;
+      const evaluate = async event => {
+        try {
+          const result = await verifyPublicInformation(event, { roots, selection, snapshots: frozen, nowSeconds: now() });
+          if (result.effectivePriority > 1) {
+            // The shared verifier has validated these exact fields; retain their earliest send deadline.
+            const identity = decodeCanonical(Buffer.from(event.tags.find(tag => tag[0] === `${NS}:ext:${IDENTITY}`)[1], 'base64'));
+            const delivery = event.tags.find(tag => tag[0] === `${NS}:delivery-expires-at`)[1];
+            validUntil = Math.min(validUntil, Date.parse(result.snapshot.validUntil) / 1000,
+              Date.parse(identity.chain[0].body.notAfter) / 1000, Date.parse(delivery) / 1000);
+            checkedAt = Math.max(checkedAt, result.checkedAt);
+          }
+          return result.effectivePriority;
+        } catch (error) {
+          if (error.trustStorage) throw error;
+          return effectivePriority(event, false);
+        }
+      };
+      evaluate.assertFresh = () => {
+        const current = now();
+        if (!Number.isSafeInteger(current) || current < checkedAt || current >= validUntil) throw new Error('Priority authorization expired/clock changed');
+      };
+      return evaluate;
+    },
+  };
+}
 
 export function startNetwork({ config, store, ingest }) {
   const sqlite = store.dialect === 'sqlite';
@@ -40,7 +140,7 @@ export function startNetwork({ config, store, ingest }) {
           if (stopped) break;
           if (typeof bytes !== 'string') continue;
           let message;
-          try { message = JSON.parse(bytes); } catch { continue; }
+          try { message = parseNetworkJson(Buffer.from(bytes)); } catch { continue; }
           try {
             if (message[0] === 'EVENT' && message[1] === 'mosimo') await ingest(message[2]);
           } catch (error) { console.error('Relay ingestion:', error.message); }

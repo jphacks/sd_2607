@@ -4,6 +4,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
+import { createPriorityPolicy } from './network.mjs';
+import { parseNetworkJson } from './identity.mjs';
 
 const defaults = { maxEventBytes: 131072, maxSubscriptions: 20, maxResults: 500, maxBufferedBytes: 4194304 };
 const hex = /^[0-9a-f]{64}$/;
@@ -93,6 +95,9 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
   }));
   const query = async (sql, params = []) => (await store.query(sql, params)).rows;
   const connections = new Set();
+  const priorityPolicy = createPriorityPolicy({ config: options, store });
+  let priorityBusy = false;
+  const priorityTasks = new Set();
   let closing = false;
   const groupFor = req => {
     const group = groups.get((req.headers.host ?? '').toLowerCase());
@@ -173,7 +178,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       res.writeHead(200, { 'content-type': 'application/nostr+json', 'access-control-allow-origin': '*' });
       return res.end(JSON.stringify({ name: 'mosimo', supported_nips: [1, 9, 11],
         limitation: { max_message_length: options.maxEventBytes, max_subscriptions: options.maxSubscriptions, max_limit: options.maxResults },
-        mosimo: { version: 1, kinds: [1, 5], publicTextOnly: true, blobs: false,
+        mosimo: { version: 1, wire: 1, priority_order: ['priority-v1'], kinds: [1, 5], publicTextOnly: true, blobs: false,
                   groups: (options.groups ?? []).map(({ id, endpoint }) => ({ id, endpoint })) } }));
     }
     if (url.pathname === '/.well-known/did.json') {
@@ -309,6 +314,8 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
     let pendingCount = 0;
     let work = Promise.resolve();
     const subscriptions = new Map();
+
+    const queuedFinite = new Map();
     const streamError = (error, message = error) => Buffer.concat([cbor.encode({ op: -1 }), cbor.encode({ error, message })]);
     const stop = (code = 1011, reason = 'Internal server error') => {
       if (stopped) return;
@@ -360,13 +367,74 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       sub.ready = true;
     }
 
-    async function message(data, binary) {
+    async function priorityRequest(value, finite = { cancelled: false }) {
+      if (finite.cancelled) return;
+      const id = typeof value[1] === 'string' ? value[1].slice(0, 64) : '';
+      let acquired = false;
+      try {
+        const request = value[2];
+        if (value.length !== 3 || typeof value[1] !== 'string' || !/^[\x20-\x7e]{1,64}$/.test(value[1]) || !isObject(request)
+          || Object.keys(request).sort().join(',') !== 'filter,order' || request.order !== 'priority-v1') throw invalid('Invalid priority request');
+        const filter = filterValue(request.filter, options.maxResults);
+        if (filter.kinds?.length !== 1 || filter.kinds[0] !== 1 || !filter['#t']?.includes('mosimo.oriom.dev')
+          || !Number.isInteger(filter.limit) || filter.limit < 1 || filter.limit > Math.min(100, options.maxResults)
+          || Object.keys(filter).some(key => !['ids', 'authors', 'kinds', 'since', 'until', 'limit'].includes(key) && !/^#[a-zA-Z]$/.test(key))) throw invalid('Invalid priority filter');
+        if (subscriptions.has(id) || subscriptions.size >= options.maxSubscriptions || priorityBusy) throw invalid('Priority request capacity or ID conflict');
+        priorityBusy = true;
+        acquired = true;
+
+        // Refresh even if the candidate budget subsequently rejects this request.
+        const evaluate = await priorityPolicy.capture();
+        const deadline = performance.now() + 5000;
+        // Fixed budgets: never pretend a newest-only prefix is the complete priority result.
+        const params = [];
+        const where = filterSql(filter, params, sqlite);
+        const eventBytes = sqlite ? 'length(CAST(event AS BLOB))' : 'octet_length(event::text)';
+        const rows = await query(`WITH candidates AS (
+          SELECT e.event FROM events e WHERE e.kind=1 AND ${visible} AND (${where})
+          ORDER BY e.created_at DESC,e.id ASC LIMIT 1001
+        ) SELECT CASE WHEN SUM(${eventBytes}) OVER () <= 8388608 THEN event ELSE NULL END AS event FROM candidates`, params);
+        if (rows.length > 1000 || rows.some(row => row.event === null)) throw invalid('Priority candidate budget exceeded');
+        const ranked = [];
+        for (const { event } of rows) {
+          if (stopped || finite.cancelled) return;
+          if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
+          ranked.push({ event, priority: await evaluate(event) });
+        }
+        if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
+        ranked.sort((a, b) => b.priority - a.priority || b.event.created_at - a.event.created_at || a.event.id.localeCompare(b.event.id));
+        // Later candidates can expose sticky conflicts in earlier ones. Recheck the entire
+        // ordering against current durable trust, not just the selected/newest prefix.
+        const recheck = await priorityPolicy.capture();
+        for (const { event, priority } of ranked) {
+          if (stopped || finite.cancelled) return;
+          if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
+          if (await recheck(event) !== priority) throw invalid('Priority authorization changed during scan');
+        }
+        recheck.assertFresh();
+        if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
+        if (stopped || finite.cancelled) return;
+        for (const { event } of ranked.slice(0, filter.limit)) if (!sendJson(['EVENT', id, event])) return;
+        sendJson(['EOSE', id]);
+      } catch {
+        if (!finite.cancelled) sendJson(['CLOSED', id, 'restricted: invalid, conflicting, unavailable trust state or priority resource limit']);
+      } finally {
+        if (acquired) priorityBusy = false;
+      }
+    }
+
+    async function message(data, binary, finite) {
       if (group) return;
       let value;
       try {
         if (binary) throw invalid('Expected text');
-        try { value = JSON.parse(data.toString()); } catch { throw invalid('Invalid JSON'); }
+        try { value = parseNetworkJson(data); } catch { throw invalid('Invalid JSON'); }
         if (!Array.isArray(value)) throw invalid('Expected NIP-01 array');
+        if (value[0] === 'MOSIMO-REQ') {
+          const task = priorityRequest(value, finite);
+          priorityTasks.add(task);
+          try { return await task; } finally { priorityTasks.delete(task); }
+        }
         if (value[0] === 'EVENT' && value.length === 2) {
           const event = value[1];
           if (!isObject(event) || !hex.test(event.id) || ![1, 5].includes(event.kind)) {
@@ -431,11 +499,36 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
     });
     ws.on('message', (data, binary) => {
       if (stopped) return;
+      // Register queued finite requests too: CLOSE may arrive in the same WebSocket batch.
+      let finite;
+      let finiteId;
+      if (!group && !binary) {
+        try {
+          const value = parseNetworkJson(data);
+          if (Array.isArray(value) && value.length === 2 && value[0] === 'CLOSE' && queuedFinite.has(value[1])) {
+            for (const pending of queuedFinite.get(value[1])) pending.cancelled = true;
+            subscriptions.delete(value[1]);
+            return;
+          }
+          if (Array.isArray(value) && value[0] === 'MOSIMO-REQ' && typeof value[1] === 'string' && /^[\x20-\x7e]{1,64}$/.test(value[1])) {
+            finiteId = value[1];
+            finite = { cancelled: false };
+            if (!queuedFinite.has(finiteId)) queuedFinite.set(finiteId, new Set());
+            queuedFinite.get(finiteId).add(finite);
+          }
+        } catch { /* The normal parser reports malformed messages below. */ }
+      }
       pendingBytes += data.length;
       pendingCount++;
       if (pendingBytes > options.maxBufferedBytes || pendingCount > 100) return stop(1008, 'Too many pending messages');
       enqueue(async () => {
-        try { await message(data, binary); } finally { pendingBytes -= data.length; pendingCount--; }
+        try { await message(data, binary, finite); } finally {
+          pendingBytes -= data.length; pendingCount--;
+          if (finite) {
+            queuedFinite.get(finiteId)?.delete(finite);
+            if (!queuedFinite.get(finiteId)?.size) queuedFinite.delete(finiteId);
+          }
+        }
       });
     });
     ws.on('pong', () => { alive = true; });
@@ -457,6 +550,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       clearInterval(timer);
       clearInterval(heartbeat);
       subscriptions.clear();
+      queuedFinite.clear();
       connections.delete(ws);
     });
   }
@@ -467,6 +561,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       closing = true;
       for (const ws of connections) ws.terminate();
       await new Promise(resolve => wss.close(resolve));
+      await Promise.allSettled(priorityTasks);
       await new Promise((resolve, reject) => server.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve()));
     })();
     return closePromise;
