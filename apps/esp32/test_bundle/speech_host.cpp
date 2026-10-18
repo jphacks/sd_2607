@@ -43,18 +43,23 @@ extern void* workerArg;
 extern int createCode, convertCode, initCode, frameCode;
 extern bool badHash, taskFail, outputStuck, silent, playFail;
 extern size_t hashed, frameIndex, frameCalls, stopCalls, notifications;
+extern std::vector<std::string> converted;
 struct MockSpeaker {
     struct Lease { const int16_t* data; std::vector<int16_t> snapshot; uint32_t until; };
     std::deque<Lease> leases;
     std::vector<const int16_t*> buffers;
     size_t queued = 0;
+    uint32_t stopReleaseAt = 0, stoppedAt = 0;
     bool begin() { return true; }
     void check() const {
         for (const auto& l : leases) assert(std::equal(l.snapshot.begin(), l.snapshot.end(), l.data));
     }
     size_t isPlaying(uint8_t channel) {
         assert(channel == 1); check();
-        if (!outputStuck) while (!leases.empty() && nowMs >= leases.front().until) leases.pop_front();
+        if (!outputStuck) {
+            if (stopReleaseAt && nowMs >= stopReleaseAt) { leases.clear(); stopReleaseAt = 0; }
+            while (!leases.empty() && nowMs >= leases.front().until) leases.pop_front();
+        }
         return leases.size();
     }
     bool playRaw(const int16_t* pcm, size_t n, uint32_t hz, bool stereo, uint32_t repeat, int ch, bool cut) {
@@ -65,7 +70,11 @@ struct MockSpeaker {
         leases.push_back({pcm, {pcm, pcm + n}, (leases.empty() ? nowMs : leases.back().until) + 40});
         queued += n; buffers.push_back(pcm); return true;
     }
-    void stop(uint8_t ch) { assert(ch == 1); ++stopCalls; if (!outputStuck) leases.clear(); }
+    void stop(uint8_t ch) {
+        assert(ch == 1); ++stopCalls; stoppedAt = nowMs;
+        // Retain references after stop returns, as the real playback task can.
+        if (!leases.empty()) stopReleaseAt = nowMs + 3;
+    }
 };
 struct MockM5 { MockSpeaker Speaker; };
 extern MockM5 M5;
@@ -115,6 +124,7 @@ inline int CAqTkPicoF_Init(uint32_t* work, uint16_t count, const char* key) {
 }
 inline int CAqK2R_Convert(const char* text, char* roman, int size) {
     assert(std::strlen(text) <= 400 && size == 2048);
+    converted.emplace_back(text);
     if (onConvert) onConvert();
     std::strcpy(roman, "mock-private-roman"); return convertCode;
 }
@@ -144,11 +154,12 @@ bool badHash = false, taskFail = false, outputStuck = false, silent = false, pla
 size_t hashed = 0, frameIndex = 0, frameCalls = 0, stopCalls = 0, notifications = 0;
 esp_partition_t partition;
 std::vector<uint8_t> dict(AQ_DICT_BYTES, 0x35);
+std::vector<std::string> converted;
 
 static std::string id(unsigned n) { char out[65]; std::snprintf(out, sizeof(out), "%064x", n); return out; }
 static void pump() { try { worker(workerArg); } catch (const Idle&) {} }
 static void resetOutput() {
-    Serial.log.clear(); M5.Speaker = MockSpeaker{};
+    Serial.log.clear(); M5.Speaker = MockSpeaker{}; converted.clear();
     onDelay = onConvert = onFrame = nullptr;
     convertCode = frameCode = 0; outputStuck = silent = playFail = false;
 }
@@ -190,9 +201,12 @@ static void inbox() {
     assert(box.push(id(1), "一") == mesh::speech::Inbox::Queued);
     assert(box.push(id(1), "再送") == mesh::speech::Inbox::Duplicate);
     for (unsigned i = 2; i <= 4; ++i) assert(box.push(id(i), "新着") == mesh::speech::Inbox::Queued);
-    assert(box.pop(job) && job.id == id(2));
-    assert(box.pop(job) && job.id == id(3));
     assert(box.pop(job) && job.id == id(4));
+    assert(!box.pop(job));
+    const auto generation = job.generation;
+    assert(box.push(id(4), "重複") == mesh::speech::Inbox::Duplicate);
+    assert(box.push(id(71), "\xff") == mesh::speech::Inbox::Invalid);
+    assert(!box.cancelled(job) && box.generation.load() == generation);
     assert(box.push(id(70), "消去される保留") == mesh::speech::Inbox::Queued);
     assert(box.toggle()); assert(box.cancelled(job) && !box.pop(job));
     assert(box.push(id(5), "ミュート") == mesh::speech::Inbox::Muted);
@@ -202,6 +216,103 @@ static void inbox() {
     for (unsigned i = 6; i <= 69; ++i) box.push(id(i), "更新");
     assert(box.push(id(1), "64件後は再受付") == mesh::speech::Inbox::Queued);
     assert(box.push("local-test-1", "試験", true) == mesh::speech::Inbox::Queued);
+}
+static void latestWins(mesh::Speech& speech) {
+    // Arrivals before the worker runs replace, rather than accumulate.
+    resetOutput();
+    for (unsigned n = 100; n <= 110; ++n) assert(speech.enqueue(id(n), "最新"));
+    assert(!speech.enqueue(id(105), "置き換え済みの重複"));
+    assert(!speech.enqueue(id(110), "保留中の重複"));
+    pump();
+    assert(converted == std::vector<std::string>{"最新"});
+    assert(Serial.log.find("TTS start id=" + id(110)) != std::string::npos);
+    assert(Serial.log.find("TTS cancel") == std::string::npos);
+    const auto frames = frameCalls;
+    assert(!speech.enqueue(id(110), "完了後の重複")); pump();
+    assert(frameCalls == frames);
+
+    // Duplicate and invalid arrivals during playback leave the current job alone.
+    resetOutput(); assert(speech.enqueue(id(111), "継続"));
+    onDelay = [&] {
+        if (M5.Speaker.leases.size() != 2) return;
+        assert(!speech.enqueue(id(111), "重複"));
+        assert(!speech.enqueue(id(112), "\xff"));
+        assert(!speech.enqueue("invalid", "不正ID"));
+        onDelay = nullptr;
+    };
+    const auto stops = stopCalls;
+    pump();
+    assert(stopCalls == stops && Serial.log.find("TTS done id=" + id(111)) != std::string::npos);
+    assert(Serial.log.find("TTS cancel") == std::string::npos);
+
+    // New arrivals while converting/synthesizing cancel before old PCM is queued.
+    for (unsigned n : {112u, 114u}) {
+        resetOutput(); assert(speech.enqueue(id(n), "旧"));
+        auto replace = [&, n] {
+            assert(speech.enqueue(id(n + 1), "新"));
+            onConvert = onFrame = nullptr;
+        };
+        if (n == 112) onConvert = replace; else onFrame = replace;
+        pump();
+        assert(M5.Speaker.queued == 1607);
+        assert(Serial.log.find("TTS cancel id=" + id(n)) != std::string::npos);
+        assert(Serial.log.find("TTS done id=" + id(n + 1)) != std::string::npos);
+    }
+
+    // Cancel with two leased buffers. Further arrivals while stop is pending
+    // replace the pending message without touching the old buffer references.
+    resetOutput(); assert(speech.enqueue(id(116), std::string(250, 'a')));
+    uint32_t interruptedAt = 0;
+    const auto beforeStop = stopCalls;
+    onDelay = [&] {
+        if (!interruptedAt && M5.Speaker.leases.size() == 2) {
+            interruptedAt = nowMs;
+            assert(speech.enqueue(id(117), "中間"));
+        } else if (M5.Speaker.stopReleaseAt) {
+            assert(speech.enqueue(id(118), "最新の本文"));
+            assert(!speech.enqueue(id(117), "中間の再送"));
+            assert(!speech.enqueue(id(116), "古い再送"));
+            onDelay = nullptr;
+        }
+    };
+    pump();
+    assert(interruptedAt && stopCalls == beforeStop + 1 && M5.Speaker.leases.empty());
+    assert(M5.Speaker.stoppedAt - interruptedAt <= 1);
+    assert(converted == (std::vector<std::string>{std::string(100, 'a'), "最新の本文"}));
+    assert(Serial.log.find("TTS start id=" + id(117)) == std::string::npos);
+    assert(Serial.log.find("TTS done id=" + id(118)) != std::string::npos);
+    assert(!speech.enqueue(id(116), "中断後の重複"));
+
+    // Stop at the first text-chunk boundary, never convert remaining chunks.
+    resetOutput(); assert(speech.enqueue(id(119), std::string(250, 'b')));
+    onDelay = [&] {
+        if (frameIndex != 6) return;
+        assert(speech.enqueue(id(120), "次の投稿")); onDelay = nullptr;
+    };
+    pump();
+    assert(converted == (std::vector<std::string>{std::string(100, 'b'), "次の投稿"}));
+    assert(Serial.log.find("TTS cancel id=" + id(119)) != std::string::npos);
+    assert(Serial.log.find("TTS done id=" + id(120)) != std::string::npos);
+
+    // Replacement during final output drain also stops the old output.
+    resetOutput(); assert(speech.enqueue(id(123), "終端待ち"));
+    onDelay = [&] {
+        if (frameIndex != 6 || M5.Speaker.leases.size() != 1) return;
+        assert(speech.enqueue(id(124), "終端で割り込み")); onDelay = nullptr;
+    };
+    const auto beforeDrain = stopCalls;
+    pump();
+    assert(stopCalls == beforeDrain + 1);
+    assert(Serial.log.find("TTS cancel id=" + id(123)) != std::string::npos);
+    assert(Serial.log.find("TTS done id=" + id(123)) == std::string::npos);
+    assert(Serial.log.find("TTS done id=" + id(124)) != std::string::npos);
+
+    // Muting discards pending/latest and unmuting never resurrects it.
+    resetOutput(); assert(speech.enqueue(id(121), "破棄"));
+    assert(speech.toggleMuted()); assert(!speech.enqueue(id(122), "ミュート中"));
+    assert(!speech.toggleMuted()); pump();
+    assert(converted.empty() && M5.Speaker.queued == 0);
+    assert(!speech.enqueue(id(121), "破棄済みの重複"));
 }
 int main() {
     chunks(); inbox();
@@ -254,6 +365,7 @@ int main() {
     assert(Serial.log.find("TTS cancel") != std::string::npos);
     assert(Serial.log.find("TTS done") == std::string::npos);
     speech.toggleMuted();
+    latestWins(speech);
     resetOutput(); assert(speech.test()); silent = true; pump();
     assert(Serial.log.find("stage=empty_audio") != std::string::npos && Serial.log.find("TTS done") == std::string::npos);
     resetOutput(); assert(speech.test()); frameCode = 105; pump();
@@ -267,6 +379,6 @@ int main() {
     assert(Serial.log.find("stage=output_timeout") != std::string::npos);
     assert(Serial.log.find("stage=stop_timeout") != std::string::npos);
     assert(!speech.enqueue(id(15), "故障後"));
-    std::cout << "speech host: UTF-8, queue/dedup/mute, dictionary bounds, real worker boundary checks passed\n";
+    std::cout << "speech host: UTF-8, latest-wins preemption/dedup/mute, dictionary bounds, real worker boundary checks passed\n";
 }
 #endif

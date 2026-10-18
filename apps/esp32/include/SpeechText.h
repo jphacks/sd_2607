@@ -9,7 +9,6 @@
 namespace mesh { namespace speech {
 constexpr size_t MaxText = 2000;
 constexpr size_t ChunkPoints = 100;
-constexpr size_t Pending = 3;
 
 // Strict UTF-8: reject truncation, overlong forms, surrogates and > U+10FFFF.
 inline size_t decode(const char* s, size_t remaining, uint32_t& cp) {
@@ -94,9 +93,11 @@ public:
         Job job;
         if (!sanitize(text, job.text)) return Invalid;
         std::memcpy(job.id, id.c_str(), id.size() + 1);
-        job.generation = generation.load();
-        if (count_ == Pending) { head_ = (head_ + 1) % Pending; --count_; }
-        jobs_[(head_ + count_) % Pending] = job; ++count_;
+        // Only accepted new jobs preempt; duplicates/invalid/muted input must
+        // leave both the running job and the latest pending job untouched.
+        job.generation = generation.fetch_add(1) + 1;
+        pending_ = job;
+        havePending_ = true;
         if (!local) {
             std::memcpy(recent_[recentAt_], job.id, sizeof(job.id));
             recentAt_ = (recentAt_ + 1) % 64;
@@ -104,12 +105,12 @@ public:
         return Queued;
     }
     bool pop(Job& job) {
-        if (!count_) return false;
-        job = jobs_[head_]; head_ = (head_ + 1) % Pending; --count_; return true;
+        if (!havePending_) return false;
+        job = pending_; havePending_ = false; return true;
     }
     bool toggle() {
         const bool value = !isMuted.load();
-        isMuted.store(value); generation.fetch_add(1); head_ = count_ = 0;
+        isMuted.store(value); generation.fetch_add(1); havePending_ = false;
         return value;
     }
     bool cancelled(const Job& job) const {
@@ -118,8 +119,9 @@ public:
     std::atomic<bool> isMuted{false};
     std::atomic<uint32_t> generation{0};
 private:
-    Job jobs_[Pending];
+    Job pending_;
+    bool havePending_ = false;
     char recent_[64][65]{};
-    size_t head_ = 0, count_ = 0, recentAt_ = 0;
+    size_t recentAt_ = 0;
 };
 }} // namespace mesh::speech

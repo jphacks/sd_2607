@@ -162,6 +162,8 @@ bool Speech::waitOutput(const speech::Job& job, size_t limit, uint32_t started) 
     return true;
 }
 bool Speech::stopOutput() {
+    // stop() is asynchronous. A replacement job must not refill any PCM until
+    // the speaker has released both the active and queued buffer references.
     M5.Speaker.stop(1);
     const uint32_t started = millis();
     while (M5.Speaker.isPlaying(1)) {

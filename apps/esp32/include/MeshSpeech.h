@@ -5,8 +5,10 @@
 
 namespace mesh {
 // One process-lifetime instance, owned/called by the main task. No boot speech.
-// enqueue is for NEW validated posts only, not restored history. SDK and channel
-// 1 have exactly one worker owner; channel 0 remains available for the B beep.
+// enqueue is for NEW validated posts only, not restored history. Accepted jobs
+// cancel current speech and replace the single pending job; recent duplicates
+// do neither. Muted submissions are rejected, never queued for unmute.
+// SDK and channel 1 have exactly one worker owner; channel 0 is independent.
 class Speech {
 public:
     Speech() = default;
