@@ -9,6 +9,7 @@ import serial
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("port", help="USB serial port, for example COM3")
+    parser.add_argument("--mesh", action="store_true", help="also require successful BLE relay startup")
     args = parser.parse_args()
 
     with serial.Serial(port=None, baudrate=115200, timeout=1) as device:
@@ -20,7 +21,7 @@ def main():
         time.sleep(0.1)
         device.rts = False
 
-        deadline = time.monotonic() + 16
+        deadline = time.monotonic() + 30
         lines = []
         while time.monotonic() < deadline:
             line = device.readline().decode("utf-8", errors="replace").strip()
@@ -37,6 +38,9 @@ def main():
     assert not any(
         "Guru Meditation" in line or "Brownout detector" in line for line in lines
     ), "Device fault detected"
+    if args.mesh:
+        assert "mesh: BLE relay ready" in lines, "BLE relay did not start"
+        assert not any("Relay unavailable" in line for line in lines), "Relay startup failed"
     print("Serial smoke test passed")
 
 
