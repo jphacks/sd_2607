@@ -29,8 +29,11 @@
   <div id="feed"></div>
 </main>
 <script>
-const APPVIEW = new URLSearchParams(location.search).get('appview') || 'https://appview.oriom.dev';
-const FEED = `${APPVIEW}/xrpc/dev.oriom.mosimo.getFeed?limit=50`;
+const params = new URLSearchParams(location.search);
+const APPVIEW = params.get('appview') || 'https://appview.oriom.dev';
+// Public HappyView client key: an app identifier checked against allowed origins, not a secret.
+const CLIENT_KEY = params.get('client_key') || 'hvc_c15d9393de6ace328d65633d07d00278';
+const FEED = `${APPVIEW}/xrpc/dev.oriom.mosimo.getFeed?limit=50&client_key=${encodeURIComponent(CLIENT_KEY)}`;
 const feed = document.getElementById('feed');
 const handles = new Map(); // did -> handle (resolved)
 const lookups = new Map(); // did -> Promise
@@ -120,7 +123,7 @@ async function load() {
   }
 }
 load();
-setInterval(load, 5000);
+setInterval(load, 1000);
 </script>
 </body>
 </html>
