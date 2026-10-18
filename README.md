@@ -62,7 +62,7 @@
 
 [アプリデモ](https://www.youtube.com/watch?v=RMGZ6aHQX2k)
 
-[M5Stack](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
+[M5Stackデモ](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
 
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
