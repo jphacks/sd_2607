@@ -109,6 +109,73 @@ test('relay subscribes without a timestamp watermark and ingests only matching t
   await closed;
 });
 
+test('relay backpressures a history burst above 100 without dropping events or reconnecting', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const server = await relay(t);
+  const first = deferred();
+  t.after(() => first.resolve());
+  const history = Array.from({ length: 526 }, (_, index) => ({ ...event, id: index.toString(16).padStart(64, '0') }));
+  const ingested = [];
+  let connections = 0;
+  server.wss.on('connection', () => connections++);
+  const { network, errors } = setup(t, { relays: [server.url], ingest: async value => {
+    ingested.push(value);
+    if (ingested.length === 1) await first.promise;
+    else await immediate();
+    return { accepted: true };
+  } });
+  const { socket } = await server.connected;
+  socket.send(JSON.stringify(['EVENT', 'mosimo', history[0]]));
+  await until(() => ingested.length === 1);
+  for (const value of history.slice(1)) socket.send(JSON.stringify(['EVENT', 'mosimo', value]));
+  socket.send('not json');
+  socket.send(JSON.stringify(['EVENT', 'mosimo', { id: 'binary' }]), { binary: true });
+  socket.send(JSON.stringify(['EVENT', 'other-subscription', event]));
+  await new Promise((resolve, reject) => socket.send(JSON.stringify(['EOSE', 'mosimo']), error => error ? reject(error) : resolve()));
+  await turn();
+  assert.deepEqual(ingested, [history[0]], 'only one ingestion may be active while storage is held');
+  t.mock.timers.tick(90000);
+  first.resolve();
+  await until(() => ingested.length === history.length);
+  assert.deepEqual(ingested, history);
+  const live = { ...event, id: 'f'.repeat(64), kind: 5 };
+  socket.send(JSON.stringify(['EVENT', 'mosimo', live]));
+  await until(() => ingested.length === history.length + 1);
+  assert.deepEqual(ingested, [...history, live]);
+  assert.equal(connections, 1);
+  assert.equal(socket.readyState, socket.OPEN);
+  assert.equal(errors.mock.callCount(), 0);
+  const closed = once(socket, 'close');
+  await network.close();
+  await closed;
+});
+
+test('relay drains buffered history when the upstream gracefully closes', async t => {
+  const server = await relay(t);
+  const first = deferred();
+  t.after(() => first.resolve());
+  const history = Array.from({ length: 150 }, (_, index) => ({ ...event, content: `post ${index}` }));
+  const ingested = [];
+  const { network, errors } = setup(t, { relays: [server.url], ingest: async value => {
+    ingested.push(value);
+    if (ingested.length === 1) await first.promise;
+    return { accepted: true };
+  } });
+  const { socket } = await server.connected;
+  socket.send(JSON.stringify(['EVENT', 'mosimo', history[0]]));
+  await until(() => ingested.length === 1);
+  for (const value of history.slice(1)) socket.send(JSON.stringify(['EVENT', 'mosimo', value]));
+  const closed = once(socket, 'close');
+  socket.close(1000, 'history complete');
+  await turn();
+  first.resolve();
+  await closed;
+  await until(() => ingested.length === history.length);
+  assert.deepEqual(ingested, history);
+  await network.close();
+  assert.equal(errors.mock.callCount(), 0);
+});
+
 test('relay ingestion failure does not poison the next EVENT', async t => {
   const server = await relay(t);
   const ingested = [];
@@ -306,16 +373,18 @@ test('close must drain active outbox delivery before main closes the store', asy
 test('close must drain active relay ingestion before main closes the store', async t => {
   const server = await relay(t);
   const ingestion = deferred();
-  let started = false;
-  const { network } = setup(t, { relays: [server.url], ingest: async () => {
-    started = true;
+  let started = 0;
+  const { network, errors } = setup(t, { relays: [server.url], ingest: async () => {
+    started++;
     await ingestion.promise;
     return { accepted: true };
   } });
   t.after(() => ingestion.resolve());
   const { socket } = await server.connected;
   socket.send(JSON.stringify(['EVENT', 'mosimo', event]));
-  await until(() => started);
+  await until(() => started === 1);
+  socket.send(JSON.stringify(['EVENT', 'mosimo', { ...event, kind: 5 }]));
+  await turn();
   let closed = false;
   const socketClosed = once(socket, 'close');
   const closing = network.close().then(() => { closed = true; });
@@ -325,4 +394,6 @@ test('close must drain active relay ingestion before main closes the store', asy
   ingestion.resolve();
   await closing;
   assert.equal(closedBeforeIngestion, false, 'network.close resolved while relay ingestion still needed the store');
+  assert.equal(started, 1, 'shutdown must not start ingestion of buffered messages');
+  assert.equal(errors.mock.callCount(), 0);
 });

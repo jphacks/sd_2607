@@ -47,16 +47,20 @@ function matches(event, filter) {
   });
 }
 
-function filterSql(filter, params) {
+function filterSql(filter, params, sqlite) {
   const bind = value => { params.push(value); return `$${params.length}`; };
   const parts = [];
   for (const [key, value] of Object.entries(filter)) {
-    if (key === 'ids') parts.push(`e.id = ANY(${bind(value)}::text[])`);
-    if (key === 'authors') parts.push(`e.pubkey = ANY(${bind(value)}::text[])`);
-    if (key === 'kinds') parts.push(`e.kind = ANY(${bind(value)}::int[])`);
+    if (['ids', 'authors', 'kinds'].includes(key)) {
+      const column = { ids: 'id', authors: 'pubkey', kinds: 'kind' }[key];
+      parts.push(sqlite ? `e.${column} IN (SELECT value FROM json_each(${bind(JSON.stringify(value))}))`
+        : `e.${column} = ANY(${bind(value)}::${key === 'kinds' ? 'int' : 'text'}[])`);
+    }
     if (key === 'since') parts.push(`e.created_at >= ${bind(value)}`);
     if (key === 'until') parts.push(`e.created_at <= ${bind(value)}`);
-    if (/^#[a-zA-Z]$/.test(key)) parts.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(e.event->'tags') AS t(tag) WHERE tag->>0 = ${bind(key[1])} AND tag->>1 = ANY(${bind(value)}::text[]))`);
+    if (/^#[a-zA-Z]$/.test(key)) parts.push(sqlite
+      ? `EXISTS (SELECT 1 FROM json_each(e.event, '$.tags') AS t WHERE json_extract(t.value, '$[0]') = ${bind(key[1])} AND json_extract(t.value, '$[1]') IN (SELECT value FROM json_each(${bind(JSON.stringify(value))})))`
+      : `EXISTS (SELECT 1 FROM jsonb_array_elements(e.event->'tags') AS t(tag) WHERE tag->>0 = ${bind(key[1])} AND tag->>1 = ANY(${bind(value)}::text[]))`);
   }
   return parts.length ? parts.join(' AND ') : 'TRUE';
 }
@@ -78,6 +82,7 @@ function lexJson(value) {
  */
 export function createServer({ config, store, ingest, resolveIdentity, onNotify }) {
   const options = { ...defaults, ...config };
+  const sqlite = store.dialect === 'sqlite';
   for (const name of Object.keys(defaults)) {
     if (!Number.isSafeInteger(options[name]) || options[name] < 1) throw new TypeError(`Invalid ${name}`);
   }
@@ -213,7 +218,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         const requested = cids.map(text => parseCid(text).toString());
         // A Relay replaying an earlier commit may need historical MST nodes, not just the latest CAR.
         const rows = await query(`SELECT b.cid, b.bytes FROM blocks b JOIN repo_blocks r ON r.cid = b.cid
-          WHERE r.did = $1 AND b.cid = ANY($2::text[])`, [repo.did, requested]);
+          WHERE r.did = $1 AND ${sqlite ? 'b.cid IN (SELECT value FROM json_each($2))' : 'b.cid = ANY($2::text[])'}`, [repo.did, sqlite ? JSON.stringify(requested) : requested]);
         const available = new Map(rows.map(row => [row.cid, row.bytes]));
         const selected = new BlockMap();
         for (const text of requested) {
@@ -324,14 +329,14 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       }
       const sub = { filters, cursor: 0n, ready: false };
       subscriptions.set(id, sub);
-      const [high] = await query('SELECT COALESCE(MAX(arrival), 0)::text AS cursor FROM events');
+      const [high] = await query('SELECT CAST(COALESCE(MAX(arrival), 0) AS text) AS cursor FROM events');
       sub.cursor = BigInt(high.cursor);
       const found = new Map();
       for (const filter of filters) {
         const limit = Math.min(filter.limit ?? options.maxResults, options.maxResults);
         if (!limit) continue;
         const params = [sub.cursor.toString()];
-        const where = filterSql(filter, params);
+        const where = filterSql(filter, params, sqlite);
         params.push(limit);
         const rows = await query(`SELECT e.id, e.event FROM events e WHERE e.arrival <= $1 AND e.kind IN (1, 5) AND ${visible} AND (${where}) ORDER BY e.created_at DESC, e.id ASC LIMIT $${params.length}`, params);
         for (const row of rows) found.set(row.id, row.event);
@@ -382,7 +387,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
     async function poll() {
       if (group) {
         if (!streamReady) return;
-        const rows = await query('SELECT seq::text, frame FROM streams WHERE group_id = $1 AND seq > $2 ORDER BY seq LIMIT $3', [group.id, streamCursor.toString(), options.maxResults]);
+        const rows = await query('SELECT CAST(seq AS text) AS seq, frame FROM streams WHERE group_id = $1 AND seq > $2 ORDER BY streams.seq LIMIT $3', [group.id, streamCursor.toString(), options.maxResults]);
         for (const row of rows) {
           if (!send(Buffer.from(row.frame))) return;
           streamCursor = BigInt(row.seq);
@@ -391,7 +396,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       }
       for (const [id, sub] of subscriptions) {
         if (!sub.ready) continue;
-        const rows = await query(`SELECT e.id, e.event, e.arrival::text, ${visible} AS visible FROM events e WHERE e.arrival > $1 ORDER BY e.arrival LIMIT $2`, [sub.cursor.toString(), options.maxResults]);
+        const rows = await query(`SELECT e.id, e.event, CAST(e.arrival AS text) AS arrival, ${visible} AS visible FROM events e WHERE e.arrival > $1 ORDER BY e.arrival LIMIT $2`, [sub.cursor.toString(), options.maxResults]);
         for (const row of rows) {
           sub.cursor = BigInt(row.arrival);
           if (row.visible && [1, 5].includes(row.event.kind) && sub.filters.some(filter => matches(row.event, filter))) {
@@ -402,7 +407,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
     }
 
     if (group) enqueue(async () => {
-      const [row] = await query('SELECT COALESCE(MAX(seq), 0)::text AS cursor FROM streams WHERE group_id = $1', [group.id]);
+      const [row] = await query('SELECT CAST(COALESCE(MAX(seq), 0) AS text) AS cursor FROM streams WHERE group_id = $1', [group.id]);
       const latest = BigInt(row.cursor);
       const cursor = url.searchParams.get('cursor');
       if (url.searchParams.getAll('cursor').length > 1 || (cursor !== null && (!/^\d+$/.test(cursor) || cursor.length > 19 || BigInt(cursor) > 9223372036854775807n))) return failure('InvalidRequest');

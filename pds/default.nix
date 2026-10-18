@@ -8,19 +8,26 @@ let
 in
 {
   options.services.mosimo-pds = {
-    enable = mkEnableOption "Mosimo PDS (external PostgreSQL required)";
+    enable = mkEnableOption "Mosimo PDS";
     image = mkOption {
-      type = types.nonEmptyStr;
-      description = "Prebuilt OCI image reference; use a published immutable digest in production. No image is built by this module.";
+      type = types.nullOr types.nonEmptyStr;
+      default = null;
+      description = "Optional prebuilt OCI image reference; null runs the native Node.js package. Use an immutable digest in production. No image is built by this module.";
     };
     port = mkOption {
       type = types.port;
       default = 2583;
-      description = "Host loopback port, forwarded to container port 2583.";
+      description = "Host loopback port; forwarded to container port 2583 in OCI mode.";
+    };
+    databaseBackend = mkOption {
+      type = types.enum [ "sqlite" "postgresql" ];
+      default = "sqlite";
+      description = "SQLite needs no database process. PostgreSQL requires DATABASE_URL in environmentFile.";
     };
     environmentFile = mkOption {
-      type = types.str;
-      description = "Absolute runtime env-file path outside the Nix store. DATABASE_URL is required; PEER_TOKEN is required when peers are configured.";
+      type = types.nullOr types.str;
+      default = null;
+      description = "Optional absolute runtime env-file path outside the Nix store. Required for PostgreSQL (DATABASE_URL); configure peer tokens here when peers are enabled.";
     };
     settings = mkOption {
       default = { };
@@ -74,8 +81,12 @@ in
   config = mkIf cfg.enable {
     assertions = [
       {
-        assertion = lib.hasPrefix "/" cfg.environmentFile
-          && !(lib.hasPrefix "/nix/store/" cfg.environmentFile);
+        assertion = cfg.databaseBackend != "postgresql" || cfg.environmentFile != null;
+        message = "services.mosimo-pds.environmentFile is required for PostgreSQL (DATABASE_URL).";
+      }
+      {
+        assertion = cfg.environmentFile == null || (lib.hasPrefix "/" cfg.environmentFile
+          && !(lib.hasPrefix "/nix/store/" cfg.environmentFile));
         message = "services.mosimo-pds.environmentFile must be an absolute runtime path outside /nix/store.";
       }
       {
@@ -89,21 +100,59 @@ in
       }
     ];
 
-    virtualisation.oci-containers = {
+    systemd.services.mosimo-pds = mkIf (cfg.image == null) {
+      description = "Mosimo PDS";
+      wantedBy = [ "multi-user.target" ];
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" ];
+      environment = {
+        NODE_ENV = "production";
+        HOST = "127.0.0.1";
+        PORT = toString cfg.port;
+        CONFIG_FILE = toString configFile;
+      } // lib.optionalAttrs (cfg.databaseBackend == "sqlite") {
+        DATABASE_PATH = "/var/lib/mosimo-pds/pds.sqlite";
+      };
+      serviceConfig = {
+        ExecStart = "${pkgs.nodejs_24}/bin/node --max-old-space-size=256 ${pkgs.callPackage ./package.nix { }}/lib/mosimo-pds/main.mjs";
+        EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
+        DynamicUser = true;
+        StateDirectory = "mosimo-pds";
+        StateDirectoryMode = "0700";
+        UMask = "0077";
+        MemoryHigh = "384M";
+        MemoryMax = "512M";
+        Restart = "on-failure";
+        RestartSec = 5;
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+      };
+    };
+
+    virtualisation.oci-containers = mkIf (cfg.image != null) {
       backend = "podman";
       containers.mosimo-pds = {
         image = cfg.image;
         user = "node";
-        cmd = [ "node" "main.mjs" ];
+        cmd = [ "node" "--max-old-space-size=256" "main.mjs" ];
         environment = {
           NODE_ENV = "production";
+          HOST = "0.0.0.0";
           PORT = "2583";
           CONFIG_FILE = "/etc/mosimo/config.json";
+        } // lib.optionalAttrs (cfg.databaseBackend == "sqlite") {
+          DATABASE_PATH = "/var/lib/mosimo-pds/pds.sqlite";
         };
-        environmentFiles = [ cfg.environmentFile ];
+        environmentFiles = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         ports = [ "127.0.0.1:${toString cfg.port}:2583" ];
-        volumes = [ "${configFile}:/etc/mosimo/config.json:ro" ];
-        extraOptions = [ "--cap-drop=ALL" "--security-opt=no-new-privileges" ];
+        volumes = [ "${configFile}:/etc/mosimo/config.json:ro" ]
+          ++ lib.optional (cfg.databaseBackend == "sqlite") "mosimo-pds:/var/lib/mosimo-pds:U";
+        extraOptions = [
+          "--cap-drop=ALL" "--security-opt=no-new-privileges"
+          "--memory-reservation=384m" "--memory=512m"
+        ];
       };
     };
   };

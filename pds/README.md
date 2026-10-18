@@ -1,6 +1,8 @@
 # Mosimo PDS
 
-端末署名済みリポジトリを収集・復元する物理PDS。Node.js 24＋PostgreSQLを使用する。
+端末署名済みリポジトリを収集・復元する物理PDS。既定のNixOS構成はNode.js 24＋SQLiteを
+ネイティブsystemdサービス`mosimo-pds`で実行する。OCIイメージやenv-fileは不要
+（peer認証を設定する場合はenv-fileが必要）。PostgreSQLとOCI実行も明示指定で選択できる。
 著者のNostr鍵・atproto署名鍵・PLC管理鍵を生成・保持せず、署名も代行しない。
 
 ## データの流れ
@@ -19,8 +21,10 @@
    同一トランザクションで更新。過去commitや分岐でheadを巻き戻さない。
 7. 設定済みpeerへ小さな通知を送り、受信側が必要な元イベントだけを認証付きで取得・再検証。
 
-同じ論理PDSの複数物理ノードは共通DBを使い、採番を直列化する。公開headとstreamは
-`group_id`で分離する。異なるDBのpeer間で同じstreamの合意形成を行う実装ではない。
+SQLiteは**単一物理ノード・永続ローカルディスク専用**。ネットワーク・共有ファイルシステムへ
+置かず、同じ論理PDSを別々のSQLite DBで負荷分散しない。複数物理ノードで同じ論理PDSを
+提供する場合は共通PostgreSQLを使い、採番を直列化する。公開headとstreamは`group_id`で
+分離する。異なるDBのpeer間で同じstreamの合意形成を行う実装ではない。
 
 ## 外部インターフェース
 
@@ -49,10 +53,18 @@ npm ci
 npm test
 ```
 
-`CONFIG_FILE`に設定JSONへのパス、`DATABASE_URL`にPostgreSQL接続URLを指定して
-`npm start`。設定・Nixモジュール・Caddy・peer認証・バックアップ手順は
-[deployment.md](deployment.md)を参照。
-初回起動でDBスキーマを作る。標準のPDS管理者パスワードや著者署名鍵の設定はない。
+手動起動では`CONFIG_FILE`に設定JSONへのパス、`DATABASE_PATH`にSQLite DBの絶対パスを
+指定して`npm start`（親ディレクトリは事前に作成）。PostgreSQLを使う場合は`DATABASE_PATH`を
+設定せず、`DATABASE_URL`に接続URLを指定する。両方ある場合は`DATABASE_PATH`が優先される。
+初回起動で選択したDBのスキーマを作るが、PostgreSQLからSQLiteへの自動移行は行わない。
+標準のPDS管理者パスワードや著者署名鍵の設定はない。
+
+NixOSでは`pds/default.nix`をimportして有効化すると、`package.nix`でNode.js 24のパッケージを
+ビルドし、`StateDirectory=mosimo-pds`の`/var/lib/mosimo-pds/pds.sqlite`へ保存する。
+SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`MemoryHigh=384M`、
+`MemoryMax=512M`、Nodeのold-space上限256 MiBは保護用の設定値であり、VPS上での
+消費メモリ・処理性能の実測結果や動作保証ではない。
+設定・Caddy・peer認証・安全なバックアップ手順は[deployment.md](deployment.md)を参照。
 
 実装の責務:
 
@@ -60,7 +72,7 @@ npm test
 | --- | --- |
 | `repository.mjs` | 基本版1の検証・復元、commit署名、MST/CAR |
 | `identity.mjs` | 固定PLC DirectoryからのDID解決。任意URLへアクセスしない |
-| `store.mjs` | PostgreSQL接続、スキーマ、トランザクション |
+| `store.mts` / `store.mjs` | SQLite/PostgreSQL接続、スキーマ、トランザクション。Node.js 24のネイティブ型除去で実行 |
 | `ingest.mjs` | 受理、削除要求、復元ジョブ、公開head・firehose |
 | `server.mjs` | Nostrリレー、標準XRPC、firehose、peer受信 |
 | `network.mjs` | 外部リレー収集、peer通知・取得・再試行 |
@@ -70,7 +82,8 @@ npm test
 
 これはドラフトで合意された**公開テキスト・create専用プロファイル**の実装であり、
 一般の書き込み可能なBluesky PDS一式ではない。外部同期は標準API/データ形式を使うが、
-**実atproto Relayでの取り込み適合試験は未実施**。完全な互換性を確認済みとは主張しない。
+**実Bluesky Relayへの参加要求は互換性エラーで拒否された**。完全な互換性を確認済みとは主張しない。
+kind 1/5以外のNostrイベントは拒否するため、汎用Nostrリレーでもない。
 
 - 本文を持つkind 1からの復元のみ。外部クライアントのcreateRecord/applyWrites、
   セッション/OAuth、メディア・blobの保存は提供しない。listBlobsは空、getBlobはBlobNotFound。
@@ -90,6 +103,12 @@ npm test
   大規模リポジトリには時間・容量上の制限がある。容量監視とDB側の資源制限が必要。
 - サイズ・購読・送信待機・接続数に上限はあるが、匿名投稿のレート制限やネットワークごとの
   濫用対策はCaddy/ネットワーク側にも設ける。削除は配信抑止であり、DBからの物理消去ではない。
+
+2026-10-18、本番VPS・実PLC Directory・Damusを使い、8件の署名済みcommit復元、
+MST/CAR/firehose、順序逆転、外部履歴・ライブ収集、サービス再起動後の保持を検証した。
+ローカル115テストと型チェックも成功。実Bluesky Relayへの取り込みは不合格で、負荷試験も未実施。
+公開証拠・再実行用TypeScriptツール・修正した不具合は
+[本番動作検証報告](../docs/pds-production-verification-2026-10-18.md)を参照。
 
 プロトコル根拠: [リポジトリモデル](../protocol/0001-repository-model.md)、
 [論理PDS](../protocol/0006-logical-pds.md)、[Nostrリレー](../protocol/0007-nostr-relay-profile.md)、

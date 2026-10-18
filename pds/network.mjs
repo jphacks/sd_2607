@@ -1,7 +1,9 @@
-import { WebSocket } from 'ws';
+import { WebSocket, createWebSocketStream } from 'ws';
 import { fetchJson } from './identity.mjs';
+import { sqliteNow } from './store.mjs';
 
 export function startNetwork({ config, store, ingest }) {
+  const sqlite = store.dialect === 'sqlite';
   let stopped = false;
   const sockets = new Set();
   const timers = new Set();
@@ -16,10 +18,12 @@ export function startNetwork({ config, store, ingest }) {
     if (stopped) return;
     const ws = new WebSocket(url, { maxPayload: config.maxEventBytes, handshakeTimeout: 10000 });
     sockets.add(ws);
-    let queued = 0;
-    let chain = Promise.resolve();
+    // Object mode preserves message boundaries and distinguishes text from binary.
+    const stream = createWebSocketStream(ws, { readableObjectMode: true, highWaterMark: 1 });
     let alive = true;
     const heartbeat = setInterval(() => {
+      // Backpressure also delays pong frames; a paused reader is not a dead relay.
+      if (ws.isPaused) { alive = true; return; }
       if (!alive) return ws.terminate();
       alive = false;
       if (ws.readyState === WebSocket.OPEN) ws.ping();
@@ -30,20 +34,22 @@ export function startNetwork({ config, store, ingest }) {
       // Do not use a created_at watermark: disaster/offline posts may be arbitrarily old.
       ws.send(JSON.stringify(['REQ', 'mosimo', { kinds: [1], '#t': ['mosimo.oriom.dev'] }, { kinds: [5] }]));
     });
-    ws.on('message', (bytes, binary) => {
-      if (stopped || binary) return;
-      if (++queued > 100) { ws.terminate(); queued--; return; }
-      const task = chain.then(async () => {
-        let message;
-        try { message = JSON.parse(bytes.toString()); } catch { return; }
-        if (message[0] === 'EVENT' && message[1] === 'mosimo') await ingest(message[2]);
-      }).catch(error => console.error('Relay ingestion:', error.message)).finally(() => {
-        queued--;
-        relayTasks.delete(task);
-      });
-      chain = task;
-      relayTasks.add(task);
-    });
+    const task = (async () => {
+      try {
+        for await (const bytes of stream) {
+          if (stopped) break;
+          if (typeof bytes !== 'string') continue;
+          let message;
+          try { message = JSON.parse(bytes); } catch { continue; }
+          try {
+            if (message[0] === 'EVENT' && message[1] === 'mosimo') await ingest(message[2]);
+          } catch (error) { console.error('Relay ingestion:', error.message); }
+        }
+      } catch {
+        // WebSocket errors are reported by the connection error listener below.
+      }
+    })().finally(() => relayTasks.delete(task));
+    relayTasks.add(task);
     ws.on('error', error => console.error('Relay connection:', url, error.message));
     ws.on('close', () => {
       clearInterval(heartbeat);
@@ -81,7 +87,7 @@ export function startNetwork({ config, store, ingest }) {
     if (stopped || outboxBusy) return;
     outboxBusy = true;
     try {
-      const row = (await store.query('SELECT * FROM outbox WHERE next_attempt<=now() ORDER BY next_attempt LIMIT 1')).rows[0];
+      const row = (await store.query(`SELECT * FROM outbox WHERE next_attempt<=${sqlite ? sqliteNow : 'now()'} ORDER BY next_attempt LIMIT 1`)).rows[0];
       if (!row) return;
       const peer = config.peers.find(peer => peer.url === row.peer);
       if (!peer || row.attempts >= 10) {
@@ -96,7 +102,7 @@ export function startNetwork({ config, store, ingest }) {
         await store.query('DELETE FROM outbox WHERE peer=$1 AND event_id=$2', [row.peer, row.event_id]);
       } catch (error) {
         console.error('Peer notification:', peer.url, error.message);
-        await store.query(`UPDATE outbox SET attempts=attempts+1,next_attempt=now()+make_interval(secs => $3)
+        await store.query(`UPDATE outbox SET attempts=attempts+1,next_attempt=${sqlite ? "strftime('%Y-%m-%dT%H:%M:%fZ','now','+' || $3 || ' seconds')" : 'now()+make_interval(secs => $3)'}
           WHERE peer=$1 AND event_id=$2`, [row.peer, row.event_id, Math.min(3600, 2 ** (row.attempts + 1))]);
       }
     } catch (error) { console.error('Peer outbox:', error.message); }
