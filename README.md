@@ -1,5 +1,10 @@
 # Mosimo Protocol
 
+![Endpoint Badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fghloc.dev%2Fapi%2Fjphacks%2Fsd_2607%2Fbadge)
+![Chromium HSTS preload](https://img.shields.io/hsts/preload/oriom.dev)
+![Website](https://img.shields.io/website?url=https%3A%2F%2Fmosimo.oriom.dev)
+
+
 [![いつものアプリがもしもの通信網になる](./assets/mosimo_protocol.png)](https://www.youtube.com/watch?v=piaNsc6ilBI)
 
 
