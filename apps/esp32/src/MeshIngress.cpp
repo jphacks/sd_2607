@@ -72,11 +72,11 @@ bool pairs(const Document& d, size_t array, std::vector<std::pair<std::string,st
     for (auto entry : d.at(array).children) {
         if (!d.fields(entry, {"botDid", "types"})) return false;
         std::string bot = d.str(entry, "botDid"); std::vector<std::string> types;
-        if (!did(bot) || (!previous.empty() && previous >= bot) || !strings(d, d.get(entry, "types"), types, 8, 128) || types.empty()) return false;
+        if (!did(bot) || (!previous.empty() && previous >= bot) || !strings(d, d.get(entry, "types"), types, 32, 128) || types.empty()) return false;
         previous = bot;
         for (const auto& t : types) out.emplace_back(bot, t);
     }
-    return out.size() <= 16;
+    return out.size() <= 64;
 }
 bool scope(const Document& d, size_t i, Scope& s) {
     return d.fields(i, {"orgIds", "bsaf"}) && strings(d, d.get(i, "orgIds"), s.orgs, 8, 128) && !s.orgs.empty() && pairs(d, d.get(i, "bsaf"), s.pairs);

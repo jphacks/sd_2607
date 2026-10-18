@@ -33,6 +33,19 @@ The runner compiles the real `MeshIngress.cpp`/`MeshBundle.cpp` checker with `-W
 
 Measured actual output: JSON 3,635 / 3,694 bytes, payload 2,742 / 2,802 bytes, text 339 bytes, commit 188 bytes. Both fit the unchanged ESP32 strict input/CBOR/key bounds; no limit increase, signer allowlist, skipped signature or decoder relaxation was needed. The receiver additionally mirrors the server's atproto/Nostr same-x-coordinate key-reuse rejection, with a negative test where all signatures would otherwise be valid. The older primitive fixtures remain separate and are not presented as valid repository MST fixtures.
 
+### Combined JMA + Kikikuru receiver fixture
+
+`wire-v1-combined-server-fixture.json` is a separate public TEST ONLY fixture from the same real server APIs. It retains the JMA five-type preset and adds the separate 23-type Kikikuru preset, pinned against the primary bot definition in the generator. No default trust asset/header is changed. Reproduce from `apps/esp32`:
+
+```sh
+node test_bundle/generate_server_fixture.mjs --write --combined
+node test_bundle/generate_server_fixture.mjs --check --combined
+```
+
+It contains the combined certificate, public root/snapshot, 28 successive real-MST events (one per selected type) and a signed unselected-extra event. The existing WSL `test_ingress.py` command verifies all 28, exact payloads and MSTs, rejects the extra/local deselection/narrower-root cases, and checks 32/33 per-Bot and 64/65-total boundaries. Android's `:bundle-core:test` consumes the same JSON directly through test resources, not APK/default trust. Both retain all other resource limits.
+
+Measured: Scope 579 B, selection 544 B, certificate 1,285 B, identity 1,852 B; max JSON 4,366 B and payload 3,307 B. No byte/tree/stack limit increase is required for the actual 28-type fixture. ESP32 accepts 64 pairs in Scope/selection but the synthetic full 64-type identity exceeds its unchanged 128-node tree budget and is rejected (not all maxima fit simultaneously). The combined fixture is not operational JMA authority even though it names the real Bot DIDs. No network, real private keys, publishing or device flashing is used.
+
 ## Build requirements
 
 - C++11 and mbedTLS **2.x** APIs (tested against host 2.28.8 and the installed

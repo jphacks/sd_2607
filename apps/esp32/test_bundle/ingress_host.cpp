@@ -42,6 +42,7 @@ int main(int argc,char** argv) {
     CHECK(positional == 9 || positional == 10);
     const std::string mode = argv[1]; Policy p; p.enabled = true; p.trustedClock = std::string(argv[8]) == "1";
     if (!configure(p,argv[2],argv[3],argv[4],minSequence)) return 1;
+    if (mode == "configure") return 0;
     if (mode == "floor") p.minSequence = 11;
     if (mode == "disabled") p.enabled = false;
     uint64_t now = std::stoull(argv[7]); State state; Snapshot s;

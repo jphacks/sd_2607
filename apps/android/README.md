@@ -119,6 +119,8 @@ priority は正しい単一の署名拡張だけを採用（無指定/不正/複
 
 追加のローカル上限: 保存履歴8 roots・256 issuer/serial（自動削除なし、満杯は fail closed）、CRL合計256、event64 tags/16 extensions、CBOR depth16/items8192、HTTP/WebSocket JSON262144 bytes/frame、取得32 distinct events/2MiB（fallbackとの合計）、256 frames/request。受信待機キューも34 frames/2MiBまで。公的情報の揮発表示 cache は直近32件、一般 relay cache は既存64件。mesh は既存128 entries、24,000-byte Bundle（payloadプロファイル32KiBより小さい）、BPv7 envelope preflight4096 items、著者12件/分、hop8・最大24時間を維持し、超過は切り詰めず拒否する。
 
+Scope は各 Bot 最大32個の明示的 type、合計64 Bot/type（最大16 Bots・16 orgs）に対応する。既存 JMA 5種と Kikikuru (`did:plc:kxwz5cz7o6g4jlmxh6doyfsm`) の23種を同時に選択できるが、root Scope と leaf Scope の包含・個別のローカル選択が必須で、Bot定義や `source:jma` から自動拡大しない。配布時の空 roots/selected は変更せず、承認した公開設定を provision するまで無効のまま。
+
 ### 再現可能なチェック
 
 `apps/android` で（Windows Git Bash の例）:
@@ -127,6 +129,7 @@ priority は正しい単一の署名拡張だけを採用（無指定/不正/複
 env JAVA_HOME='C:/Program Files/Microsoft/jdk-21.0.6.7-hotspot' \
   ANDROID_HOME='C:/Users/chiba/AppData/Local/Android/Sdk' \
   ./gradlew :bundle-core:test :mesh-android:testDebugUnitTest :app:assembleDemoDebug
+node ../esp32/test_bundle/generate_server_fixture.mjs --check --combined
 node wire-v1-fixture.mjs
 node bundle-core/src/test/fixtures/server-publisher-fixture.mjs
 ```
@@ -138,6 +141,8 @@ Node チェックは既存 `pds/node_modules` の DAG-CBOR/noble/multiformats �
 ESP32/他workerも同じ公開fixtureを使える。最初のeventは旧fixture同様のtop-level `event/config/certificate/binding/snapshotHex/recordHex/commitHex` 等にあり、`posts` に2件とそれぞれの `meshPayloadHex`、`repositoryEntries`、`repositoryBlocks` を含む。旧 `wire-v1.json` は変異テスト用の署名/preimage fixtureとして維持するが、**正規MSTを持つpublisher統合fixtureではない**。新fixtureのMST検証は完全状態を持つテストの証拠であり、通常ingressの不完全な受信履歴をMST包含検証済みと表示する変更ではない。原Bot recordへの署名・PLC現在状態も証明しない。
 
 BSAFの `original.createdAt` と任意 `botDefinition.retrievedAt` は実在する日時/offsetを検査し、元のfraction/offset表記を保持する。Bot定義URLはHTTP(S)の絶対URLに限定し、`file:`/`data:`等を認可済みmetadataとして受け入れない（URL先の取得は行わない）。
+
+追加の共有公開fixture `../esp32/test_bundle/wire-v1-combined-server-fixture.json` は実サーバーAPIが発行した JMA 5種 + Kikikuru 23種の同一 certificate・連続28投稿を含む。上記 generator の `--write --combined` で再生成し、`--check --combined` で byte/provenance drift を検出する（テスト専用の決定的乱数、秘密鍵の読込・出力なし）。Gradle はこのJSONだけを test resource に追加し、APK/default trust に含めない。`PublicIngressTest` は全28種の認可・mesh payload一致、未選択extra・unknown/disabled root・root Scope拡大の拒否、32/33 types/Bot・64/65総数境界を検査する。Kikikuruの23種は一次 bot-definition の `type` options に固定し、元定義の更新で自動追加しない。
 
 実機の Keystore/電断 AtomicFile 試験・配布 root と本番 importer/relay の end-to-end は別途必要。ここで APK ビルドや JVM テストを通しても、その実機検証が完了したとはしない。
 

@@ -76,7 +76,7 @@ object PublicIngress {
         val names = mutableListOf<String>()
         val pairs = bots.flatMap {
             val b = exact(it, "botDid", "types"); val bot = text(b["botDid"]).also { d -> require(did.matches(d)) }; names += bot
-            sorted(b["types"], 16) { t -> label(t, 128) }.map { t -> Selection(bot, t) }
+            sorted(b["types"], 32) { t -> label(t, 128) }.map { t -> Selection(bot, t) }
         }
         require(names.zipWithNext().all { (a, b) -> lexical.compare(a, b) < 0 } && pairs.size <= 64)
         return Scope(orgs, pairs.toSet())

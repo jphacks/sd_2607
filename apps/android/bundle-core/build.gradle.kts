@@ -18,6 +18,9 @@ dependencies {
     testRuntimeOnly("fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.24.0")
     testImplementation("junit:junit:4.13.2")
 }
+tasks.processTestResources {
+    from("../../esp32/test_bundle") { include("wire-v1-combined-server-fixture.json") }
+}
 tasks.test {
     systemProperty("fr.acinq.secp256k1.tmpdir", System.getProperty("java.io.tmpdir"))
 }

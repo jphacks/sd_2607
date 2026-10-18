@@ -205,7 +205,7 @@ def main():
         root = golden['root_pubkey']
         count = 0
 
-        def run(obj=None, snap=None, accepted=False, trust=True, selection=selected, root_key=root, now=NOW, mode='authorize', previous=None, conflict=None, raw_snapshot=None, root_scope=scope, min_sequence=1, successive=None):
+        def run(obj=None, snap=None, accepted=False, trust=True, selection=selected, root_key=root, now=NOW, mode='authorize', previous=None, conflict=None, raw_snapshot=None, root_scope=scope, min_sequence=1, successive=None, rejected_reason=None):
             nonlocal count
             count += 1
             (temp / 'snapshot').write_bytes(raw_snapshot if raw_snapshot is not None else f.dumps(snap or snapshot()))
@@ -221,6 +221,8 @@ def main():
                 cmd += ['--min-sequence', str(min_sequence)]
             result = subprocess.run(cmd, capture_output=True, timeout=30)
             assert result.returncode == (0 if accepted else 1), (count, result.returncode, result.stderr.decode(), result.stdout.decode())
+            if rejected_reason is not None:
+                assert rejected_reason in result.stderr.decode(), result.stderr.decode()
             return result.stdout.decode()
 
         output = run(accepted=True).splitlines()
@@ -362,6 +364,50 @@ def main():
                        successive=server['events'][1]['event'], **options)
         assert 'PASS successive real-server events' in sequence
         print('PASS actual server events sequentially across persisted snapshot/serial state')
+        combined = json.loads((HERE / 'wire-v1-combined-server-fixture.json').read_text(encoding='utf-8'))
+        anchor = combined['root']
+        options = dict(root_key=anchor['rootPubkey'], root_scope=f.dumps(anchor['scope']).hex(),
+                       selection=f.dumps(combined['selection']).hex(), raw_snapshot=bytes.fromhex(combined['snapshotHex']),
+                       now=combined['nowSeconds'], min_sequence=anchor['minSequence'])
+        assert [len(s['types']) for s in combined['selection']] == [23, 5]
+        accepted_types = set()
+        for case in combined['events']:
+            lines = run(case['event'], accepted=True, **options).splitlines()
+            assert lines[2] == case['payloadHex']
+            encoded_bsaf = dict(case['event']['tags'])[EXT + 'bsafV1']
+            bsaf = cbor2.loads(base64.b64decode(encoded_bsaf + '=' * (-len(encoded_bsaf) % 4)))
+            accepted_types.add((bsaf['original']['uri'].split('/')[2], next(t[5:] for t in bsaf['tags'] if t.startswith('type:'))))
+            verify_mst(case)
+        assert accepted_types == {(b['botDid'], t) for b in combined['selection'] for t in b['types']}
+        run(combined['unselectedEvent'], **options)
+        # Valid combined leaf must not widen a narrower provisioned root.
+        narrow = copy.deepcopy(anchor['scope'])
+        narrow['bsaf'][0]['types'] = narrow['bsaf'][0]['types'][:-1]
+        run(combined['events'][0]['event'], **dict(options, root_scope=f.dumps(narrow).hex(), selection=f.dumps(narrow['bsaf']).hex()))
+        run(combined['events'][0]['event'], **dict(options, selection=f.dumps(combined['selection'][1:]).hex()))
+        # Exercise the same parser for root scopes, selections and signed leaf scopes.
+        types = ['earthquake'] + [f'type-{i:02}' for i in range(30)] + ['weather']
+        boundary = dict(orgIds=['org:jma-importer'], bsaf=[dict(botDid=BOT, types=types),
+                        dict(botDid='did:plc:' + 'c' * 24, types=types)])
+        for total in (32, 64, 65):
+            scoped = copy.deepcopy(boundary)
+            if total == 32:
+                scoped['bsaf'] = scoped['bsaf'][:1]
+            if total == 65:
+                scoped['bsaf'].append(dict(botDid='did:plc:' + 'd' * 24, types=['extra']))
+            run(mode='configure', root_scope=f.dumps(scoped).hex(), selection=f.dumps(scoped['bsaf']).hex(), accepted=total <= 64)
+            parts = materials(); parts['cert']['scope'] = scoped
+            # A full 64-type identity exceeds the separate unchanged 128-node
+            # tree budget, even though its Scope/selection fit. Keep it fail closed.
+            run(event(parts)[0], root_scope=f.dumps(boundary).hex(), accepted=total == 32,
+                rejected_reason='extension canonical map' if total == 64 else None)
+        oversized = copy.deepcopy(boundary); oversized['bsaf'][0]['types'].append('zz-extra')
+        run(mode='configure', root_scope=f.dumps(oversized).hex(), selection=f.dumps(oversized['bsaf']).hex())
+        run(mode='configure', root_scope=f.dumps(boundary).hex(), selection=f.dumps(oversized['bsaf']).hex())
+        parts = materials(); parts['cert']['scope'] = oversized
+        run(event(parts)[0], root_scope=f.dumps(boundary).hex())
+        bounds = combined['events'][0]['bounds']
+        print(f'PASS combined server scope: all 28 types (23 Kikikuru + 5 JMA), negative selection/root containment, 32/33 per Bot and 64/65 total; sizes={bounds}')
         print(f'PASS wire-v1 ingress: {count} signed oracle/negative/state cases')
 
 

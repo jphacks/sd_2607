@@ -67,6 +67,70 @@ class PublicIngressTest {
         assertThrows(IllegalArgumentException::class.java) { mesh.originate(event, now.toEpochMilli(), 2) }
     }
 
+    @Test fun actualServerCombinedScopeAcceptsEveryTypeWithoutDiscoveringTrust() {
+        val combined = jsonMapper.readTree(checkNotNull(javaClass.getResourceAsStream("/wire-v1-combined-server-fixture.json")))
+        val anchor = combined["root"].deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>().also {
+            it.put("enabled", true)
+        }
+        val selected = combined["selection"].flatMap { b -> b["types"].map { t ->
+            mapOf("botDid" to b["botDid"].textValue(), "type" to t.textValue())
+        } }
+        val c = PublicIngress.config(jsonMapper.writeValueAsString(mapOf("roots" to listOf(anchor), "selected" to selected)))
+        assertEquals(28, c.selected.size)
+        assertEquals(23, c.selected.count { it.botDid == "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" })
+        val at = Instant.ofEpochSecond(combined["nowSeconds"].longValue())
+        val snapHex = combined["snapshotHex"].textValue()
+        var memory = PublicIngress.acceptSnapshot(c.roots.single(), unhex(snapHex, snapHex.length / 2), PublicIngress.Memory(), at)
+        val accepted = mutableSetOf<PublicIngress.Selection>()
+        for (case in combined["events"]) {
+            val e = NostrEvent.fromJson(case["event"].toString())
+            val decision = PublicIngress.verify(e, c, memory, at)
+            assertNotNull(decision.reason, decision.receipt)
+            val receipt = checkNotNull(decision.receipt)
+            accepted += PublicIngress.Selection(receipt.botDid, receipt.type)
+            assertEquals(case["payloadHex"].textValue(), hex(EventCodec.encode(e)))
+            memory = decision.memory
+            assertNull(PublicIngress.verify(e, c.copy(selected = emptySet()), memory, at).receipt)
+        }
+        assertEquals(c.selected, accepted)
+        val first = NostrEvent.fromJson(combined["events"][0]["event"].toString())
+        val root = c.roots.single()
+        val narrowed = root.copy(scope = root.scope.copy(bsaf = root.scope.bsaf - c.selected.first()))
+        assertNull(PublicIngress.verify(first, c.copy(roots = listOf(narrowed)), memory, at).receipt)
+        assertNull(PublicIngress.verify(first, c.copy(roots = emptyList()), memory, at).receipt)
+        assertNull(PublicIngress.verify(first, c.copy(roots = listOf(root.copy(enabled = false))), memory, at).receipt)
+        assertNull(PublicIngress.verify(NostrEvent.fromJson(combined["unselectedEvent"].toString()), c, memory, at).receipt)
+        assertTrue(PublicIngress.config("{\"roots\":[],\"selected\":[]}").roots.isEmpty())
+    }
+
+    @Test fun scopeTypeCapsAre32PerBotAnd64TotalForConfigAndSignedLeaves() {
+        val bot = config.selected.single().botDid
+        val types = listOf("earthquake") + (0 until 31).map { "type-%02d".format(it) }
+        fun scope(groups: List<Map<String, Any>>) = mapOf("orgIds" to root.scope.orgIds.toList(), "bsaf" to groups)
+        val one = mapOf("botDid" to bot, "types" to types)
+        val two = mapOf("botDid" to "did:plc:cccccccccccccccccccccccc", "types" to types)
+        fun configured(s: Any): PublicIngress.Config {
+            val node = fixture["config"].deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>()
+            (node["roots"][0] as com.fasterxml.jackson.databind.node.ObjectNode).set<com.fasterxml.jackson.databind.JsonNode>("scope", jsonMapper.valueToTree(s))
+            return PublicIngress.config(node.toString())
+        }
+        val max = configured(scope(listOf(one, two)))
+        for (groups in listOf(listOf(one), listOf(one, two))) {
+            val s = scope(groups)
+            configured(s)
+            val decision = PublicIngress.verify(certificate { it["scope"] = s }, max, memory(), now)
+            assertNotNull(decision.reason, decision.receipt)
+        }
+        for (groups in listOf(
+            listOf(one + ("types" to (types + "zz-extra"))),
+            listOf(one, two, mapOf("botDid" to "did:plc:dddddddddddddddddddddddd", "types" to listOf("extra")))
+        )) {
+            val s = scope(groups)
+            assertThrows(Exception::class.java) { configured(s) }
+            deny(certificate { it["scope"] = s }, c = max)
+        }
+    }
+
     @Test fun unknownDisabledRootAndEmptyOrUnselectedScopeAreNeverTrustDiscovery() {
         deny(c = config.copy(roots = emptyList()))
         deny(c = config.copy(roots = listOf(root.copy(enabled = false))))
