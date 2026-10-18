@@ -58,11 +58,10 @@
 + **AT Protocol AppView**: https://appview.oriom.dev
 
 ## 動画リンク
-[プレゼンテーション](https://youtu.be/GTZUnUww7xk)
 
-[実機デモ](https://youtu.be/r5K6OZ4kwUs)
-
-[M5Stackデモ](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
+[![プレゼンテーション](https://img.shields.io/badge/YouTube-%E3%83%97%E3%83%AC%E3%82%BC%E3%83%B3%E3%83%86%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/GTZUnUww7xk)
+[![実機デモ](https://img.shields.io/badge/YouTube-%E5%AE%9F%E6%A9%9F%E3%83%87%E3%83%A2-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/r5K6OZ4kwUs)
+[![M5Stackデモ](https://img.shields.io/badge/YouTube-M5Stack%E3%83%87%E3%83%A2-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
 
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
