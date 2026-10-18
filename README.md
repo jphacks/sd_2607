@@ -64,10 +64,6 @@
 
 [M5Stack](https://youtube.com/shorts/PVxi2_snY5E?si=UtNAuQaCLmOwvaw_)
 
-
-<iframe width="560" height="315" src="https://www.youtube.com/embed/RMGZ6aHQX2k?si=BnvjoIVwgi9VvLx_" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-
-
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
 
