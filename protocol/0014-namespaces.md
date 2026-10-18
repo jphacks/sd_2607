@@ -26,10 +26,11 @@
 | 情報の有効期間 | `dev.oriom.mosimo.defs#validity` |
 | 訂正・補足・追認の注釈 | `dev.oriom.mosimo.defs#annotation` |
 | 原情報・取得・変換の出典 | `dev.oriom.mosimo.defs#source` |
-| 公的情報の形式別の意味 | `dev.oriom.mosimo.defs#publicInformation` |
+| 公的情報の集約型案に予約済みの名前 | `dev.oriom.mosimo.defs#publicInformation` |
+| CAP 1.2の原情報と選択した情報単位 | `dev.oriom.mosimo.defs#cap12` |
 | 身元証明 | `dev.oriom.mosimo.defs#identity` |
 
-型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。
+型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。これはすべての原形式を同じ型へ格納する義務ではない。CAP 1.2は独立型 `cap12` の[仕様草案](0015-cap.md)で具体化し、`publicInformation` へ重複して格納することは要求しない。
 
 投稿の repository path は `dev.oriom.mosimo.post/<record-key>`。record key は端末で生成する13文字の atproto TID とする（[0012 §2.1.1](0012-bindings.md#211-レコードキーの生成合意済み)）。atURI の collection も同じ NSID を使う。
 

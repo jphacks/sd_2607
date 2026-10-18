@@ -25,7 +25,7 @@
 // 説明用の型。未知の型も許容するため、既知型だけの閉じた集合ではない。
 type Extension = KnownExtension | UnknownExtension;
 type KnownExtension = OriginExtension | AreaExtension | ValidityExtension
-  | AnnotationExtension | SourceExtension | PublicInformationExtension;
+  | AnnotationExtension | SourceExtension | PublicInformationExtension | CapExtension;
 type UnknownExtension = { $type: string; [field: string]: DataValue };
 ```
 
@@ -48,7 +48,8 @@ type UnknownExtension = { $type: string; [field: string]: DataValue };
 | `validity` | 内容の有効期間 | 期間不明。無期限に有効とはしない | §6 |
 | `annotation` | 訂正・補足・追認の対象と関係 | 本文を読める。対象との関連は不明 | §7、[0008](0008-posts-and-labels.md) |
 | `source` | 原情報・配布容器・取得・変換の出典 | 公式情報への帰属を推定しない | [0013 §4.2](0013-public-information.md#42-source-出典と変換経路提案) |
-| `public-information` | CAP 等の原語彙・訂正取消・言語・強度等 | 本文と出典を利用 | [0013 §4.3](0013-public-information.md#43-public-information-原情報の意味提案) |
+| `public-information` | 原形式の項目をまとめた旧集約型案。全形式に必須ではない | 本文と出典を利用 | [0013 §4.3](0013-public-information.md#43-public-information-原情報の意味提案) |
+| `cap12` | CAP 1.2の原情報・選択info・更新取消・原語彙 | 本文と理解できる他の拡張を利用 | [0015](0015-cap.md) |
 | `identity` | 自治体等の署名付き身元証明チェーン | 公式の身元は未確認 | §8、[0009](0009-identity-attestations.md) |
 
 これらは独立した関心である。公的な投稿に必ず `origin` が必要なわけではなく、`area` があっても発信者の現在地は分からない。
