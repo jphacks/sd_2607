@@ -106,6 +106,51 @@ cursor省略の既存履歴取得と、cursor `16`からの再接続後の新規
 
 API成功だけでなく、実Relayのfirehose中継まで確認した点が初回調査との違い。
 
+## AppViewまでの取り込み検証（追加確認）
+
+2026-10-18、同じVPSで稼働するHappyView 2.16.0について、上記の新規テスト投稿を追跡した。
+追加投稿・設定変更・DB書込・再起動はせず、公開HTTP、journal、SQLite read-onlyで確認した。
+
+経路は **PDS → 公開atproto Relay → Jetstream → HappyView → getFeed**。
+HappyViewはPDSのCBOR firehoseを直接購読するのではなく、
+`wss://jetstream1.us-east.bsky.network/subscribe`のJSONストリームを購読する。
+接続ログでは`wantedCollections=dev.oriom.mosimo.post`と
+`wantedCollections=com.atproto.lexicon.schema`を確認した。
+
+対象URI:
+
+```text
+at://did:plc:i2tq3bvlzchjxqa3qgckybmx/dev.oriom.mosimo.post/3my4gdyq3gs2b
+```
+
+### 証拠
+
+1. 前節で同じrkey/revのcommitを実Relay firehoseで受信済み。
+2. `podman-happyview.service`のjournalに以下の受信ログがあった:
+
+   ```text
+   2026-10-18T01:11:32.821338Z DEBUG happyview::jetstream: received commit event from jetstream operation=create collection=dev.oriom.mosimo.post did=did:plc:i2tq3bvlzchjxqa3qgckybmx rkey=3my4gdyq3gs2b
+   ```
+
+3. 永続DB `/var/lib/containers/storage/volumes/happyview-data/_data/happyview.db`を
+   `sqlite3 -readonly`で照会し、`happyview_records`の対象URIの行を確認:
+
+   ```json
+   {"cid":"bafyreihz5nh4753ej3kvqqc3fy2jevfml2asadc36hjkof6zfyqhk3h5ti","indexed_at":"2026-10-18T01:11:32.822311731+00:00","created_at":"2026-10-18T01:11:32.822311731+00:00"}
+   ```
+
+4. `https://appview.oriom.dev/xrpc/dev.oriom.mosimo.getFeed?uri=...`が200で対象recordを返した。
+   AppViewが付与する`uri`を除き、PDSの`com.atproto.repo.getRecord`の`value`と
+   Nodeの`assert.deepEqual`で全フィールド一致を確認した。DBのrecord CIDもPDSのCIDと一致した。
+5. 同じgetFeedの`did=...&limit=20`でも対象URIを含む著者の9件を取得した。
+   この9件全てについての個別CID・取り込み経路照合を追加実施したわけではない。
+
+DBには`dev.oriom.mosimo.post`がrecord lexicon revision 1として登録され、
+`dev.oriom.mosimo.getFeed` revision 2のtarget collectionが同コレクションであることも確認した。
+API表示だけでなく、Jetstream受信ログ・永続DB・PDSとの内容照合が揃っており、
+今回の新規投稿が中継経路を通ってAppViewに取り込まれ、APIから取得可能であることを確認できた。
+Jetstream内部のどのRelay接続がイベントを供給したかは、このAppView側の証拠からは特定していない。
+
 ## 運用状態と残る範囲
 
 反映・投稿後のsystemdはactive、PDS cgroup MemoryCurrent 82,620,416 bytes、
