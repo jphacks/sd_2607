@@ -82,7 +82,8 @@ SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`Me
 
 これはドラフトで合意された**公開テキスト・create専用プロファイル**の実装であり、
 一般の書き込み可能なBluesky PDS一式ではない。外部同期は標準API/データ形式を使うが、
-**実atproto Relayでの取り込み適合試験は未実施**。完全な互換性を確認済みとは主張しない。
+**実Bluesky Relayへの参加要求は互換性エラーで拒否された**。完全な互換性を確認済みとは主張しない。
+kind 1/5以外のNostrイベントは拒否するため、汎用Nostrリレーでもない。
 
 - 本文を持つkind 1からの復元のみ。外部クライアントのcreateRecord/applyWrites、
   セッション/OAuth、メディア・blobの保存は提供しない。listBlobsは空、getBlobはBlobNotFound。
@@ -103,10 +104,11 @@ SQLiteはWAL・`synchronous=FULL`・キャッシュ約2 MiB。サービスの`Me
 - サイズ・購読・送信待機・接続数に上限はあるが、匿名投稿のレート制限やネットワークごとの
   濫用対策はCaddy/ネットワーク側にも設ける。削除は配信抑止であり、DBからの物理消去ではない。
 
-検証状況（既存のエージェント実施記録）: WSL NixOSでパッケージ・systemd unitのビルド、
-Windows/Node.js 24でランタイム確認・テストが成功している。実VPSはSSHホスト鍵の不一致で
-デプロイを阻まれており、本番稼働・低メモリ性能・負荷試験を完了したという意味ではない。
-詳細は[deployment.md](deployment.md#検証済み範囲と残る作業)を参照。
+2026-10-18、本番VPS・実PLC Directory・Damusを使い、8件の署名済みcommit復元、
+MST/CAR/firehose、順序逆転、外部履歴・ライブ収集、サービス再起動後の保持を検証した。
+ローカル115テストと型チェックも成功。実Bluesky Relayへの取り込みは不合格で、負荷試験も未実施。
+公開証拠・再実行用TypeScriptツール・修正した不具合は
+[本番動作検証報告](../docs/pds-production-verification-2026-10-18.md)を参照。
 
 プロトコル根拠: [リポジトリモデル](../protocol/0001-repository-model.md)、
 [論理PDS](../protocol/0006-logical-pds.md)、[Nostrリレー](../protocol/0007-nostr-relay-profile.md)、
