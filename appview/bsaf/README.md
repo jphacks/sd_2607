@@ -37,6 +37,21 @@ services.mosimo-bsaf = {
   独自query scriptがある場合は勝手に上書きせず準備処理を失敗させる。
   導入後の管理対象scriptを手動編集した場合も同様。
 
+追加候補の明示例（未デプロイ）:
+
+```nix
+authors = [
+  "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" # @jma-alert-bot.bsky.social（地震・津波・火山の固定5種）
+  "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" # @bsaf-kikikuru-bot.bsky.social（気象の固定23種）
+];
+```
+
+署名再配信は別途 `publisher.selectJmaDefaults` / `publisher.selectKikikuruDefaults` で個別に選択する。
+両方の明示選択で28組。既存JMAプリセットを自動拡張しない。
+[原bot-definition](https://raw.githubusercontent.com/osprey74/bsaf-kikikuru-bot/main/bot-definition.json) のDID・23種別を確認済み。
+固定一覧・custom選択との排他・鍵/証明書の発行手順は [PUBLISHER.md](PUBLISHER.md) を参照。
+気象の優先度は既定1。JMA XMLの復元・地域や警戒レベルの推測・新種別の自動追加は行わない。
+
 これは収集元のローカル許可リストであり、公的機関認証やネットワーク全体のBot登録ではない。
 収集の許可は、0019 §5.2の「Bot DID＋情報種別」の自動再配信許可を意味しない。
 

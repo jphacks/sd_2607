@@ -55,7 +55,7 @@ export function validatePublisherConfig(value: unknown): asserts value is Publis
     || typeof value.credentialsPath !== 'string' || !value.credentialsPath || typeof value.trustPath !== 'string' || !value.trustPath
     || typeof value.relayUrl !== 'string' || !Array.isArray(value.selection) || value.selection.length > 16
     || !value.selection.every(e => object(e) && typeof e.botDid === 'string' && /^did:plc:[a-z2-7]{24}$/.test(e.botDid)
-      && Array.isArray(e.types) && e.types.length > 0 && e.types.length <= 16 && new Set(e.types).size === e.types.length
+      && Array.isArray(e.types) && e.types.length > 0 && e.types.length <= 32 && new Set(e.types).size === e.types.length
       && e.types.every(t => typeof t === 'string' && Buffer.byteLength(t) >= 1 && Buffer.byteLength(t) <= 128 && !/[\x00-\x1f\x7f]/.test(t)))
     || new Set(value.selection.map(e => e.botDid)).size !== value.selection.length
     || value.selection.reduce((n, e) => n + e.types.length, 0) > 64

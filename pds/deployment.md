@@ -156,12 +156,22 @@ At most 64 distinct roots may be configured. Keep disabled roots disabled explic
 removal does not erase their durable security history.
 
 `publicInformation.selection` is an explicit array of `{botDid,types}` (at most 16
-Bot entries and 64 pairs). Empty selection authorizes nothing even with trusted roots.
+Bot entries, 32 types per Bot and 64 total pairs). Empty selection authorizes nothing even with trusted roots.
 To opt in to the fixed third-party JMA-source Bot subset, use:
 
 ```json
 [{"botDid":"did:plc:vwi7zhfyamyvrg5v6ycjgzxi","types":["ashfall","earthquake","eruption","nankai-trough","tsunami"]}]
 ```
+
+The independent weather source is `@bsaf-kikikuru-bot.bsky.social`, DID
+`did:plc:kxwz5cz7o6g4jlmxh6doyfsm`. Its fixed 23-type `KIKIKURU_SELECTION` is
+pinned separately from the unchanged five-type `JMA_SELECTION`; see
+[the publisher's exact list and primary definition](../appview/bsaf/PUBLISHER.md).
+Explicit combined opt-in is 28 pairs, not a widened JMA preset. Generate the public
+PDS fragment with `receiver-export --jma --kikikuru` only after root-scope approval,
+new-serial leaf issuance and a higher-sequence snapshot. Old certificates keep
+their signed historical scope. Weather defaults to priority 1; there is no inferred
+JMA XML, region or severity mapping. None of these local operations deploys settings.
 
 This is not a JMA-issued certificate or redistribution approval. Review root scope,
 Bot selection and permission out of band. Publish the root-signed canonical

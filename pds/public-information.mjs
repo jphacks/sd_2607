@@ -15,6 +15,13 @@ export const BSAF = 'dev.oriom.mosimo.defs#bsafV1';
 export const PRIORITY = 'dev.oriom.mosimo.defs#priority';
 export const JMA_SELECTION = Object.freeze([Object.freeze({ botDid: 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi',
   types: Object.freeze(['ashfall', 'earthquake', 'eruption', 'nankai-trough', 'tsunami']) })]);
+// Pinned from the public bot-definition; new upstream types require a separate review.
+export const KIKIKURU_SELECTION = Object.freeze([Object.freeze({ botDid: 'did:plc:kxwz5cz7o6g4jlmxh6doyfsm',
+  types: Object.freeze(['avalanche-warning', 'dense-fog-warning', 'dry-air-warning', 'flood-warning',
+    'frost-warning', 'heavy-rain', 'heavy-rain-warning', 'icing-warning', 'landslide-warning',
+    'linear-rainband-warning', 'low-temperature-warning', 'melting-snow-warning', 'other-warning',
+    'significant-snowfall-warning', 'snow-accretion-warning', 'snow-warning', 'storm-surge-warning',
+    'thunderstorm-warning', 'tornado-warning', 'typhoon', 'wave-warning', 'weather-info', 'wind-warning']) })]);
 const DID = /^did:plc:[a-z2-7]{24}$/;
 const hex = bytes => Buffer.from(bytes).toString('hex');
 const unhex = value => Uint8Array.from(Buffer.from(value, 'hex'));
@@ -115,7 +122,7 @@ export function validateScope(scope) {
   let pairs = 0;
   for (const entry of scope.bsaf) {
     exact(entry, 'botDid,types'); fail(DID.test(entry.botDid), 'Invalid Bot DID');
-    sorted(entry.types, 16, value => text(value, 128));
+    sorted(entry.types, 32, value => text(value, 128));
     fail(entry.types.length > 0, 'Empty types'); pairs += entry.types.length;
   }
   sorted(scope.bsaf.map(entry => entry.botDid), 16, () => {});

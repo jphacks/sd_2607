@@ -7,7 +7,7 @@ import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { finalizeEvent } from 'nostr-tools';
 import { decodePost, reconstruct } from './repository.mjs';
-import { BSAF, IDENTITY, PRIORITY, NS, JMA_SELECTION, canonical, decodeCanonical, bodyHash, rootId, certId,
+import { BSAF, IDENTITY, PRIORITY, NS, JMA_SELECTION, KIKIKURU_SELECTION, validateScope, canonical, decodeCanonical, bodyHash, rootId, certId,
   createRoot, issueCertificate, createSnapshot, createImporter, verifyImporterGenesis, verifyBinding,
   verifyChain, verifySnapshot, verifyPublicInformation, createImporterEvent, effectivePriority, keyPublic, timestamp } from './public-information.mjs';
 
@@ -69,6 +69,32 @@ test('shared Android/ESP32 wire-v1 fixture matches exact Node CBOR bytes, hashes
       recordCertificate: () => {} },
   });
   assert.equal(result.authorized, true); assert.equal(result.priority, 3); assert.equal(result.snapshot.sequence, 7);
+});
+
+test('certificate scopes accept 32 types per Bot, reject 33 and retain the 64 total limit', () => {
+  const types = Array.from({ length: 33 }, (_, i) => `t${String(i).padStart(2, '0')}`);
+  const bsaf = [KIKIKURU_SELECTION[0], JMA_SELECTION[0]].sort((a, b) => a.botDid.localeCompare(b.botDid));
+  assert.equal(KIKIKURU_SELECTION[0].types.length, 23);
+  assert.equal(JMA_SELECTION[0].types.length, 5);
+  validateScope({ ...scope, bsaf });
+  const entry = { botDid: JMA_SELECTION[0].botDid, types: types.slice(0, 32) };
+  const fields = { ...certificate.body, scope: { ...scope, bsaf: [entry] } };
+  const leaf = issueCertificate(rootSecret, fields);
+  const widerRoot = { ...root, scope: fields.scope };
+  for (const type of entry.types) verifyChain([leaf], { roots: [widerRoot], nowSeconds: now, selection: [entry], botDid: entry.botDid, type });
+  assert.throws(() => issueCertificate(rootSecret, { ...fields, scope: { ...scope, bsaf: [{ ...entry, types }] } }));
+  const first = { ...entry, botDid: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa' };
+  const second = { ...entry, botDid: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb' };
+  const total64 = { ...scope, bsaf: [first, second] };
+  issueCertificate(rootSecret, { ...fields, scope: total64 });
+  assert.throws(() => issueCertificate(rootSecret, { ...fields, scope: { ...scope, bsaf: [...total64.bsaf, { ...entry, types: ['one'] }] } }));
+  const weatherLeaf = issueCertificate(rootSecret, { ...certificate.body, scope: { ...scope, bsaf } });
+  const weatherRoot = { ...root, scope: { ...scope, bsaf } };
+  const args = { roots: [weatherRoot], nowSeconds: now, selection: bsaf, botDid: KIKIKURU_SELECTION[0].botDid, type: 'typhoon' };
+  verifyChain([weatherLeaf], args);
+  assert.throws(() => verifyChain([weatherLeaf], { ...args, type: 'new-upstream-type' }));
+  assert.throws(() => verifyChain([weatherLeaf], { ...args, botDid: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa' }));
+  assert.throws(() => verifyChain([certificate], args)); // Old JMA-only leaf never grows.
 });
 
 test('wire-v1 canonical bytes, domain hash, low-S signatures, genesis and Android reciprocal binding', () => {

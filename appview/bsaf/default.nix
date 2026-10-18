@@ -10,13 +10,26 @@ let
     botDid = "did:plc:vwi7zhfyamyvrg5v6ycjgzxi";
     types = [ "ashfall" "earthquake" "eruption" "nankai-trough" "tsunami" ];
   }];
+  kikikuruSelection = [{
+    botDid = "did:plc:kxwz5cz7o6g4jlmxh6doyfsm";
+    types = [
+      "avalanche-warning" "dense-fog-warning" "dry-air-warning" "flood-warning"
+      "frost-warning" "heavy-rain" "heavy-rain-warning" "icing-warning" "landslide-warning"
+      "linear-rainband-warning" "low-temperature-warning" "melting-snow-warning" "other-warning"
+      "significant-snowfall-warning" "snow-accretion-warning" "snow-warning" "storm-surge-warning"
+      "thunderstorm-warning" "tornado-warning" "typhoon" "wave-warning" "weather-info" "wind-warning"
+    ];
+  }];
+  selection = (if cfg.publisher.selectJmaDefaults then jmaSelection else [ ])
+    ++ (if cfg.publisher.selectKikikuruDefaults then kikikuruSelection else [ ])
+    ++ cfg.publisher.selection;
   publisherSettings = pkgs.writeText "mosimo-bsaf-publisher.json" (builtins.toJSON {
     enabled = cfg.publisher.enable;
     inherit (cfg) databasePath;
     credentialsPath = "/run/credentials/mosimo-bsaf-publisher.service/importer";
     trustPath = cfg.publisher.trustFile;
     inherit (cfg.publisher) relayUrl maxOriginalAgeSeconds priority jmaPriorityPolicy;
-    selection = if cfg.publisher.selectJmaDefaults then jmaSelection else cfg.publisher.selection;
+    inherit selection;
   });
   hardening = {
     User = "root"; # The existing rootful HappyView volume is root-owned.
@@ -63,12 +76,16 @@ in {
         type = lib.types.bool; default = false;
         description = "Explicitly select only did:plc:vwi7zhfyamyvrg5v6ycjgzxi and ashfall/earthquake/eruption/nankai-trough/tsunami; never auto-expand.";
       };
+      selectKikikuruDefaults = lib.mkOption {
+        type = lib.types.bool; default = false;
+        description = "Explicitly select only did:plc:kxwz5cz7o6g4jlmxh6doyfsm and its fixed 23 weather types; never auto-expand. May combine with JMA, not custom selection.";
+      };
       selection = lib.mkOption {
         type = lib.types.listOf (lib.types.submodule { options = {
           botDid = lib.mkOption { type = lib.types.strMatching "did:plc:[a-z2-7]{24}"; };
           types = lib.mkOption { type = lib.types.listOf lib.types.str; };
         }; });
-        default = [ ]; description = "Explicit Bot/type pairs. Empty means no publication. Cannot combine with the fixed JMA preset.";
+        default = [ ]; description = "Explicit Bot/type pairs. Empty means no publication. Cannot combine with either fixed preset; the two presets may combine with each other.";
       };
       maxOriginalAgeSeconds = lib.mkOption { type = lib.types.ints.between 1 86400; default = 3600; description = "Fixed deadline = original createdAt + this value, never retry/collection time."; };
       jmaPriorityPolicy = lib.mkOption {
@@ -95,9 +112,8 @@ in {
         cfg.publisher.credentialsFile != null && lib.hasPrefix "/" cfg.publisher.credentialsFile
         && cfg.publisher.trustFile != null && lib.hasPrefix "/" cfg.publisher.trustFile
         && lib.hasPrefix "wss://" cfg.publisher.relayUrl
-        && !(cfg.publisher.selectJmaDefaults && cfg.publisher.selection != [ ])
-        && builtins.all (e: builtins.elem e.botDid cfg.authors)
-          (if cfg.publisher.selectJmaDefaults then jmaSelection else cfg.publisher.selection));
+        && !((cfg.publisher.selectJmaDefaults || cfg.publisher.selectKikikuruDefaults) && cfg.publisher.selection != [ ])
+        && builtins.all (e: builtins.elem e.botDid cfg.authors) selection);
       message = "BSAF publisher needs absolute importer credentials/public trust files, wss relay, and explicitly collected source DIDs; select one selection mode";
     }];
     systemd.services.mosimo-bsaf-publisher = lib.mkIf cfg.publisher.enable {

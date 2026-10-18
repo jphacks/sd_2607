@@ -7,23 +7,23 @@ import { DatabaseSync } from 'node:sqlite';
 import { cidForLex } from '@atproto/lex-cbor';
 import { WebSocketServer } from 'ws';
 import { openStore } from './store.mts';
-import { receiverConfigurations } from './identity-cli.mjs';
+import { receiverConfigurations, presetSelection } from './identity-cli.mjs';
 import { openPublicationStore, cacheSnapshot, snapshotStore, stageNext, pushOnce, publishEvent, validatePublisherConfig, refreshSnapshots, publicationPriority, type PublisherConfig } from './publisher.mts';
-import { createRoot, createImporter, issueCertificate, createSnapshot, JMA_SELECTION, timestamp, keyPublic,
+import { createRoot, createImporter, issueCertificate, createSnapshot, JMA_SELECTION, KIKIKURU_SELECTION, timestamp, keyPublic,
   verifyPublicInformation, rootId, certId, canonical, priorityHint, effectivePriority } from '../../pds/public-information.mjs';
 
 const now = 1792368000;
 const botDid = JMA_SELECTION[0]!.botDid;
-async function fixture(t: any) {
+async function fixture(t: any, selection: any = JMA_SELECTION) {
   const directory = await mkdtemp(join(tmpdir(), 'mosimo-publisher-'));
   const databasePath = join(directory, 'happyview.db');
   const db = new DatabaseSync(databasePath);
   db.exec(`CREATE TABLE happyview_records(uri TEXT PRIMARY KEY,did TEXT,collection TEXT,rkey TEXT,record TEXT,cid TEXT,indexed_at TEXT,created_at TEXT);
     CREATE TABLE happyview_lexicons(id TEXT PRIMARY KEY);`); db.close();
-  const collector = openStore(databasePath, [botDid], 'wss://jetstream.invalid/subscribe');
+  const collector = openStore(databasePath, selection.map((e: any) => e.botDid), 'wss://jetstream.invalid/subscribe');
   const store = openPublicationStore(databasePath);
   t.after(async () => { collector.close(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  const scope = { orgIds: ['importer'], bsaf: JMA_SELECTION };
+  const scope = { orgIds: ['importer'], bsaf: selection };
   const { secretKey, root } = createRoot({ scope, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
   const importer = createImporter();
   const certificate = issueCertificate(secretKey, { subjectDid: importer.did, subjectPubkey: keyPublic(importer.atprotoSecret),
@@ -32,9 +32,9 @@ async function fixture(t: any) {
   const snapshot = createSnapshot(secretKey, { sequence: 1, issuedAt: timestamp(now - 60), validUntil: timestamp(now + 3540) });
   const roots = [root]; await cacheSnapshot(store, roots, snapshot, now);
   const config: PublisherConfig = { enabled: true, databasePath, credentialsPath: 'not-read-by-tests', trustPath: 'not-read-by-tests',
-    relayUrl: 'wss://relay.invalid', selection: [{ botDid, types: [...JMA_SELECTION[0]!.types] }], maxOriginalAgeSeconds: 600, priority: 3 };
+    relayUrl: 'wss://relay.invalid', selection: selection.map((e: any) => ({ botDid: e.botDid, types: [...e.types] })), maxOriginalAgeSeconds: 600, priority: 3 };
   let sequence = 0;
-  async function ingest(overrides: Record<string, any> = {}, rkey = `test-${++sequence}`, did = botDid) {
+  async function ingest(overrides: Record<string, any> = {}, rkey = `test-${++sequence}`, did: string = botDid) {
     const record = { $type: 'app.bsky.feed.post', text: 'TEST ONLY — 地震情報（出典：気象庁）', createdAt: timestamp(now - 30),
       tags: ['bsaf:v1', 'type:earthquake', 'value:5+', `time:${timestamp(now - 30)}`, 'target:jp-kanto', 'source:jma'], langs: ['ja'], ...overrides };
     const cid = (await cidForLex(record)).toString();
@@ -49,7 +49,7 @@ async function fixture(t: any) {
 test('receiver exports match platform schemas, pin sequence, omit private fields and never enable ESP ingress/clock', () => {
   const scope = { orgIds: ['mosimo-bsaf-importer'], bsaf: JMA_SELECTION };
   const { root } = createRoot({ scope, snapshotUrl: 'https://pds.oriom.dev/.well-known/mosimo/trust/snapshot.cbor' });
-  const files = receiverConfigurations({ ...root, secretKey: 'must-never-appear', plcSecret: 'also-private' }, 7);
+  const files = receiverConfigurations({ ...root, secretKey: 'must-never-appear', plcSecret: 'also-private' }, 7, JMA_SELECTION);
   assert.deepEqual(Object.keys(files.android).sort(), ['roots', 'selected']);
   assert.equal(files.android.roots[0]!.rootId, rootId(root.rootPubkey));
   assert.deepEqual(files.android.selected, JMA_SELECTION.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))));
@@ -64,8 +64,55 @@ test('receiver exports match platform schemas, pin sequence, omit private fields
     const encoded = new RegExp(`#define MESH_INGRESS_${name}_CBOR_HEX "([0-9a-f]+)"`).exec(files.esp32)![1]!;
     assert.deepEqual(Buffer.from(encoded, 'hex'), Buffer.from(canonical(expected)));
   }
-  assert.throws(() => receiverConfigurations(root, 0));
-  assert.throws(() => receiverConfigurations({ ...root, snapshotUrl: 'http://unsafe.invalid' }, 7));
+  assert.throws(() => receiverConfigurations(root, 0, JMA_SELECTION));
+  assert.throws(() => receiverConfigurations({ ...root, snapshotUrl: 'http://unsafe.invalid' }, 7, JMA_SELECTION));
+});
+
+test('fixed presets are independent and receiver exports use explicit selected scope', () => {
+  assert.deepEqual(presetSelection(), JMA_SELECTION);
+  assert.deepEqual(presetSelection(['--jma']), JMA_SELECTION);
+  assert.deepEqual(presetSelection(['--kikikuru']), KIKIKURU_SELECTION);
+  assert.throws(() => presetSelection(['--all']));
+  const both = presetSelection(['--jma', '--kikikuru']);
+  const { root } = createRoot({ scope: { orgIds: ['mosimo-bsaf-importer'], bsaf: both }, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
+  const files = receiverConfigurations(root, 8, both);
+  assert.equal(files.android.selected.length, 28);
+  assert.deepEqual(files.pds.publicInformation.selection, both);
+  assert.equal(receiverConfigurations(root, 8, JMA_SELECTION).android.selected.length, 5);
+  const limited = { ...root, scope: { ...root.scope, bsaf: JMA_SELECTION } };
+  assert.throws(() => receiverConfigurations(limited, 8, both));
+});
+
+test('all 23 pinned weather types publish generically at normal priority, unknown/spoofed sources do not', async t => {
+  const f = await fixture(t, presetSelection(['--jma', '--kikikuru']));
+  const weather = KIKIKURU_SELECTION[0]!;
+  const config = { ...f.config, priority: null };
+  assert.equal(weather.types.length, 23);
+  validatePublisherConfig(config);
+  const types32 = Array.from({ length: 32 }, (_, i) => `type-${i}`);
+  validatePublisherConfig({ ...config, selection: [{ botDid, types: types32 }, { botDid: weather.botDid, types: types32 }] });
+  assert.throws(() => validatePublisherConfig({ ...config, selection: [{ botDid, types: [...types32, 'extra'] }] }));
+  assert.throws(() => validatePublisherConfig({ ...config, selection: [{ botDid, types: types32 }, { botDid: weather.botDid, types: types32 }, { botDid: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa', types: ['extra'] }] }));
+  for (const type of weather.types) {
+    const tags = ['bsaf:v1', `type:${type}`, 'value:level5', `time:${timestamp(now - 30)}`, 'target:jp', 'source:jma'];
+    const source = await f.ingest({ text: `Weather ${type}`, tags }, type, weather.botDid);
+    assert.equal(source.status, 'stored');
+    const row = (await stageNext(f.store, config, f.credentials, f.roots, now))!;
+    assert.ok(row);
+    const event = JSON.parse(String(row.event_json));
+    const verified = await verifyPublicInformation(event, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: config.selection });
+    assert.equal(verified.botDid, weather.botDid);
+    assert.equal(verified.type, type);
+    assert.equal(priorityHint(event), 1);
+    assert.equal(publicationPriority(config, weather.botDid, tags), 1);
+    assert.deepEqual(JSON.parse(String(row.original_json)).tags, tags);
+    f.store.db.prepare("UPDATE mosimo_bsaf_publications SET status='accepted' WHERE seq=?").run(row.seq!);
+  }
+  await f.ingest({ tags: ['bsaf:v1', 'type:new-upstream-type', 'value:level5', `time:${timestamp(now - 30)}`, 'target:jp', 'source:jma'] }, 'unknown', weather.botDid);
+  assert.equal(await stageNext(f.store, config, f.credentials, f.roots, now), null);
+  const spoof = await f.ingest({ text: '@bsaf-kikikuru-bot.bsky.social source:jma', tags: ['bsaf:v1', 'type:typhoon', 'value:level5', `time:${timestamp(now - 30)}`, 'target:jp', 'source:jma'] }, 'spoof', 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(spoof.status, 'ignored');
+  assert.equal(await stageNext(f.store, config, f.credentials, f.roots, now), null);
 });
 
 test('publisher opt-in validates pinned JMA pairs; collection does not enable publication', async t => {
