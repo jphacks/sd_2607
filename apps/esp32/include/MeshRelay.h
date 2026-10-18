@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MeshBundle.h"
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -55,6 +56,11 @@ public:
     // diagnostic files) count toward 16 committed files/384000 bytes, plus one
     // <=24000-byte staging file. Full caches can accept replacements; a cache
     // filled only with invalid diagnostics needs operator cleanup while off.
+    // /mesh-seen preserves up to 1024 evicted, verified event IDs across peers
+    // and reboot. Written/read back BEFORE eviction; history alone never permits
+    // inventory/ACK/forwarding. No automatic history rotation/forgetting: at its
+    // limit or an I/O error, stop new acquisition but keep retained-bundle forwarding.
+    // History adds <=36872 disk bytes and ~8 KiB of prefix-index RAM.
     // No persisted checkpoint or trusted wall-clock policy is claimed.
     // Local limits (not standardized wire claims): JSON <=10 KiB, <=128 distinct
     // lowercase-hex IDs; <=16 outstanding WANTs, <=128 completed IDs per session
@@ -93,6 +99,10 @@ private:
     // Saved, verified NEW events only. Called on the main loop; must not reenter.
     std::function<void(const BundleInfo&)> accepted_;
     std::vector<Entry> entries_;
+    // Full IDs + CRC live in /mesh-seen; 8-byte prefixes are only an index.
+    // Every prefix hit is confirmed against the full on-disk ID (no false dedup).
+    std::vector<std::array<uint8_t, 8>> seen_;
+    bool seenHealthy_ = true;
     size_t fileCount_ = 0, diskBytes_ = 0;
     bool ready_ = false, active_ = false, disconnect_ = false;
     bool helloPending_ = false, peerHello_ = false, inventoryDirty_ = false;
@@ -114,6 +124,10 @@ private:
     bool eligible(const Entry& entry, uint64_t now) const;
     size_t victim(uint64_t now) const;
     bool restore();
+    bool restoreSeen();
+    bool wasSeen(const std::string& id);
+    bool rememberEvicted(const std::string& id);
+    bool seenFailure(const char* stage);
     bool save(const uint8_t* data, size_t size, const BundleInfo& info, uint64_t receivedMs);
     bool read(const Entry& entry, std::vector<uint8_t>& bytes);
     void fillRequests();

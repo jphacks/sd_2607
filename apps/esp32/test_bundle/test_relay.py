@@ -18,6 +18,7 @@ files occupy /mesh/00 through /mesh/15; identity comes only from verified data.
 """
 import argparse
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,7 @@ struct File {
     size_t size() const;
     size_t read(uint8_t*, size_t);
     size_t write(const uint8_t*, size_t);
+    bool seek(size_t);
     void flush();
     void close();
     const char* name() const { return h->path.c_str(); }
@@ -70,7 +72,9 @@ struct MockFS {
     bool failWrite = false, failRename = false, failRead = false, failFlush = false;
     bool failOpenTemp = false, failOpenFinal = false, failCloseTemp = false, failCloseFinal = false;
     bool silentErrors = false, corruptReadback = false, truncateOnRename = false;
-    bool failRemove = false, requireStagedEviction = false, stagedFlushed = false, stagedClosed = false;
+    bool failSeenOpen = false, failSeenWrite = false, failSeenFlush = false;
+    bool failSeenClose = false, failSeenRead = false, failSeenSeek = false, corruptSeenRead = false;
+    bool failRemove = false, failReplace = false, requireStagedEviction = false, stagedFlushed = false, stagedClosed = false;
     size_t peakBytes = 0, peakFiles = 0;
     unsigned evictions = 0;
     int cleanupErrno = 0;
@@ -94,7 +98,7 @@ struct MockFS {
     bool mkdir(const char* p) { if (!validPath(p)) return false; directory = true; return true; }
     bool remove(const char* p) {
         if (!validPath(p)) return false;
-        bool committed = std::string(p) != "/mesh/.incoming" && files.count(p);
+        bool committed = std::string(p).find("/mesh/") == 0 && std::string(p) != "/mesh/.incoming" && files.count(p);
         if (committed && failRemove) { errno = EACCES; return false; }
         if (committed && requireStagedEviction &&
             (!stagedFlushed || !stagedClosed || !files.count("/mesh/.incoming"))) { errno = EIO; return false; }
@@ -105,9 +109,12 @@ struct MockFS {
     }
     bool rename(const char* a, const char* b) {
         if (!validPath(a) || !validPath(b)) { ++renameNameErrors; return false; }
-        if (failRename) { errno = silentErrors ? 0 : EIO; return false; }
+        bool replacing = files.count(b) && std::string(b).find("/mesh/") == 0;
+        if (failRename || (replacing && failReplace)) { errno = silentErrors ? 0 : EIO; return false; }
         if (!files.count(a)) { errno = ENOENT; return false; }
+        if (replacing && requireStagedEviction && (!stagedFlushed || !stagedClosed)) { errno = EIO; return false; }
         files[b] = files[a]; files.erase(a); ++renames;
+        if (replacing) ++evictions;
         if (truncateOnRename && !files[b].empty()) files[b].pop_back();
         return true;
     }
@@ -115,11 +122,13 @@ struct MockFS {
         if (!validPath(p)) return File();
         if (std::string(p) == "/mesh") return directory ? File(p, true) : File();
         bool temporary = std::string(p) == "/mesh/.incoming";
-        if ((temporary && failOpenTemp) || (!temporary && failOpenFinal)) {
+        bool seen = std::string(p) == "/mesh-seen";
+        if ((seen && failSeenOpen) || (!seen && ((temporary && failOpenTemp) || (!temporary && failOpenFinal)))) {
             errno = silentErrors ? 0 : EACCES;
             return File();
         }
         if (*mode == 'w') { files[p].clear(); return File(p, false); }
+        if (*mode == 'a') { auto& bytes = files[p]; File f(p, false); f.h->pos = bytes.size(); return f; }
         if (!files.count(p)) { errno = ENOENT; return File(); }
         return File(p, false);
     }
@@ -130,16 +139,22 @@ inline size_t File::size() const {
 }
 inline size_t File::read(uint8_t* p, size_t n) {
     if (!bool(*this)) return 0;
-    if (LittleFS.failRead) { errno = LittleFS.silentErrors ? 0 : EIO; return 0; }
+    const bool seen = h->path == "/mesh-seen";
+    if ((seen && LittleFS.failSeenRead) || (!seen && LittleFS.failRead)) { errno = LittleFS.silentErrors ? 0 : EIO; return 0; }
     auto& bytes = LittleFS.files[h->path];
     n = std::min(n, bytes.size() - h->pos);
     if (n) std::memcpy(p, bytes.data() + h->pos, n);
-    if (n && LittleFS.corruptReadback) p[0] ^= 1;
+    if (n && (seen ? LittleFS.corruptSeenRead : LittleFS.corruptReadback)) p[0] ^= 1;
     h->pos += n;
     return n;
 }
+inline bool File::seek(size_t pos) {
+    if (!bool(*this) || (h->path == "/mesh-seen" && LittleFS.failSeenSeek)) { errno = EIO; return false; }
+    if (pos > LittleFS.files[h->path].size()) return false;
+    h->pos = pos; return true;
+}
 inline size_t File::write(const uint8_t* p, size_t n) {
-    if (LittleFS.failWrite) { n /= 2; errno = LittleFS.silentErrors ? 0 : ENOSPC; }
+    if (LittleFS.failWrite || (h->path == "/mesh-seen" && LittleFS.failSeenWrite)) { n /= 2; errno = LittleFS.silentErrors ? 0 : ENOSPC; }
     h->dirty = true;
     if (h->path == "/mesh/.incoming") LittleFS.stagedFlushed = LittleFS.stagedClosed = false;
     auto& bytes = LittleFS.files[h->path];
@@ -152,7 +167,7 @@ inline size_t File::write(const uint8_t* p, size_t n) {
 }
 inline void File::flush() {
     ++LittleFS.flushes;
-    if (!LittleFS.failFlush) {
+    if (!LittleFS.failFlush && !(h->path == "/mesh-seen" && LittleFS.failSeenFlush)) {
         h->dirty = false;
         if (h->path == "/mesh/.incoming") LittleFS.stagedFlushed = true;
     }
@@ -162,17 +177,18 @@ inline void File::close() {
     if (!bool(*this)) return;
     bool temporary = h->path == "/mesh/.incoming";
     if (temporary) LittleFS.stagedClosed = true;
-    if (!h->directory && ((temporary && LittleFS.failCloseTemp) || (!temporary && LittleFS.failCloseFinal)))
+    if (!h->directory && ((h->path == "/mesh-seen" && LittleFS.failSeenClose) ||
+        (h->path != "/mesh-seen" && ((temporary && LittleFS.failCloseTemp) || (!temporary && LittleFS.failCloseFinal)))))
         errno = LittleFS.silentErrors ? 0 : EIO;
     h->valid = false;
 }
 inline File File::openNextFile() {
-    auto it = LittleFS.files.begin();
     size_t i = 0;
-    while (it != LittleFS.files.end() && i < h->next) { ++it; ++i; }
-    if (it == LittleFS.files.end()) return File();
-    ++h->next;
-    return File(it->first, false);
+    for (const auto& item : LittleFS.files) {
+        if (item.first.compare(0, h->path.size() + 1, h->path + "/") != 0) continue;
+        if (i++ == h->next) { ++h->next; return File(item.first, false); }
+    }
+    return File();
 }
 '''
 MOCK_CLOCK = '''#pragma once
@@ -192,6 +208,7 @@ def main():
     parser.add_argument("--mbedtls-library", type=Path)
     parser.add_argument("--no-sanitize", action="store_true",
                         help="for host toolchains without ASan/UBSan")
+    parser.add_argument("--dedup-only", action="store_true", help="fast eviction/reconnect/reboot regression")
     args = parser.parse_args()
     if not (args.arduinojson / "ArduinoJson.h").is_file():
         parser.error("ArduinoJson headers missing; install 7.4.2 or supply --arduinojson")
@@ -215,8 +232,16 @@ def main():
         control, _, _ = fixtures.event('{"type":"plc_operation"}',
             [[fixtures.DEADLINE, "2030-10-18T12:34:56Z"]], kind=8173)
         (build / "control.bin").write_bytes(fixtures.bundle(control))
+        header = b"MSEEN1\r\n"
+        def record(raw):
+            return raw + fixtures.crc(raw, 2)
+        history = [record(hashlib.sha256(f"previously-accepted-{i}".encode()).digest()) for i in range(1023)]
+        (build / "seen-near-full.bin").write_bytes(header + b"".join(history))
+        original = bytes.fromhex(fixed["event_id"])
+        (build / "seen-id0.bin").write_bytes(header + record(original))
+        (build / "seen-collision.bin").write_bytes(header + record(original[:8] + bytes(24)))
         # 128 session completions plus a 129th offer exercise the history cap.
-        for i in range(1, 129):
+        for i in range(1, 18 if args.dedup_only else 129):
             payload, _, _ = fixtures.event("host relay test " + str(i))
             (build / f"{i}.bin").write_bytes(fixtures.bundle(payload))
             if i == 5:
@@ -238,7 +263,7 @@ def main():
         command += [str(args.mbedtls_library.resolve()) if args.mbedtls_library else "-lmbedcrypto"]
         command += ["-o", str(executable)]
         subprocess.run(command, check=True, timeout=90)
-        subprocess.run([str(executable), str(build)], check=True, timeout=90)
+        subprocess.run([str(executable), str(build)] + (["dedup"] if args.dedup_only else []), check=True, timeout=90)
 
 
 if __name__ == "__main__":

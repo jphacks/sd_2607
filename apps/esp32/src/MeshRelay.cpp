@@ -21,6 +21,29 @@ constexpr uint64_t HELLO_MS = 60000, INVENTORY_MS = 10000;
 constexpr uint64_t REQUEST_MS = 30000, BACKPRESSURE_MS = 10000, RETRY_MS = 250;
 const char* DIRECTORY = "/mesh";
 const char* TEMP = "/mesh/.incoming";
+const char* SEEN = "/mesh-seen"; // Outside /mesh's bundle slot/file budget.
+constexpr size_t SEEN_LIMIT = 1024, SEEN_RECORD = 36;
+const uint8_t SEEN_HEADER[] = {'M','S','E','E','N','1','\r','\n'};
+
+std::array<uint8_t, 32> idBytes(const std::string& id) {
+    std::array<uint8_t, 32> bytes{};
+    auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
+    for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = (digit(id[2 * i]) << 4) | digit(id[2 * i + 1]);
+    return bytes;
+}
+uint32_t seenCrc(const uint8_t* bytes) {
+    uint32_t crc = 0xffffffff;
+    for (size_t i = 0; i < 32; ++i) {
+        crc ^= bytes[i];
+        for (unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ ((crc & 1) ? 0x82f63b78 : 0);
+    }
+    return crc ^ 0xffffffff;
+}
+bool seenRecordValid(const uint8_t* record) {
+    const uint32_t expected = (uint32_t(record[32]) << 24) | (uint32_t(record[33]) << 16) |
+                              (uint32_t(record[34]) << 8) | record[35];
+    return seenCrc(record) == expected;
+}
 
 uint64_t clockMs() { return static_cast<uint64_t>(esp_timer_get_time()) / 1000; }
 bool hexId(const std::string& id, size_t length = 64) {
@@ -237,14 +260,104 @@ bool Relay::begin(const std::string& node,
     ready_ = active_ = disconnect_ = false;
     resetSession();
     entries_.clear(); fileCount_ = diskBytes_ = 0;
+    seen_.clear(); seenHealthy_ = true;
     node_ = node; send_ = std::move(send); note_ = std::move(callback);
     accepted_ = std::move(accepted);
     if (!hexId(node_, 16) || !send_) { note("relay configuration invalid"); return false; }
     if (!LittleFS.begin(false)) { note("LittleFS unavailable; not formatted"); return false; }
     if (!LittleFS.exists(DIRECTORY) && !LittleFS.mkdir(DIRECTORY)) { note("store directory failed"); return false; }
-    if (!restore()) return false;
+    if (!restoreSeen() || !restore()) return false;
     ready_ = true;
     note("store " + std::to_string(entries_.size()) + " cold; not forwarding");
+    return true;
+}
+bool Relay::seenFailure(const char* stage) {
+    seenHealthy_ = false;
+    const std::string message = "seen history " + std::string(stage) + "; retained; no new requests/ACK";
+    fail(message.c_str());
+    return false;
+}
+bool Relay::restoreSeen() {
+    errno = 0;
+    if (!LittleFS.exists(SEEN)) {
+        if (errno && errno != ENOENT) return seenFailure("probe failed");
+        return true;
+    }
+    File file = LittleFS.open(SEEN, "r");
+    if (!file || file.isDirectory()) { file.close(); return seenFailure("open failed"); }
+    const size_t size = file.size();
+    if (size < sizeof SEEN_HEADER || size > sizeof SEEN_HEADER + SEEN_LIMIT * SEEN_RECORD ||
+        (size - sizeof SEEN_HEADER) % SEEN_RECORD) { file.close(); return seenFailure("size invalid"); }
+    uint8_t header[sizeof SEEN_HEADER], record[SEEN_RECORD];
+    if (file.read(header, sizeof header) != sizeof header || std::memcmp(header, SEEN_HEADER, sizeof header)) {
+        file.close(); return seenFailure("header invalid");
+    }
+    // ponytail: bounded linear prefix index; confirm full IDs on disk, no Bloom false positives.
+    seen_.reserve(SEEN_LIMIT);
+    for (size_t at = sizeof header; at < size; at += sizeof record) {
+        if (file.read(record, sizeof record) != sizeof record || !seenRecordValid(record)) {
+            file.close(); return seenFailure("record invalid");
+        }
+        std::array<uint8_t, 8> prefix;
+        std::copy(record, record + prefix.size(), prefix.begin());
+        seen_.push_back(prefix);
+    }
+    errno = 0; file.close();
+    if (errno) return seenFailure("close failed");
+    if (seen_.size() == SEEN_LIMIT) note("seen history full; no new requests when cache full");
+    return true;
+}
+bool Relay::wasSeen(const std::string& id) {
+    const auto bytes = idBytes(id);
+    for (size_t i = 0; i < seen_.size(); ++i) {
+        if (!std::equal(seen_[i].begin(), seen_[i].end(), bytes.begin())) continue;
+        File file = LittleFS.open(SEEN, "r");
+        uint8_t record[SEEN_RECORD];
+        const bool ok = file && !file.isDirectory() &&
+            file.size() == sizeof SEEN_HEADER + seen_.size() * SEEN_RECORD &&
+            file.seek(sizeof SEEN_HEADER + i * SEEN_RECORD) &&
+            file.read(record, sizeof record) == sizeof record && seenRecordValid(record);
+        errno = 0; file.close();
+        if (!ok || errno) { seenFailure("lookup failed"); return false; }
+        if (!std::memcmp(record, bytes.data(), bytes.size())) return true;
+    }
+    return false;
+}
+bool Relay::rememberEvicted(const std::string& id) {
+    if (!seenHealthy_) return false;
+    if (wasSeen(id)) return true;
+    if (!seenHealthy_) return false;
+    if (seen_.size() >= SEEN_LIMIT) return seenFailure("full");
+    const auto bytes = idBytes(id);
+    uint8_t record[SEEN_RECORD];
+    std::copy(bytes.begin(), bytes.end(), record);
+    const uint32_t crc = seenCrc(record);
+    for (size_t i = 0; i < 4; ++i) record[32 + i] = crc >> (24 - i * 8);
+    const size_t before = seen_.empty() ? 0 : sizeof SEEN_HEADER + seen_.size() * SEEN_RECORD;
+    File file = LittleFS.open(SEEN, "a");
+    if (!file || file.isDirectory() || (file.size() != before && !(seen_.empty() && file.size() == sizeof SEEN_HEADER))) {
+        file.close(); return seenFailure("append size invalid");
+    }
+    bool ok = true;
+    errno = 0;
+    if (!file.size()) ok = file.write(SEEN_HEADER, sizeof SEEN_HEADER) == sizeof SEEN_HEADER;
+    ok = ok && file.write(record, sizeof record) == sizeof record;
+    if (ok) file.flush();
+    ok = ok && !errno && file.size() == sizeof SEEN_HEADER + (seen_.size() + 1) * SEEN_RECORD;
+    errno = 0; file.close();
+    if (!ok || errno) return seenFailure("append failed");
+    file = LittleFS.open(SEEN, "r");
+    uint8_t check[SEEN_RECORD];
+    ok = file && !file.isDirectory() && file.size() == sizeof SEEN_HEADER + (seen_.size() + 1) * SEEN_RECORD &&
+         file.seek(sizeof SEEN_HEADER + seen_.size() * SEEN_RECORD) &&
+         file.read(check, sizeof check) == sizeof check && !std::memcmp(check, record, sizeof check);
+    errno = 0; file.close();
+    if (!ok || errno) return seenFailure("readback failed");
+    if (seen_.capacity() < SEEN_LIMIT) seen_.reserve(SEEN_LIMIT);
+    std::array<uint8_t, 8> prefix;
+    std::copy(bytes.begin(), bytes.begin() + prefix.size(), prefix.begin());
+    seen_.push_back(prefix);
+    if (seen_.size() == SEEN_LIMIT) note("seen history full; no new requests when cache full");
     return true;
 }
 bool Relay::restore() {
@@ -380,6 +493,7 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
     // Incoming signature/request checks already passed. Only now, after the
     // complete temp file is flushed and closed, may a verified entry be evicted.
     std::string path;
+    size_t selected = entries_.size();
     for (size_t slot = 0; slot < STORE_FILES; ++slot) {
         std::string candidate = slotPath(slot);
         errno = 0;
@@ -391,31 +505,32 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
         }
     }
     if (path.empty() || fileCount_ == STORE_FILES || size > STORE_BYTES - diskBytes_) {
-        size_t selected = victim(clockMs());
+        selected = victim(clockMs());
         if (selected == entries_.size()) { LittleFS.remove(TEMP); return failed("no-verified-victim", ENOSPC); }
+        // The only copy may be evicted only after its verified ID is durably
+        // remembered. A journal failure preserves the old cache and sends no ACK.
+        if (!rememberEvicted(entries_[selected].id)) { LittleFS.remove(TEMP); return false; }
         path = entries_[selected].path;
-        errno = 0;
-        if (!LittleFS.remove(path.c_str())) {
-            code = errno;
-            LittleFS.remove(TEMP);
-            return failed("evict-remove", code);
-        }
+    }
+    // Unknown/invalid diagnostic files are never candidates or overwritten.
+    if (selected == entries_.size() && LittleFS.exists(path.c_str())) {
+        LittleFS.remove(TEMP);
+        return failed("destination-exists", EEXIST);
+    }
+    errno = 0;
+    // LittleFS rename replaces an existing file atomically. Never remove the
+    // victim first: a failed replacement must leave its complete Bundle intact.
+    if (!LittleFS.rename(TEMP, path.c_str())) {
+        code = errno;
+        LittleFS.remove(TEMP);
+        return failed("rename", code);
+    }
+    if (selected != entries_.size()) {
         --fileCount_;
         diskBytes_ -= entries_[selected].size;
         note("evicted " + entries_[selected].id.substr(0, 8));
         entries_.erase(entries_.begin() + selected);
         inventoryDirty_ = true;
-    }
-    // Unknown/invalid diagnostic files are never candidates or overwritten.
-    if (LittleFS.exists(path.c_str())) {
-        LittleFS.remove(TEMP);
-        return failed("destination-exists", EEXIST);
-    }
-    errno = 0;
-    if (!LittleFS.rename(TEMP, path.c_str())) {
-        code = errno;
-        LittleFS.remove(TEMP);
-        return failed("rename", code);
     }
     // Arduino flush/close have no status return. Check errno where available,
     // then close + rename + exact readback; never ACK earlier. A failed final
@@ -459,11 +574,15 @@ void Relay::fillRequests() {
     // victims supply capacity; invalid diagnostics cannot be reclaimed. Bound
     // outstanding requests separately from the session's replay history. Reserve
     // a history entry for each request so no issued WANT exceeds the 128-ID cap.
+    if (!seenHealthy_) return;
     const size_t capacity = STORE_FILES - fileCount_ + entries_.size();
-    for (const std::string& id : remoteIds_) {
+    const size_t historyCapacity = STORE_FILES - fileCount_ + SEEN_LIMIT - seen_.size();
+    for (auto it = remoteIds_.rbegin(); it != remoteIds_.rend(); ++it) {
+        const std::string& id = *it;
         if (requests_.size() >= MAX_REQUESTS || requests_.size() >= capacity ||
-            completed_.size() + requests_.size() >= SESSION_COMPLETED_IDS) break;
-        if (find(id) || contains(completed_, id)) continue;
+            completed_.size() + requests_.size() >= SESSION_COMPLETED_IDS || requests_.size() >= historyCapacity) break;
+        if (find(id) || contains(completed_, id) || wasSeen(id)) continue;
+        if (!seenHealthy_) return;
         bool exists = false;
         for (const Request& r : requests_) if (r.id == id) { exists = true; break; }
         if (!exists) { Request r; r.id = id; requests_.push_back(std::move(r)); }
@@ -540,7 +659,7 @@ void Relay::control(const uint8_t* data, size_t size, uint64_t now) {
             return contains(remoteIds_, o.id);
         }), offers_.end());
         requests_.erase(std::remove_if(requests_.begin(), requests_.end(), [&](const Request& r) {
-            return !r.issued && !contains(remoteIds_, r.id);
+            return !r.issued; // Re-plan unsent requests from the newest inventory tail.
         }), requests_.end());
         fillRequests();
     } else if (type == "want") {

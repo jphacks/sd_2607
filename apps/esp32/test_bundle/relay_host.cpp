@@ -31,10 +31,16 @@ struct Env {
  size_t ids(){JsonDocument d;CHECK(!deserializeJson(d,out.back().data(),out.back().size()));return d["ids"].size();}
  void request(const std::string&id){rx(control("inventory",{id}));relay.tick();CHECK(type()=="want");CHECK(ids()==1);}
 };
+std::map<std::string,std::vector<uint8_t>> cacheSnapshot(){
+ std::map<std::string,std::vector<uint8_t>> files;
+ for(const auto& item:LittleFS.files)if(item.first.compare(0,6,"/mesh/")==0)files.insert(item);
+ return files;
+}
+size_t cacheFiles(){return cacheSnapshot().size();}
 // Slots are storage locations only; recover full identity from verified data.
 void checkStoredPaths(){
  std::vector<std::string> ids;
- for(const auto& file:LittleFS.files){
+ for(const auto& file:cacheSnapshot()){
   CHECK(file.first.size()==8&&file.first.compare(0,6,"/mesh/")==0);
   std::string name=file.first.substr(6);
   CHECK(name[0]>='0'&&name[0]<='1'&&name[1]>='0'&&name[1]<='9');
@@ -47,8 +53,116 @@ void seedFullCache(const std::string& dir){
  LittleFS.files.clear();
  for(int slot=0;slot<16;++slot){std::string name=std::to_string(slot);if(slot<10)name="0"+name;LittleFS.files["/mesh/"+name]=load(dir+"/"+std::to_string(slot)+".bin");}
 }
+void dedupRegression(const std::string& dir){
+ Env e;e.start();std::vector<std::string> ids;std::vector<std::vector<uint8_t>> packets;
+ for(int i=0;i<17;++i){
+  packets.push_back(load(dir+"/"+std::to_string(i)+".bin"));ids.push_back(idOf(packets.back()));
+  e.request(ids.back());e.rx(packets.back());e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();
+ }
+ CHECK(e.received.size()==17&&e.relay.storedCount()==16);
+ const std::string fresh=idOf(load(dir+"/17.bin"));ids.push_back(fresh);
+ e.relay.disconnected();e.start();e.rx(control("inventory",ids));e.relay.tick();
+ CHECK(e.type()=="want");CHECK(e.ids()==1); // Evicted ID 0 is still known across peers.
+ JsonDocument want;CHECK(!deserializeJson(want,e.out.back().data(),e.out.back().size()));
+ CHECK(want["ids"][0].as<std::string>()==fresh);
+ // History is separate from custody: retained bundles still forward unchanged.
+ e.rx(control("want",{ids[16]}));e.relay.tick();CHECK(e.type()=="bundle");
+ CHECK(idOf(e.out.back())==ids[16]);
+ e.relay.disconnected();
+ Env reboot(false);reboot.start();CHECK(reboot.ids()==0);reboot.rx(control("inventory",ids));reboot.relay.tick();
+ CHECK(reboot.type()=="want"&&reboot.ids()==1);CHECK(reboot.received.empty());
+ CHECK(!deserializeJson(want,reboot.out.back().data(),reboot.out.back().size()));
+ CHECK(want["ids"][0].as<std::string>()==fresh);
+ const size_t sent=reboot.out.size();const auto kept=cacheSnapshot();
+ reboot.rx(packets[0]);reboot.relay.tick();
+ CHECK(reboot.relay.disconnectRequested());CHECK(reboot.out.size()==sent);CHECK(cacheSnapshot()==kept);
+ CHECK(reboot.received.empty()); // Tombstone alone never ACKs or replays a notice.
+ // Current Android inventories preserve insertion order, oldest to newest.
+ Env newest;newest.start();newest.rx(control("inventory",ids));newest.relay.tick();
+ CHECK(newest.type()=="want"&&newest.ids()==16);
+ CHECK(!deserializeJson(want,newest.out.back().data(),newest.out.back().size()));
+ CHECK(want["ids"][0].as<std::string>()==fresh);
+ // A changed inventory supersedes older plans that have not reached the wire.
+ Env pending;pending.start();pending.allow=false;
+ pending.rx(control("inventory",std::vector<std::string>(ids.begin(),ids.begin()+16)));pending.relay.tick();
+ pending.rx(control("inventory",ids));pending.allow=true;fakeNow+=250;pending.relay.tick();
+ CHECK(pending.type()=="want"&&pending.ids()==16);
+ CHECK(!deserializeJson(want,pending.out.back().data(),pending.out.back().size()));
+ CHECK(want["ids"][0].as<std::string>()==fresh);
+}
+void historySafety(const std::string& dir){
+ const auto next=load(dir+"/16.bin");const auto nextId=idOf(next);
+ // Each journal fault must preserve the victim and suppress both ACK and callback.
+ for(int fault=0;fault<8;++fault){
+  Env reset;seedFullCache(dir);Env e(false);e.start();e.request(nextId);
+  const auto before=cacheSnapshot();const size_t sent=e.out.size();
+  LittleFS.failSeenOpen=fault==0;LittleFS.failSeenWrite=fault==1;
+  LittleFS.failSeenFlush=fault==2;LittleFS.failSeenClose=fault==3;
+  LittleFS.failSeenRead=fault==4;LittleFS.failSeenSeek=fault==5;
+  LittleFS.corruptSeenRead=fault==6;
+  if(fault==7)LittleFS.files["/mesh-seen"]={1}; // Unexpected existing journal cannot be overwritten.
+  e.rx(next);e.relay.tick();CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==sent);
+  CHECK(e.received.empty()&&LittleFS.evictions==0&&cacheSnapshot()==before);
+  CHECK(!LittleFS.files.count("/mesh/.incoming"));CHECK(e.notes.back().find("seen history ")==0);
+ }
+ // A history write failure stops acquisition, not forwarding of retained live data.
+ {
+  Env e;e.start();std::string last;
+  for(int i=0;i<16;++i){auto packet=load(dir+"/"+std::to_string(i)+".bin");last=idOf(packet);
+   e.request(last);e.rx(packet);e.relay.tick();e.relay.tick();}
+  const auto before=cacheSnapshot();e.request(nextId);LittleFS.failSeenOpen=true;e.rx(next);
+  CHECK(e.relay.disconnectRequested()&&cacheSnapshot()==before&&e.received.size()==16);
+  e.relay.disconnected();e.start();CHECK(e.ids()==16);
+  e.rx(control("want",{last}));e.relay.tick();CHECK(e.type()=="bundle"&&idOf(e.out.back())==last);
+ }
+ // Corrupt/truncated/oversized history must fail closed without formatting or forgetting.
+ auto valid=load(dir+"/seen-id0.bin");
+ for(int fault=0;fault<4;++fault){
+  LittleFS=MockFS();LittleFS.directory=true;auto bad=valid;
+  if(fault==0)bad.pop_back();
+  if(fault==1)bad[0]^=1;
+  if(fault==2)bad[8]^=1;
+  if(fault==3)bad.resize(8+1025*36);
+  LittleFS.files["/mesh-seen"]=bad;mesh::Relay relay;
+  CHECK(!relay.begin("0123456789abcdef",[](const uint8_t*,size_t){return true;},[](const std::string&){}));
+  CHECK(!LittleFS.format&&LittleFS.files.at("/mesh-seen")==bad);
+ }
+ // Equal 64-bit prefixes are not sufficient for dedup: compare all 256 bits.
+ {
+  Env reset;LittleFS.files["/mesh-seen"]=load(dir+"/seen-collision.bin");
+  Env e(false);e.start();e.request(idOf(load(dir+"/0.bin")));CHECK(!e.relay.disconnectRequested());
+ }
+ // A failed lookup cannot turn a known ID into a new WANT.
+ for(bool missing:{false,true}){
+  Env reset;LittleFS.files["/mesh-seen"]=valid;Env e(false);e.start();
+  if(missing)LittleFS.files.erase("/mesh-seen");else LittleFS.failSeenRead=true;
+  const size_t sent=e.out.size();e.rx(control("inventory",{idOf(load(dir+"/0.bin"))}));e.relay.tick();
+  CHECK(e.relay.disconnectRequested()&&e.out.size()==sent&&e.received.empty());
+ }
+ // Saturation never rotates IDs silently. The last safe replacement can ACK,
+ // then new acquisition stops while retained live bundles continue forwarding.
+ {
+  Env reset;LittleFS.files["/mesh-seen"]=load(dir+"/seen-near-full.bin");Env e(false);e.start();
+  for(int i=0;i<17;++i){
+   auto packet=load(dir+"/"+std::to_string(i)+".bin");e.request(idOf(packet));e.rx(packet);
+   e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();
+  }
+  CHECK(LittleFS.files.at("/mesh-seen").size()==36872);CHECK(e.received.size()==17);
+  const auto history=LittleFS.files.at("/mesh-seen");const auto kept=cacheSnapshot();
+  const size_t sent=e.out.size();e.rx(control("inventory",{idOf(load(dir+"/17.bin"))}));e.relay.tick();
+  CHECK(!e.relay.disconnectRequested()&&e.out.size()==sent&&cacheSnapshot()==kept);
+  e.rx(control("want",{nextId}));e.relay.tick();CHECK(e.type()=="bundle"&&idOf(e.out.back())==nextId);
+  CHECK(LittleFS.files.at("/mesh-seen")==history);
+  e.relay.disconnected();Env reboot(false);reboot.start();const size_t before=reboot.out.size();
+  reboot.rx(control("inventory",{idOf(load(dir+"/0.bin")),idOf(load(dir+"/17.bin"))}));reboot.relay.tick();
+  CHECK(reboot.out.size()==before&&reboot.received.empty());CHECK(LittleFS.files.at("/mesh-seen")==history);
+ }
+}
 int main(int argc,char**argv){
- CHECK(argc==2);std::string dir=argv[1];auto bytes=load(dir+"/0.bin");std::string id=idOf(bytes);
+ CHECK(argc==2||argc==3);std::string dir=argv[1];
+ dedupRegression(dir);historySafety(dir);
+ if(argc==3){std::cout<<"PASS dedup regression: "<<checks<<" assertions\n";return 0;}
+ auto bytes=load(dir+"/0.bin");std::string id=idOf(bytes);
 
  // Test isolation is opt-in and can exclude an already connected foreign peer.
  {
@@ -69,7 +183,7 @@ int main(int argc,char**argv){
   const std::string valid="/mesh/"+std::string(32,'0'), tooLong="/mesh/"+std::string(33,'1');
   File f=LittleFS.open(valid.c_str(),"w");CHECK(bool(f));f.close();
   errno=0;CHECK(!LittleFS.rename(valid.c_str(),(valid+".bp").c_str()));CHECK(errno==ENAMETOOLONG);
-  CHECK(LittleFS.files.count(valid)==1&&LittleFS.files.size()==1);
+  CHECK(LittleFS.files.count(valid)==1&&cacheFiles()==1);
   errno=0;CHECK(!LittleFS.rename(tooLong.c_str(),valid.c_str()));CHECK(errno==ENAMETOOLONG);
   errno=0;CHECK(!LittleFS.open(tooLong.c_str(),"w"));CHECK(errno==ENAMETOOLONG);
   errno=0;CHECK(!LittleFS.exists(tooLong.c_str()));CHECK(errno==ENAMETOOLONG);
@@ -80,7 +194,7 @@ int main(int argc,char**argv){
   CHECK(LittleFS.rename(valid.c_str(),shorter.c_str()));CHECK(LittleFS.files.count(shorter)==1);
  }
  {
-  Env e;e.start();e.request(id);e.rx(bytes);if(LittleFS.renameNameErrors)std::cerr<<"mock rename: exceeds provisioned name_max=32, errno="<<ENAMETOOLONG<<"\n";CHECK(e.relay.storedCount()==1);CHECK(LittleFS.files.size()==1);CHECK(LittleFS.files.count("/mesh/00")==1);checkStoredPaths();CHECK(!LittleFS.files.count("/mesh/.incoming"));CHECK(LittleFS.flushes==1&&LittleFS.renames==1);CHECK(e.type()=="want");
+  Env e;e.start();e.request(id);e.rx(bytes);if(LittleFS.renameNameErrors)std::cerr<<"mock rename: exceeds provisioned name_max=32, errno="<<ENAMETOOLONG<<"\n";CHECK(e.relay.storedCount()==1);CHECK(cacheFiles()==1);CHECK(LittleFS.files.count("/mesh/00")==1);checkStoredPaths();CHECK(!LittleFS.files.count("/mesh/.incoming"));CHECK(LittleFS.flushes==1&&LittleFS.renames==1);CHECK(e.type()=="want");
     CHECK(e.received.size()==1);CHECK(e.received[0].id==id);
     mesh::BundleInfo expected;std::string error;CHECK(mesh::validateBundle(bytes.data(),bytes.size(),expected,error));CHECK(e.received[0].text==expected.text);CHECK(e.received[0].kind==1);
   e.allow=false;e.relay.tick();CHECK(e.type()=="want");CHECK(!e.relay.disconnectRequested());fakeNow+=250;e.allow=true;e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==1);
@@ -136,7 +250,7 @@ int main(int argc,char**argv){
   Env e;e.start();std::vector<std::string>ids;std::vector<std::vector<uint8_t>>all;
   for(int i=0;i<16;++i){all.push_back(load(dir+"/"+std::to_string(i)+".bin"));ids.push_back(idOf(all.back()));}
   e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want"&&e.ids()==16);
-  for(auto&b:all){e.rx(b);}CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(LittleFS.files.size()==16);checkStoredPaths();
+  for(auto&b:all){e.rx(b);}CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(cacheFiles()==16);checkStoredPaths();
   for(int i=0;i<16;++i){e.relay.tick();CHECK(e.type()=="ack");}e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==16);
   // Regression: Android offers a new signed post after sixteen receipts on
   // this SAME connection. Storage slots are not a session write quota.
@@ -146,9 +260,9 @@ int main(int argc,char**argv){
   LittleFS.requireStagedEviction=true;e.rx(next);
   CHECK(!e.relay.disconnectRequested());CHECK(e.received.size()==17);
   CHECK(e.received.back().id==nextId);CHECK(LittleFS.renames==17);
-  CHECK(e.relay.storedCount()==16&&LittleFS.files.size()==16);
+  CHECK(e.relay.storedCount()==16&&cacheFiles()==16);
   CHECK(LittleFS.files.at("/mesh/00")==next);CHECK(LittleFS.evictions==1);
-  CHECK(LittleFS.peakFiles==17&&LittleFS.peakBytes<=384000+24000);
+  CHECK(LittleFS.peakFiles==18&&LittleFS.peakBytes<=384000+24000+36872);
   e.relay.tick();CHECK(e.type()=="ack");JsonDocument ack;
   CHECK(!deserializeJson(ack,e.out.back().data(),e.out.back().size()));
   CHECK(ack["ids"][0].as<std::string>()==nextId);
@@ -184,30 +298,30 @@ int main(int argc,char**argv){
   CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==sent);
   CHECK(e.received.size()==16&&LittleFS.renames==16);
   CHECK(!LittleFS.files.count("/mesh/.incoming"));
-  CHECK(LittleFS.evictions==(badSignature?0u:1u));
+  CHECK(LittleFS.evictions==0); // Rename failure cannot delete the old complete Bundle.
  }
  // Inventory alone cannot evict. A requested but invalid signed bundle cannot
  // evict either, even when all sixteen restored entries are cold.
  {
   Env reset;seedFullCache(dir);Env e(false);e.start();CHECK(e.ids()==0);
-  const auto before=LittleFS.files;auto next=load(dir+"/16.bin");e.request(idOf(next));
-  CHECK(LittleFS.files==before);e.rx(load(dir+"/tampered16.bin"));
-  CHECK(e.relay.disconnectRequested());CHECK(LittleFS.files==before);CHECK(LittleFS.evictions==0);
+  const auto before=cacheSnapshot();auto next=load(dir+"/16.bin");e.request(idOf(next));
+  CHECK(cacheSnapshot()==before);e.rx(load(dir+"/tampered16.bin"));
+  CHECK(e.relay.disconnectRequested());CHECK(cacheSnapshot()==before);CHECK(LittleFS.evictions==0);
  }
  // A DIFFERENT verified event replaces a cold entry only after staging sync.
  {
   Env reset;seedFullCache(dir);Env e(false);e.start();auto next=load(dir+"/16.bin");
   LittleFS.requireStagedEviction=true;e.request(idOf(next));e.rx(next);
-  CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(LittleFS.files.size()==16);
+  CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(cacheFiles()==16);
   CHECK(LittleFS.evictions==1);CHECK(LittleFS.files.at("/mesh/00")==next);
-  CHECK(LittleFS.peakFiles==17&&LittleFS.peakBytes<=384000+24000);
+  CHECK(LittleFS.peakFiles==18&&LittleFS.peakBytes<=384000+24000+36872);
   e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.ids()==1);
  }
  // A mixed full cache can evict a verified entry, never its invalid slot.
  {
   Env reset;seedFullCache(dir);const std::vector<uint8_t> invalid={0x9f};LittleFS.files["/mesh/00"]=invalid;
   Env e(false);e.start();auto next=load(dir+"/16.bin");e.request(idOf(next));e.rx(next);
-  CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==15);CHECK(LittleFS.files.size()==16);
+  CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==15);CHECK(cacheFiles()==16);
   CHECK(LittleFS.files.at("/mesh/00")==invalid);CHECK(LittleFS.files.at("/mesh/01")==next);
  }
  // Oldest live is replaced even if its duplicate was just received. An
@@ -225,39 +339,40 @@ int main(int argc,char**argv){
   CHECK(LittleFS.files.at(expired?"/mesh/05":"/mesh/00")==next);
   CHECK(e.relay.storedCount()==16&&LittleFS.evictions==1);
  }
- // Failed writes/flush/remove preserve the old cache. Failed rename leaves
- // fifteen slots; failed final readback leaves sixteen files but only fifteen
- // indexed entries. None can ACK the replacement.
+ // Failed writes/flush/atomic replacement preserve the old cache. Failed final
+ // readback leaves sixteen files but only fifteen indexed entries. None can ACK
+ // the replacement, and a failed rename must not discard the old body.
  for(int fault=0;fault<6;++fault){
   Env reset;seedFullCache(dir);Env e(false);e.start();auto next=load(dir+"/16.bin");e.request(idOf(next));
-  const auto before=LittleFS.files;LittleFS.requireStagedEviction=true;
-  LittleFS.failWrite=fault==0;LittleFS.failFlush=fault==1;LittleFS.failRemove=fault==2;
+  const auto before=cacheSnapshot();LittleFS.requireStagedEviction=true;
+  LittleFS.failWrite=fault==0;LittleFS.failFlush=fault==1;LittleFS.failReplace=fault==2;
   LittleFS.failRename=fault==3;LittleFS.failRead=fault==4;LittleFS.truncateOnRename=fault==5;
   e.rx(next);CHECK(e.relay.disconnectRequested());e.relay.tick();CHECK(e.type()=="want");
   CHECK(!LittleFS.files.count("/mesh/.incoming"));
-  if(fault<3){CHECK(LittleFS.files==before);CHECK(e.relay.storedCount()==16);CHECK(LittleFS.evictions==0);}
-  else {CHECK(e.relay.storedCount()==15);CHECK(LittleFS.evictions==1);CHECK(LittleFS.files.size()==(fault==3?15:16));}
+  if(fault<4){CHECK(cacheSnapshot()==before);CHECK(e.relay.storedCount()==16);CHECK(LittleFS.evictions==0);}
+  else {CHECK(e.relay.storedCount()==15);CHECK(LittleFS.evictions==1);CHECK(cacheFiles()==16);}
   if(fault==3){
    LittleFS.failRename=false;e.relay.disconnected();e.start();e.request(idOf(next));e.rx(next);
-   CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(LittleFS.files.size()==16);
+   CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(cacheFiles()==16);
   }
  }
- // Repeated inventory can expose IDs displaced earlier this same session.
- // completed_ retains all seventeen receipts despite the sixteen-file cache.
+ // A restored sixteen-file cache plus one new inventory ID must accept just
+ // that new ID; remembering the displaced cold ID prevents a seventeen-item churn.
  {
   Env reset;seedFullCache(dir);Env e(false);e.start();std::vector<std::string> ids;
   std::map<std::string,std::vector<uint8_t>> packets;
   for(int i=0;i<17;++i){auto packet=load(dir+"/"+std::to_string(i)+".bin");std::string key=idOf(packet);ids.push_back(key);packets[key]=packet;}
   e.rx(control("inventory",ids));e.relay.tick();
-  for(int accepted=0;accepted<17;++accepted){
+  for(int accepted=0;accepted<1;++accepted){
    CHECK(e.type()=="want");JsonDocument want;CHECK(!deserializeJson(want,e.out.back().data(),e.out.back().size()));
    CHECK(want["ids"].size()==1);e.rx(packets.at(want["ids"][0].as<std::string>()));CHECK(!e.relay.disconnectRequested());
    e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();
   }
-  CHECK(LittleFS.evictions==17&&e.relay.storedCount()==16);
-  CHECK(e.received.size()==17);
+  CHECK(LittleFS.evictions==1&&e.relay.storedCount()==16);
+  CHECK(e.received.size()==1);
   size_t sent=e.out.size();e.rx(control("inventory",ids));e.relay.tick();CHECK(e.out.size()==sent);
-  e.relay.disconnected();e.start();e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want");
+  e.relay.disconnected();e.start();sent=e.out.size();
+  e.rx(control("inventory",ids));e.relay.tick();CHECK(e.out.size()==sent);
  }
  // TX limits remain independent of replay history: retransmitted receipts
  // cannot consume unbounded messages or cause more accepted callbacks/writes.
@@ -311,7 +426,7 @@ int main(int argc,char**argv){
     completed.push_back(key);const auto sent=e.out.size();e.rx(packets.at(key));
     CHECK(e.out.size()==sent);CHECK(!e.relay.disconnectRequested());
     CHECK(e.received.size()==completed.size());CHECK(e.relay.storedCount()<=16);
-    CHECK(LittleFS.files.size()<=16&&!LittleFS.files.count("/mesh/.incoming"));
+    CHECK(cacheFiles()<=16&&!LittleFS.files.count("/mesh/.incoming"));
    }
    for(int i=0;i<16;++i){e.relay.tick();CHECK(e.type()=="ack");}
    if(batch<7){
@@ -321,7 +436,7 @@ int main(int argc,char**argv){
   }
   CHECK(completed.size()==128&&e.received.size()==128);
   CHECK(LittleFS.renames==128&&LittleFS.evictions==112);
-  CHECK(LittleFS.peakFiles==17&&LittleFS.peakBytes<=384000+24000);
+  CHECK(LittleFS.peakFiles==18&&LittleFS.peakBytes<=384000+24000+36872);
   const size_t sent=e.out.size();e.relay.tick();
   CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==sent);
   CHECK(e.notes.back()=="mesh session completed ID limit");
@@ -345,11 +460,11 @@ int main(int argc,char**argv){
  {Env e;e.start();std::vector<std::string>ids;for(int i=0;i<128;++i){std::string s(64,'0');s[62]="0123456789abcdef"[i/16];s[63]="0123456789abcdef"[i%16];ids.push_back(s);}for(unsigned i=0;i<500&&!e.relay.disconnectRequested();++i){fakeNow+=250;e.rx(control("inventory",ids));}CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh receive limit");}
  {Env e;e.start();std::vector<std::string>ids(129,id);e.rx(control("inventory",ids));CHECK(e.relay.disconnectRequested());}
  {Env e;LittleFS.files["/mesh/.incoming"]=bytes;Env reboot(false);CHECK(!LittleFS.files.count("/mesh/.incoming"));}
- {Env e;LittleFS.files["/mesh/corrupt"]=bytes;Env reboot(false);CHECK(reboot.relay.storedCount()==0);CHECK(LittleFS.files.size()==1);}
+ {Env e;LittleFS.files["/mesh/corrupt"]=bytes;Env reboot(false);CHECK(reboot.relay.storedCount()==0);CHECK(cacheFiles()==1);}
  // Restore accepts only bounded slot names, never arbitrary filenames.
  for(const std::string& name:{std::string("0"),std::string("16"),std::string("99"),std::string("AA"),std::string("000")}){
   Env e;LittleFS.files["/mesh/"+name]=bytes;Env reboot(false);
-  CHECK(reboot.relay.storedCount()==0);CHECK(LittleFS.files.size()==1);
+  CHECK(reboot.relay.storedCount()==0);CHECK(cacheFiles()==1);
   reboot.start();CHECK(reboot.ids()==0);
  }
  // Invalid occupied slots are retained and skipped, not overwritten. Reads
@@ -366,7 +481,7 @@ int main(int argc,char**argv){
  // cold. The same full ID in two slots is indexed once but both consume space.
  {
   Env reset;LittleFS.files["/mesh/13"]=bytes;LittleFS.files["/mesh/15"]=bytes;
-  Env e(false);CHECK(e.relay.storedCount()==1);CHECK(LittleFS.files.size()==2);e.start();CHECK(e.ids()==0);
+  Env e(false);CHECK(e.relay.storedCount()==1);CHECK(cacheFiles()==2);e.start();CHECK(e.ids()==0);
   size_t count=e.out.size();e.rx(control("inventory",{id}));e.relay.tick();CHECK(e.out.size()==count);
   auto next=load(dir+"/1.bin");std::string nextId=idOf(next);e.request(nextId);e.rx(next);
   CHECK(e.relay.storedCount()==2);CHECK(LittleFS.files.at("/mesh/00")==next);
@@ -377,7 +492,7 @@ int main(int argc,char**argv){
   Env reset;
   for(int slot=0;slot<16;++slot){std::string name=std::to_string(slot);if(slot<10)name="0"+name;LittleFS.files["/mesh/"+name]={0x9f};}
   Env e(false);CHECK(e.relay.storedCount()==0);e.start();size_t count=e.out.size();
-  e.rx(control("inventory",{id}));e.relay.tick();CHECK(e.out.size()==count);CHECK(LittleFS.files.size()==16);
+  e.rx(control("inventory",{id}));e.relay.tick();CHECK(e.out.size()==count);CHECK(cacheFiles()==16);
  }
  // Signature/CRC verification and the requested event ID gate precede writes.
  for(const std::string& name : {std::string("tampered.bin"), std::string("16.bin")}) {
