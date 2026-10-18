@@ -17,6 +17,12 @@ internal val json = ObjectMapper(JsonFactory.builder()
 /** Contact control message (mndt §3). [node]/[max] are HELLO capability fields; [ids] are Nostr event IDs. */
 internal data class Control(val type: String, val ids: List<String> = emptyList(), val node: String = "", val max: Int = 0)
 
+/** Lab-only node override; normal installs keep per-process randomness. Not an identity or authentication. */
+internal fun meshNode(configured: String?, randomNode: () -> String): String =
+    configured?.takeIf { it.isNotEmpty() }?.also {
+        require(it.matches(Regex("[0-9a-f]{16}"))) { "Invalid test node" }
+    } ?: randomNode()
+
 internal fun relayEventFrame(eventJson: String): String = "[\"EVENT\",$eventJson]".also {
     // JSON escaping can expand a compact 24 KB event well beyond a Nearby frame.
     require(it.toByteArray(Charsets.UTF_8).size <= 262144) { "Relay event size limit" }

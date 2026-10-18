@@ -14,6 +14,7 @@ android {
         versionName = "0.1.0-experimental"
         manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
         manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
+        manifestPlaceholders["mndtTestNode"] = providers.gradleProperty("mndtTestNode").orElse("").get()
     }
     flavorDimensions += "demo"
     productFlavors {

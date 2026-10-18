@@ -4,6 +4,10 @@
 #include <Arduino.h>
 #include <algorithm>
 #include <cstring>
+#ifdef MESH_GATT_TRACE
+#include <esp_log.h>
+#include "nimble/porting/nimble/include/os/os_mbuf.h"
+#endif
 
 namespace mesh {
 namespace {
@@ -14,6 +18,9 @@ constexpr size_t MAX_QUEUE = 8, MAX_QUEUED_BYTES = 48000;
 }
 
 bool Ble::begin(const std::string& node) {
+#ifdef MESH_GATT_TRACE
+    esp_log_level_set("NimBLE", ESP_LOG_DEBUG);
+#endif
     events_ = xQueueCreate(32, sizeof(Event));
     if (!events_) return false;
     NimBLEDevice::init("mosimo M5Stack");
@@ -190,12 +197,25 @@ void Ble::poll(Relay& relay) {
             handle_ = event.handle; mtu_ = std::max<uint16_t>(event.size, 23);
             connectedMs_ = millis();
             Serial.printf("BLE connected handle=%u mtu=%u\n", handle_, mtu_);
+#ifdef MESH_GATT_TRACE
+            Serial.printf("[GATT-PROBE] peer=%s at=%lu\n",
+                          server_->getPeerInfoByHandle(handle_).getAddress().toString().c_str(),
+                          static_cast<unsigned long>(millis()));
+#endif
             continue;
         }
         if (event.handle != handle_) continue;
         switch (event.kind) {
-            case Mtu: mtu_ = std::max<uint16_t>(event.size, 23); break;
+            case Mtu:
+                mtu_ = std::max<uint16_t>(event.size, 23);
+#ifdef MESH_GATT_TRACE
+                Serial.printf("[GATT-PROBE] mtu handle=%u value=%u at=%lu\n", handle_, mtu_, static_cast<unsigned long>(millis()));
+#endif
+                break;
             case Subscribe:
+#ifdef MESH_GATT_TRACE
+                Serial.printf("[GATT-PROBE] subscribe handle=%u bits=%u at=%lu\n", handle_, event.size, static_cast<unsigned long>(millis()));
+#endif
                 if (!(event.size & 1)) { drop(relay, "notification subscription removed"); break; }
                 subscribed_ = true;
                 if (!ready_) { ready_ = true; relay.connected(); }
@@ -212,6 +232,15 @@ void Ble::poll(Relay& relay) {
     }
     if (recover(relay)) return;
     const uint32_t now = millis();
+#ifdef MESH_GATT_TRACE
+    static uint32_t lastTrace = 0;
+    if (now - lastTrace >= 5000) {
+        lastTrace = now;
+        Serial.printf("[GATT-PROBE] at=%lu alive=%u handle=%u mtu=%u subscribed=%u ready=%u msys_free=%d outgoing=%u\n",
+                      static_cast<unsigned long>(now), unsigned(callbackAlive_.load()), handle_, mtu_,
+                      unsigned(subscribed_), unsigned(ready_), os_msys_num_free(), unsigned(out_.size()));
+    }
+#endif
     if (handle_ != BLE_HS_CONN_HANDLE_NONE && !subscribed_ && now - connectedMs_ > 30000) drop(relay, "subscription timeout");
     if (prefixBytes_ && now - rxMs_ > 15000) drop(relay, "incomplete frame timeout");
     if (relay.disconnectRequested()) drop(relay, "exchange requested disconnect");

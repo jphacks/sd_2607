@@ -63,6 +63,19 @@ class WireTest {
         }
     }
 
+    @Test fun labNodeOverrideIsExplicitValidatedAndDoesNotChangeNormalRandomSelection() {
+        var calls = 0
+        val randomNode = { calls++; "0123456789abcdef" }
+        assertEquals("c047ef246330f71e", meshNode("c047ef246330f71e", randomNode))
+        assertEquals(0, calls)
+        assertEquals("0123456789abcdef", meshNode(null, randomNode))
+        assertEquals("0123456789abcdef", meshNode("", randomNode))
+        assertEquals(2, calls)
+        for (invalid in listOf("ABCDEF0123456789", "short", "g".repeat(16))) {
+            assertTrue(runCatching { meshNode(invalid, randomNode) }.isFailure)
+        }
+    }
+
     @Test fun boundedReadsWorkWithoutNewAndroidJavaApis() {
         assertArrayEquals(byteArrayOf(1, 2, 3), byteArrayOf(1, 2, 3).inputStream().readBounded(3))
         assertArrayEquals(byteArrayOf(), byteArrayOf().inputStream().readBounded(0))
