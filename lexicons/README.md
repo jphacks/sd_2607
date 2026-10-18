@@ -19,7 +19,14 @@
 
 [HappyView](https://appview.oriom.dev/) の **Lexicons → Add Lexicon → Local** で `getFeed.json` を登録し、**Target Collection** を `dev.oriom.mosimo.post` に設定する。`target_collection` は HappyView の登録設定であり、Lexicon JSON には含めない。
 
-Lua スクリプトを付けず、HappyView の標準 query 処理を使う。`limit`、`cursor`、`did`、`uri` パラメーターに対応し、一覧取得のレスポンスは `records` 配列と、続きがある場合の `cursor` を含む。独自のランキングや配送期限による除外はこの定義には含まない。
+Mosimoのみの構成ではLuaスクリプトを付けず、HappyViewの標準query処理を使う。
+`limit`、`cursor`、`did`、`uri`パラメーターに対応し、一覧取得のレスポンスは`records`配列と、
+続きがある場合の`cursor`を含む。独自のランキングや配送期限による除外はこの定義には含まない。
+
+[登録済みBSAF発信元の収集](../appview/bsaf/README.md)を有効にした構成では、
+管理対象のLua queryを配置し、Mosimo投稿と許可済みBotの原`app.bsky.feed.post`を統合して返す。
+平坦な原レコード＋`uri`の形式を維持し、追加の`provenance`でCID・著者・取得元を示す。
+BSAFをMosimoの`$type`へ変更しないため、クライアントは型ごとに扱う。
 
 Settings → API Clients で作成した `hvc_` から始まるクライアントキーを `CLIENT_KEY` に設定して呼び出す。
 

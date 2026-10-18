@@ -1,0 +1,23 @@
+{
+  "name": "@mosimo/bsaf-collector",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node collector.mts",
+    "test": "node --test collector.test.mts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@atproto/lex-cbor": "0.1.7",
+    "@atproto/lex-data": "0.1.8",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "~5.9.3"
+  }
+}
