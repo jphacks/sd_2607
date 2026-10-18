@@ -125,12 +125,24 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
         require(nowMillis >= 0 && utf8(text).size <= 16384)
         require(deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L) { "Invalid delivery deadline" }
         val restored = AtRepository.create(keys, did, text, nowMillis, previous, deliveryExpiresAtSeconds, extensions)
-        val tags = frozenTags(restored.first)
-        val digest = sha256(nostrSigningBytes(nostrPubkey, nowMillis / 1000, 1, tags, text))
+        return CreatedPost(sign(1, restored.first, text, nowMillis), restored.second)
+    }
+
+    /**
+     * 0001 §1.1.1 exception path: the signed genesis operation as its own control event, never inside posts,
+     * for online nodes to submit unchanged. Only the signed delivery deadline the mesh requires is added.
+     */
+    fun createPlcGenesisEvent(nowMillis: Long, deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400)): NostrEvent {
+        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L)
+        val tags = listOf(listOf(AtRepository.TAG_PREFIX + "delivery-expires-at", java.time.Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString()))
+        return sign(AtRepository.PLC_GENESIS_KIND, tags, initialOperationJson, nowMillis)
+    }
+
+    private fun sign(kind: Int, tags: List<List<String>>, content: String, nowMillis: Long): NostrEvent {
+        val frozen = frozenTags(tags)
+        val digest = sha256(nostrSigningBytes(nostrPubkey, nowMillis / 1000, kind, frozen, content))
         val sig = secp.signSchnorr(digest, keys.nostr, ByteArray(32).also(random::nextBytes))
-        val event = NostrEvent(hex(digest), nostrPubkey, nowMillis / 1000, 1, tags, text, hex(sig))
-        require(event.verify())
-        return CreatedPost(event, restored.second)
+        return NostrEvent(hex(digest), nostrPubkey, nowMillis / 1000, kind, frozen, content, hex(sig)).also { require(it.verify()) }
     }
 }
 

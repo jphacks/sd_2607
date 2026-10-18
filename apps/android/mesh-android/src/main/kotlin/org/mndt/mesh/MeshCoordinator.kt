@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString
+import org.mndt.core.AtRepository
 import org.mndt.core.Author
 import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
@@ -84,6 +85,9 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val relayDeferred = mutableMapOf<String, Long>()
     private var relayLastAttempt: String? = null
     private var registrationBusy = false
+    // Proxy registration (0001 §1.1.1): did → (failures, next attempt); Long.MAX_VALUE once the genesis is confirmed.
+    private val proxyNext = mutableMapOf<String, Pair<Int, Long>>()
+    private var proxyBusy = false
     private var registrationRetryAt = 0L
     private var registrationFailures = 0
     // Historical genesis confirmation is persisted; current authority is an online observation only.
@@ -194,7 +198,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                 Neighbor(key, named?.peerNode ?: "?", if (named == null) "HELLO 待ち"
                     else "同期中（${list.filter { it.peerNode != null }.joinToString("・") { it.link.name }}）")
             },
-            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().map {
+            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { !it.event.isPlcGenesis() }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList())
@@ -317,7 +321,9 @@ class MeshCoordinator private constructor(private val context: Context) {
         relayRetryAt = elapsed() + backoff(++relayFailures)
         note("リレー未受理。キューを保持し、次のリレーで再試行")
     }
-    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
+    // Genesis control events stay in the mesh: relays (including the PDS) accept only kinds 1 and 5, and the online
+    // node submits them to the PLC Directory itself.
+    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mndt §6). */
     private fun drainRelay() {
         val current = disk ?: return
@@ -447,10 +453,47 @@ class MeshCoordinator private constructor(private val context: Context) {
         registrationRetryAt = elapsed() + backoff(++registrationFailures)
         note("PLC 現在状態不明。保存済み鍵・DID・署名済み初期操作を保持")
     }
+    /** Unregistered with posts held: carry the signed genesis operation as its own control event (0001 §1.1.1). */
+    private fun originateGenesisIfUnregistered() {
+        val current = disk ?: return
+        val me = author ?: return
+        if (current.plcRegistered || configuredHttps(current.pdsEndpoint) == null) return
+        val own = engine.entries().filter { it.event.pubkey == me.nostrPubkey }
+        if (own.none { it.event.kind == 1 } || own.any { it.event.isPlcGenesis() }) return
+        // A rate-limited or rejected attempt is retried on a later tick.
+        runCatching { engine.originate(me.createPlcGenesisEvent(now()), now(), elapsed()) }.onSuccess {
+            dirty = true
+            note("PLC 未登録のため署名済み初期操作をメッシュで配送（代理登録用）")
+            exchange.broadcastInventory()
+        }
+    }
+    /** Online nodes submit received genesis operations unchanged; PlcDirectory.check never POSTs over an existing log. */
+    private fun proxyRegister() {
+        val directory = configuredHttps(plcDirectory) ?: return
+        if (fatal || !allowRegistration || proxyBusy || !validatedInternet()) return
+        val clock = elapsed()
+        val (did, operation) = engine.entries().asSequence().filter { it.event.isPlcGenesis() && it.event.pubkey != author?.nostrPubkey }
+            .mapNotNull { e -> runCatching { AtRepository.plcDid(e.event.content) to e.event.content }.getOrNull() }
+            .firstOrNull { (did, _) -> clock >= (proxyNext[did]?.second ?: 0) } ?: return
+        proxyBusy = true
+        scope.launch {
+            val confirmed = runCatching { PlcDirectory(http).check(directory, did, operation, false, allowRegistration = true) }
+                .getOrNull()?.genesisConfirmed == true
+            enqueue(critical = true) {
+                proxyBusy = false
+                // ponytail: per-DID retry forever at most once a minute; add a give-up rule once 0003 defines load limits.
+                val failures = if (confirmed) 0 else (proxyNext[did]?.first ?: 0) + 1
+                proxyNext[did] = failures to if (confirmed) Long.MAX_VALUE else elapsed() + backoff(failures)
+                note(if (confirmed) "PLC 代理登録: $did の初期操作をディレクトリで確認" else "PLC 代理登録: $did 未確認。再試行")
+            }
+        }
+    }
     private fun tick() {
         if (fatal || disk == null) return
         if (dirty) persist()
         registerIfConfigured()
+        originateGenesisIfUnregistered()
+        proxyRegister()
         val clock = elapsed()
         if (relayDeadline > 0 && clock >= relayDeadline) relayFailure()
         if (relayReadDeadline > 0 && clock >= relayReadDeadline) closeRelayRead()
@@ -466,3 +509,5 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
     }
 }
+
+private fun org.mndt.core.NostrEvent.isPlcGenesis() = kind == AtRepository.PLC_GENESIS_KIND

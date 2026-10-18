@@ -15,6 +15,8 @@ data class RepositoryChange(val path: String, val recordBytes: ByteArray, val co
 object AtRepository {
     const val NAMESPACE = "mosimo.oriom.dev"
     const val TAG_PREFIX = "$NAMESPACE:"
+    /** TODO(undecided): provisional control-event kind for the signed PLC genesis operation (0012 §3.4, mndt §9.5). */
+    const val PLC_GENESIS_KIND = 8173
     const val EXT_PREFIX = "${TAG_PREFIX}ext:"
     const val COLLECTION = "dev.oriom.mosimo.post"
     // ponytail: every post rebuilds the MST from all records (O(n)); keep persistent MST nodes if this grows.
@@ -38,8 +40,14 @@ object AtRepository {
             "prev" to null
         )
         val signed = unsigned + ("sig" to b64url.encodeToString(secp.sign(sha256(CanonicalCbor.encode(unsigned)), keys.plc)))
-        val did = "did:plc:" + base32(sha256(CanonicalCbor.encode(signed))).take(24)
-        return did to jsonMapper.writeValueAsString(signed)
+        val json = jsonMapper.writeValueAsString(signed)
+        return plcDid(json) to json
+    }
+
+    /** The did:plc a signed genesis operation derives (DID PLC spec): base32(sha256(DAG-CBOR)), 24 chars. */
+    fun plcDid(signedOperationJson: String): String {
+        val op = jsonMapper.convertValue(strictJson(signedOperationJson), Map::class.java).entries.associate { it.key as String to it.value }
+        return "did:plc:" + base32(sha256(CanonicalCbor.encode(op))).take(24)
     }
 
     internal fun binding(keys: SecretKeys, did: String, nostrPubkey: String): String {

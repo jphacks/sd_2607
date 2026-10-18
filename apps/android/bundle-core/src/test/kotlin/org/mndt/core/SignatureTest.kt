@@ -207,6 +207,18 @@ class SignatureTest {
         }
     }
 
+    @Test fun genesisControlEventCarriesTheUnchangedOperationThroughTheMesh() {
+        val a = author()
+        val now = 1_792_195_200_000L
+        val event = a.createPlcGenesisEvent(now)
+        assertEquals(AtRepository.PLC_GENESIS_KIND, event.kind)
+        assertEquals(a.initialOperationJson, event.content)
+        assertEquals(a.did, AtRepository.plcDid(event.content))
+        assertEquals(event, EventCodec.decode(EventCodec.encode(event)))
+        assertEquals(event, MeshEngine().originate(event, now, 0).event)
+        assertTrue(runCatching { AtRepository.plcDid("{\"type\":\"plc_operation\"") }.isFailure)
+    }
+
     @Test fun keysAreSeparatedIdentityAndBindingSignedWithoutRegistration() {
         val a = author()
         assertTrue(a.did.matches(Regex("did:plc:[a-z2-7]{24}")))
