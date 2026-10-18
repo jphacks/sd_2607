@@ -28,15 +28,19 @@
   <header>Mosimo タイムライン</header>
   <div id="feed"></div>
   <p id="status" class="status" role="status" aria-live="polite">読み込み中…</p>
-  <button id="more" type="button" hidden>以前の投稿を読み込む</button></button>
+  <button id="more" type="button" hidden>以前の投稿を読み込む</button>
 </main>
 <script>
-const APPVIEW = new URLSearchParams(location.search).get('appview') || 'https://appview.oriom.dev';
+const params = new URLSearchParams(location.search);
+const APPVIEW = params.get('appview') || 'https://appview.oriom.dev';
+// Public HappyView client key: an app identifier checked against allowed origins, not a secret.
+const CLIENT_KEY = params.get('client_key') || 'hvc_c15d9393de6ace328d65633d07d00278';
 const FEED = new URL('/xrpc/dev.oriom.mosimo.getFeed', APPVIEW);
 FEED.searchParams.set('limit', '50');
+FEED.searchParams.set('client_key', CLIENT_KEY);
 // A DID/URI filter makes a delayed mesh delivery directly inspectable.
 for (const key of ['did', 'uri']) {
-  const value = new URLSearchParams(location.search).get(key);
+  const value = params.get(key);
   if (value) FEED.searchParams.set(key, value);
 }
 const status = document.getElementById('status');
@@ -152,7 +156,7 @@ async function load() {
   }
 }
 load();
-setInterval(load, 5000);
+setInterval(load, 1000);
 </script>
 </body>
 </html>
