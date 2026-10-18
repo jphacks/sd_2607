@@ -18,6 +18,7 @@ CAP、EDXL、気象庁防災情報XMLから、人が読める本文と任意の�
 | [0011: 著者拡張](0011-extensions.md) | 拡張の共通構造。本書で `source`、`public-information` を具体化 |
 | [0012: データ表現](0012-bindings.md) | atproto・Nostr・メッシュへの配置案と符号化 |
 | [0015: CAP 1.2 著者拡張](0015-cap.md) | CAP固有の型・投稿化・共通拡張への対応と配送判断 |
+| [0016: EDXL-DE 1.0 著者拡張](0016-edxl-de.md) | 配布容器の型・内容選択・配布意図・公開条件 |
 | 本書 | 公的情報の入力、出典、原情報の意味、変換とAppView統合 |
 
 公的情報は本文と規定の構造化項目へ変換して配送し、原文XML全量のmesh配送は必須にしない（合意済み、§5.1）。原文は取り込み側で保存する。原文の完全復元は保証せず、原文の保存と投稿への同梱を区別する。
@@ -118,7 +119,7 @@ type SourceExtension = {
 
 ### 4.3 `public-information`: 原情報の意味（提案）
 
-以下は形式固有の項目を一つに集約した旧型案であり、確定したスキーマではない。CAPについては [0015](0015-cap.md) の独立型 `dev.oriom.mosimo.defs#cap12` を使う草案へ具体化した。本節の集約型をCAP拡張と同時に必須同梱するものではない。EDXL・気象庁XMLの形式別の型・フィールド配置、および別の任意拡張 `source` を読まないと形式を識別できない依存の整理は未確定である。
+以下は形式固有の項目を一つに集約した旧型案であり、確定したスキーマではない。CAPについては [0015](0015-cap.md) の独立型 `dev.oriom.mosimo.defs#cap12` を使う草案へ具体化した。本節の集約型をCAP拡張と同時に必須同梱するものではない。EDXL-DEの独立型 `edxlDe10` は [0016](0016-edxl-de.md) で具体化する。気象庁XMLの形式別の型・フィールド配置、および旧集約案の任意拡張間の依存の整理は未確定である。
 
 ```ts
 type PublicInformationExtension = {
@@ -153,7 +154,7 @@ CAP・EDXL等の新たな形式の機能は、[0011 §9.1–§9.3](0011-extensio
 - 中継側は理解できる本文・拡張だけを利用して表示や配送を判断する。例えばCAPに非対応でも、対応する `area` を使って地域別の配送順位を調整できる。理解しない原形式の拡張も改変せず保持・中継する。
 - 固有拡張の対応クライアントは独自の処理を実装できるが、その機能の採用と信頼はローカル方針で決める。署名検証・配送期限・サイズ・保存量等の制約は維持する。
 
-CAP向けの型と参照構造は [0015](0015-cap.md) の仕様草案で具体化する。EDXL-DE・気象庁XMLの型の分割・参照構造と、旧 `public-information` 型案の全体の整理は未確定である。本節は全形式の型の一覧や実スキーマを確定するものではない。
+CAP向けの型と参照構造は [0015](0015-cap.md)、EDXL-DE向けは [0016](0016-edxl-de.md) の仕様草案で具体化する。気象庁XMLの型の分割・参照構造と、旧 `public-information` 型案の全体の整理は未確定である。本節は全形式の型の一覧や実スキーマを確定するものではない。
 
 ## 5. 共通の処理の流れ（提案）
 
@@ -231,7 +232,7 @@ CAPの `scope: Public` は無制限の対象への一般配布、`Restricted` �
 
 ### 6.2 EDXL-DE 1.0
 
-一次資料 [D] の §1.3、§3.2、付録Aを参照する。DEの `senderID` は配布容器の送信者であり、内包CAPの `sender` と同一とは限らない。
+一次資料 [D] の §1.3、§3.2、付録Aを参照する。DEの `senderID` は配布容器の送信者であり、内包CAPの `sender` と同一とは限らない。具体的な型・内容選択・配布判断は [0016](0016-edxl-de.md) に定義する。
 
 - `distributionID`・`senderID`・`dateTimeSent` を容器の参照として `source.containers` に残す。
 - `contentObject` ごとに `xmlContent` または `nonXMLContent` を読む。XML内容は `xmlContent/embeddedXMLContent` 等の内側の名前空間で再分類する。DE 1.0では一つのXML容器内に複数の内包XMLを持ち得るため、内包文書も列挙する。
@@ -376,7 +377,7 @@ type BsafAppViewInput = {
 
 ### 7.2 生成する共通投稿
 
-この例では提供元の公開配信プロファイルにより、容器全体と両内容の公開再配布が可能と判断できたものとする。機密区分文字列だけで判断したのではない。CAPの `info[0]` から一件の共通投稿を生成する。CAP固有の情報は0015の `cap12` 草案に従う。PDFは関連リンクとして記録するだけとし、PDF本体をmeshに投入せず、警報本文へ推測で取り込まない。DEの配布条件は取り込み側で評価・保存し、この例では `source.containers` の容器参照だけを投稿に含める。DE固有の条件をCAP拡張へ混在させず、DE全体をこの投稿から再現できるとはしない。
+この例では提供元の公開配信プロファイルにより、容器全体と両内容の公開再配布が可能と判断できたものとする。機密区分文字列だけで判断したのではない。CAPの `info[0]` から一件の共通投稿を生成する。CAP固有の情報は0015の `cap12` 草案に従う。PDFは関連リンクとして記録するだけとし、PDF本体をmeshに投入せず、警報本文へ推測で取り込まない。DEの配布条件は取り込み側で評価・保存し、この例では出典追跡の `source.containers` と、0016の独立した `edxlDe10` 拡張を併用する。DE固有の配布意図・選択内容の条件をCAP拡張へ混在させず、DE全体をこの投稿から再現できるとはしない。
 
 ```json
 {
@@ -439,6 +440,26 @@ type BsafAppViewInput = {
       }
     },
     {
+      "$type": "dev.oriom.mosimo.defs#edxlDe10",
+      "distribution": {
+        "distributionID": "distribution-001",
+        "senderID": "dispatch@example.org",
+        "dateTimeSent": "2026-10-17T12:00:00+09:00"
+      },
+      "distributionStatus": "Actual",
+      "distributionType": "Report",
+      "combinedConfidentiality": "UNCLASSIFIED AND NOT SENSITIVE",
+      "references": [],
+      "targetAreas": [{ "countries": ["JP"] }],
+      "content": {
+        "index": 0,
+        "embeddedXMLIndex": 0,
+        "documentIndex": 0,
+        "contentDescription": "例市の避難情報",
+        "confidentiality": "UNCLASSIFIED AND NOT SENSITIVE"
+      }
+    },
+    {
       "$type": "dev.oriom.mosimo.defs#area",
       "regions": [{ "shape": "circle", "latitudeMicrodegrees": 35000000, "longitudeMicrodegrees": 139000000, "radiusMillimeters": 2500000 }]
     },
@@ -460,7 +481,7 @@ type BsafAppViewInput = {
 | DEの送信者・配布ID・送信時刻 | `source.containers[0]`。CAP発表者へ置き換えない |
 | `contentObject[0]` 内のCAP | `source.document` と `cap12.message`。取得経路とCAP自身の識別を分ける |
 | CAPの `info[0]` | 日本語の本文と、その情報単位の期間・領域 |
-| DEの `targetArea.country = JP` | 原配布意図として保持。全国を警報の影響範囲にはしない |
+| DEの `targetArea.country = JP` | `edxlDe10.targetAreas` に配布意図として保持。全国を警報の影響範囲にはしない |
 | CAPの `scope = Public` と提供元プロファイル等 | 公開可と判断した内容のみ投稿生成 |
 | `headline`・`instruction`・`senderName` | 単独で読める本文、原情報の意味を持つ拡張 |
 | `sent`、DEの `dateTimeSent` | UTC変換したそれぞれの原時刻。`createdAt` とは別 |
@@ -509,7 +530,7 @@ EDXL-DEの `targetArea` は配布対象であり、近似変換によって内�
 ## 9. 残る重要な判断
 
 1. **変換プロファイルの固定:** CAPの情報単位ごとの投稿化・EDXL-DEの内包内容別処理は §5.2 で合意済み。入力仕様の採用版、気象庁の電文種別・投稿単位、CAPの先行 `info` の拡張関係の具体表現、言語選択・選択箇所の識別、本文生成、原電文ID・版の対応、変換規則の公開方法は未決定。
-2. **拡張とbindings:** CAPの型と処理は0015で具体化済みの草案を参照。`source`・EDXL・気象庁向けの実スキーマ、参照表現、版、サイズ上限、Bytes 項目・時刻項目のタグ名と署名対象への配置。Bytes の独自タグでの文字列符号化は0012 §3.5の合意に従う。`area`・`validity`・`annotation` との接続。
+2. **拡張とbindings:** CAPの型と処理は0015、EDXL-DEは0016の具体化済みの草案を参照。これらの正式Lexicon実装と、`source`・気象庁向けの実スキーマ、参照表現、版、サイズ上限、Bytes 項目・時刻項目のタグ名と署名対象への配置。Bytes の独自タグでの文字列符号化は0012 §3.5の合意に従う。`area`・`validity`・`annotation` との接続。
 3. **公開条件の解釈:** DEの自由記述の機密区分・宛先・役割・組織固有プロファイルから公開可否を決める運用。限定内容を取り除いた再編集の可否は自動承認しない。
 4. **原文と取得証言:** 原文を取り込み側で保存し、本文と規定の構造化項目を配送する方針は §5.1 で合意済み。原文全量配送は必須にせず、完全復元は保証しない。具体的な保存場所・保持期間・参照形式・ハッシュ対象・取得と変換の証言形式は未決定。
 5. **信頼と同値配送:** 信頼リストの発行・更新・失効、機関鍵の認証、意味正規化、同値キー、異なる変換者の署名・commit・適用元 CID・レコード・path の保持。
