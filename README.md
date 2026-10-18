@@ -56,6 +56,9 @@
 + **AT Protocol PDS 兼 nostr Relay**: https://pds.oriom.dev
 + **AT Protocol AppView**: https://appview.oriom.dev
 
+## 動画リンク
+https://youtu.be/GTZUnUww7xk
+
 
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
