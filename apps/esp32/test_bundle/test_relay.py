@@ -9,7 +9,8 @@ ArduinoJson defaults to ../.pio/libdeps/m5stack-basic/ArduinoJson/src.
 Override with --arduinojson /path/to/ArduinoJson/src. Non-system mbedTLS can
 use --mbedtls-include /path/include --mbedtls-library /path/libmbedcrypto.a.
 No downloads, firmware changes, or test outputs are written into the repo.
-This tests state/storage ordering, NOT actual LittleFS power-loss guarantees,
+This tests same-session replacement, bounded replay history and state/storage
+ordering, NOT actual LittleFS power-loss guarantees,
 BLE transport, or ESP32 timing/heap. The Python signer uses public test keys.
 The provisioned littlefs.bin has name_max=32 despite SDK headers saying 64.
 The mock enforces 32-byte components and a 63-byte whole-path bound. Bundle
@@ -211,7 +212,8 @@ def main():
         (build / "0.bin").write_bytes(bytes.fromhex(fixed["valid_bundle_hex"]))
 
         (build / "tampered.bin").write_bytes(bytes.fromhex(fixed["tampered_signature_bundle_hex"]))
-        for i in range(1, 17):
+        # 128 session completions plus a 129th offer exercise the history cap.
+        for i in range(1, 129):
             payload, _, _ = fixtures.event("host relay test " + str(i))
             (build / f"{i}.bin").write_bytes(fixtures.bundle(payload))
             if i == 5:

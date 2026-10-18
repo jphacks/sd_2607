@@ -14,6 +14,7 @@ namespace {
 constexpr size_t STORE_FILES = 16, STORE_BYTES = 384000;
 constexpr size_t STORE_WITH_TEMP_BYTES = STORE_BYTES + MAX_BUNDLE_BYTES;
 constexpr size_t CONTROL_BYTES = 10 * 1024, CONTROL_IDS = 128;
+constexpr size_t MAX_REQUESTS = 16, SESSION_COMPLETED_IDS = CONTROL_IDS;
 constexpr size_t SESSION_BYTES = 4 * 1024 * 1024;
 constexpr unsigned SESSION_MESSAGES = 4096, MINUTE_MESSAGES = 512;
 constexpr uint64_t HELLO_MS = 60000, INVENTORY_MS = 10000;
@@ -442,11 +443,13 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
 }
 void Relay::fillRequests() {
     // Plan only; inventory must never remove a file. Empty slots and verified
-    // victims supply capacity; invalid diagnostics cannot be reclaimed. At most
-    // sixteen UNIQUE writes per session, including all outstanding reservations.
+    // victims supply capacity; invalid diagnostics cannot be reclaimed. Bound
+    // outstanding requests separately from the session's replay history. Reserve
+    // a history entry for each request so no issued WANT exceeds the 128-ID cap.
     const size_t capacity = STORE_FILES - fileCount_ + entries_.size();
     for (const std::string& id : remoteIds_) {
-        if (completed_.size() + requests_.size() >= STORE_FILES || requests_.size() >= capacity) break;
+        if (requests_.size() >= MAX_REQUESTS || requests_.size() >= capacity ||
+            completed_.size() + requests_.size() >= SESSION_COMPLETED_IDS) break;
         if (find(id) || contains(completed_, id)) continue;
         bool exists = false;
         for (const Request& r : requests_) if (r.id == id) { exists = true; break; }
@@ -549,7 +552,7 @@ void Relay::bundle(const uint8_t* data, size_t size, uint64_t now) {
     const Entry* existing = find(info.id);
     if (!existing) {
         if (duplicate) { fail("duplicate entry missing; no ACK"); return; }
-        if (completed_.size() >= STORE_FILES) { fail("session write limit; no ACK"); return; }
+        if (completed_.size() >= SESSION_COMPLETED_IDS) { fail("session history limit; no ACK"); return; }
         if (!save(data, size, info, now)) return; // save reports the precise stage/errno.
         completed_.push_back(info.id); // Retained even if this cache entry is later evicted.
         note("saved " + info.id.substr(0, 8) + " hop " + std::to_string(info.hop) + " " + std::to_string(size) + "B");
@@ -615,6 +618,12 @@ void Relay::tick() {
     if (!acks_.empty()) {
         if (sendIds("ack", {acks_.front()}, now)) acks_.erase(acks_.begin());
         return;
+    }
+    // Drain durable-acceptance ACKs before asking the parent to reconnect.
+    // Never age-reset or discard completed IDs within a live session: evicted
+    // entries must not be requested again with a refreshed residence timestamp.
+    if (completed_.size() >= SESSION_COMPLETED_IDS && requests_.empty()) {
+        fail("mesh session completed ID limit"); return;
     }
     if (inventoryDirty_ || now - inventoryMs_ >= INVENTORY_MS) {
         std::vector<std::string> ids;

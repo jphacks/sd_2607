@@ -54,8 +54,11 @@ public:
     // filled only with invalid diagnostics needs operator cleanup while off.
     // No persisted checkpoint or trusted wall-clock policy is claimed.
     // Local limits (not standardized wire claims): JSON <=10 KiB, <=128 distinct
-    // lowercase-hex IDs; <=16 unique writes per session, <=16 outstanding WANTs
-    // (reserved within that write budget); 512 RX/TX messages per minute
+    // lowercase-hex IDs; <=16 outstanding WANTs, <=128 completed IDs per session
+    // (retained even after cache eviction, never reset by minute windows). WANTs
+    // reserve history capacity; at 128 completions drain ACKs then request link
+    // closure/reconnect, rather than forget IDs and replay writes. Cache slots
+    // do not impose a sixteen-write session quota. 512 RX/TX messages per minute
     // and 4096 messages/4 MiB per direction per session. HELLO timeout 60 s;
     // WANT timeout 30 s; inventory every 10 s or after acceptance; queue refusal
     // retries every 250 ms, disconnect after 10 s stalled. Bundle retries after

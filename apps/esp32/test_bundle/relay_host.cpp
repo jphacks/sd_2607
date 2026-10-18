@@ -115,8 +115,53 @@ int main(int argc,char**argv){
   e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want"&&e.ids()==16);
   for(auto&b:all){e.rx(b);}CHECK(!e.relay.disconnectRequested());CHECK(e.relay.storedCount()==16);CHECK(LittleFS.files.size()==16);checkStoredPaths();
   for(int i=0;i<16;++i){e.relay.tick();CHECK(e.type()=="ack");}e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==16);
-  size_t count=e.out.size();e.rx(control("inventory",{idOf(load(dir+"/16.bin"))}));e.relay.tick();CHECK(e.out.size()==count);
+  // Regression: Android offers a new signed post after sixteen receipts on
+  // this SAME connection. Storage slots are not a session write quota.
+  auto next=load(dir+"/16.bin");const std::string nextId=idOf(next);
+  const size_t sent=e.out.size();e.request(nextId);
+  CHECK(e.out.size()==sent+1);CHECK(e.received.size()==16);CHECK(LittleFS.renames==16);
+  LittleFS.requireStagedEviction=true;e.rx(next);
+  CHECK(!e.relay.disconnectRequested());CHECK(e.received.size()==17);
+  CHECK(e.received.back().id==nextId);CHECK(LittleFS.renames==17);
+  CHECK(e.relay.storedCount()==16&&LittleFS.files.size()==16);
+  CHECK(LittleFS.files.at("/mesh/00")==next);CHECK(LittleFS.evictions==1);
+  CHECK(LittleFS.peakFiles==17&&LittleFS.peakBytes<=384000+24000);
+  e.relay.tick();CHECK(e.type()=="ack");JsonDocument ack;
+  CHECK(!deserializeJson(ack,e.out.back().data(),e.out.back().size()));
+  CHECK(ack["ids"][0].as<std::string>()==nextId);
+  e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==16);
+  // Periodic Android inventories must not re-request known, evicted ID 0,
+  // even across minute-window resets; no writes/callbacks or age refresh.
+  ids.push_back(nextId);
+  for(int minute=0;minute<3;++minute){
+   fakeNow+=60000;e.rx(control("inventory",ids));const size_t before=e.out.size();
+   e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();
+   CHECK(e.out.size()==before+1);CHECK(!e.relay.disconnectRequested());
+   CHECK(LittleFS.renames==17&&e.received.size()==17);
+   CHECK(LittleFS.files.at("/mesh/00")==next);
+  }
+  // An evicted receipt is not durable now: no false ACK or replay re-save.
+  const size_t before=e.out.size();e.rx(all[0]);e.relay.tick();
+  CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==before);
+  CHECK(e.notes.back()=="duplicate entry missing; no ACK");
+  CHECK(LittleFS.renames==17&&e.received.size()==17);
   Env reboot(false);CHECK(reboot.relay.storedCount()==16);reboot.start();CHECK(reboot.ids()==0);
+ }
+ // The seventeenth same-session post still needs verification and successful
+ // storage before ACK/callback; a failure must not be mistaken for acceptance.
+ for(bool badSignature:{false,true}){
+  Env e;e.start();
+  for(int i=0;i<16;++i){
+   auto packet=load(dir+"/"+std::to_string(i)+".bin");e.request(idOf(packet));
+   e.rx(packet);e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();
+  }
+  auto next=load(dir+"/16.bin");e.request(idOf(next));
+  const size_t sent=e.out.size();LittleFS.failRename=!badSignature;
+  e.rx(badSignature?load(dir+"/tampered16.bin"):next);e.relay.tick();
+  CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==sent);
+  CHECK(e.received.size()==16&&LittleFS.renames==16);
+  CHECK(!LittleFS.files.count("/mesh/.incoming"));
+  CHECK(LittleFS.evictions==(badSignature?0u:1u));
  }
  // Inventory alone cannot evict. A requested but invalid signed bundle cannot
  // evict either, even when all sixteen restored entries are cold.
@@ -150,7 +195,9 @@ int main(int argc,char**argv){
   e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want"&&e.ids()==16);
   for(const auto& packet:packets){++fakeNow;e.rx(packet);}CHECK(e.relay.storedCount()==16);
   fakeNow+=100;e.rx(packets[0]);CHECK(LittleFS.renames==16);
-  e.relay.disconnected();e.start();auto next=load(dir+"/16.bin");e.request(idOf(next));
+  for(int i=0;i<16;++i){e.relay.tick();}
+  e.relay.tick();
+  auto next=load(dir+"/16.bin");e.request(idOf(next));
   LittleFS.requireStagedEviction=true;e.rx(next);CHECK(!e.relay.disconnectRequested());
   CHECK(LittleFS.files.at(expired?"/mesh/05":"/mesh/00")==next);
   CHECK(e.relay.storedCount()==16&&LittleFS.evictions==1);
@@ -173,20 +220,93 @@ int main(int argc,char**argv){
   }
  }
  // Repeated inventory can expose IDs displaced earlier this same session.
- // completed_ must retain that history and stop at sixteen distinct writes.
+ // completed_ retains all seventeen receipts despite the sixteen-file cache.
  {
   Env reset;seedFullCache(dir);Env e(false);e.start();std::vector<std::string> ids;
   std::map<std::string,std::vector<uint8_t>> packets;
   for(int i=0;i<17;++i){auto packet=load(dir+"/"+std::to_string(i)+".bin");std::string key=idOf(packet);ids.push_back(key);packets[key]=packet;}
   e.rx(control("inventory",ids));e.relay.tick();
-  for(int accepted=0;accepted<16;++accepted){
+  for(int accepted=0;accepted<17;++accepted){
    CHECK(e.type()=="want");JsonDocument want;CHECK(!deserializeJson(want,e.out.back().data(),e.out.back().size()));
    CHECK(want["ids"].size()==1);e.rx(packets.at(want["ids"][0].as<std::string>()));CHECK(!e.relay.disconnectRequested());
    e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();
   }
-  CHECK(LittleFS.evictions==16&&e.relay.storedCount()==16);
+  CHECK(LittleFS.evictions==17&&e.relay.storedCount()==16);
+  CHECK(e.received.size()==17);
   size_t sent=e.out.size();e.rx(control("inventory",ids));e.relay.tick();CHECK(e.out.size()==sent);
   e.relay.disconnected();e.start();e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want");
+ }
+ // TX limits remain independent of replay history: retransmitted receipts
+ // cannot consume unbounded messages or cause more accepted callbacks/writes.
+ {
+  Env e;e.start();e.request(id);e.rx(bytes);e.relay.tick();e.relay.tick();
+  for(unsigned i=0;i<512&&!e.relay.disconnectRequested();++i){e.rx(bytes);e.relay.tick();}
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh send limit");
+  CHECK(e.out.size()==512&&e.received.size()==1&&LittleFS.renames==1);
+ }
+ {
+  Env e;e.start();
+  for(unsigned i=0;i<4096&&!e.relay.disconnectRequested();++i){fakeNow+=10000;e.relay.tick();}
+  CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh send limit");
+  CHECK(e.out.size()==4096);
+ }
+ // With sixteen live entries, TX reaches the 4-MiB byte budget BEFORE the
+ // 4096-message ceiling. Keep inventory cadence below the per-minute limit.
+ {
+  Env e;e.start();std::vector<std::string> ids;
+  std::vector<std::vector<uint8_t>> packets;
+  for(int i=0;i<16;++i){packets.push_back(load(dir+"/"+std::to_string(i)+".bin"));ids.push_back(idOf(packets.back()));}
+  e.rx(control("inventory",ids));e.relay.tick();CHECK(e.type()=="want"&&e.ids()==16);
+  for(const auto& packet:packets)e.rx(packet);
+  for(int i=0;i<16;++i){e.relay.tick();CHECK(e.type()=="ack");}
+  e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==16);
+  size_t total=0;for(const auto& frame:e.out)total+=frame.size();
+  const size_t inventoryBytes=e.out.back().size();
+  while(!e.relay.disconnectRequested()){
+   const size_t sent=e.out.size();fakeNow+=10000;e.relay.tick();
+   if(e.out.size()>sent)total+=e.out.back().size();
+  }
+  CHECK(e.notes.back()=="mesh send limit"&&e.out.size()<4096);
+  CHECK(total<=4*1024*1024&&total+inventoryBytes>4*1024*1024);
+  CHECK(e.received.size()==16&&LittleFS.renames==16);
+ }
+ // Full Android-sized inventory pipelines at most sixteen WANTs at a time.
+ // Complete 128 unique signed IDs on one long-lived session, drain the final
+ // ACKs, then explicitly close rather than forget history and churn old IDs.
+ {
+  Env e;e.start();std::vector<std::string> ids;
+  std::map<std::string,std::vector<uint8_t>> packets;
+  for(int i=0;i<128;++i){auto packet=load(dir+"/"+std::to_string(i)+".bin");const auto key=idOf(packet);ids.push_back(key);packets[key]=packet;}
+  e.rx(control("inventory",ids));e.relay.tick();
+  std::vector<std::string> completed;
+  for(int batch=0;batch<8;++batch){
+   CHECK(e.type()=="want"&&e.ids()==16);JsonDocument want;
+   CHECK(!deserializeJson(want,e.out.back().data(),e.out.back().size()));
+   for(JsonVariantConst value:want["ids"].as<JsonArrayConst>()){
+    const auto key=value.as<std::string>();
+    CHECK(std::find(completed.begin(),completed.end(),key)==completed.end());
+    completed.push_back(key);const auto sent=e.out.size();e.rx(packets.at(key));
+    CHECK(e.out.size()==sent);CHECK(!e.relay.disconnectRequested());
+    CHECK(e.received.size()==completed.size());CHECK(e.relay.storedCount()<=16);
+    CHECK(LittleFS.files.size()<=16&&!LittleFS.files.count("/mesh/.incoming"));
+   }
+   for(int i=0;i<16;++i){e.relay.tick();CHECK(e.type()=="ack");}
+   if(batch<7){
+    fakeNow+=60000;e.rx(control("inventory",ids));
+    e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();
+   }
+  }
+  CHECK(completed.size()==128&&e.received.size()==128);
+  CHECK(LittleFS.renames==128&&LittleFS.evictions==112);
+  CHECK(LittleFS.peakFiles==17&&LittleFS.peakBytes<=384000+24000);
+  const size_t sent=e.out.size();e.relay.tick();
+  CHECK(e.relay.disconnectRequested());CHECK(e.out.size()==sent);
+  CHECK(e.notes.back()=="mesh session completed ID limit");
+  auto next=load(dir+"/128.bin");e.rx(control("inventory",{idOf(next)}));e.rx(next);
+  CHECK(e.out.size()==sent&&LittleFS.renames==128&&e.received.size()==128);
+  e.relay.disconnected();e.start();e.request(idOf(next));e.rx(next);
+  CHECK(!e.relay.disconnectRequested());CHECK(e.received.size()==129);
+  e.relay.tick();CHECK(e.type()=="ack");
  }
  std::vector<std::string>bad={"{}","{\"v\":1,\"v\":1,\"type\":\"hello\",\"node\":\"fedcba9876543210\",\"max\":24000}","{\"v\":1,\"\u0076\":1,\"type\":\"hello\",\"node\":\"fedcba9876543210\",\"max\":24000}",hello+"{}",hello+"garbage",hello.substr(0,hello.size()-1)+",}","{'v':1}","{\"v\":1.0,\"type\":\"hello\",\"node\":\"fedcba9876543210\",\"max\":24000}","{\"v\":1,\"type\":\"hello\",\"node\":\"fedcba9876543210\",\"max\":24000.0}"};
  bad.push_back(R"json({"v":1,"\u0076":1,"type":"hello","node":"fedcba9876543210","max":24000})json");
@@ -197,9 +317,9 @@ int main(int argc,char**argv){
  for(auto&s:std::vector<std::string>{control("inventory",{id,id}),control("ack",{}),control("want",{std::string(64,'A')}),control("bogus",{})}){Env e;e.start();e.rx(s);CHECK(e.relay.disconnectRequested());}
  {Env e;e.start();e.rx(std::string(10241,'{'));CHECK(e.relay.disconnectRequested());}
  {Env e;e.start();std::vector<uint8_t>b(24001);e.rx(b);CHECK(e.relay.disconnectRequested());}
- {Env e;e.start();for(unsigned i=0;i<512;++i)e.rx(control("inventory"));CHECK(e.relay.disconnectRequested());}
- {Env e;e.start();for(unsigned i=0;i<4096;++i){fakeNow+=1000;e.rx(control("inventory"));}CHECK(e.relay.disconnectRequested());}
- {Env e;e.start();std::vector<std::string>ids;for(int i=0;i<128;++i){std::string s(64,'0');s[62]="0123456789abcdef"[i/16];s[63]="0123456789abcdef"[i%16];ids.push_back(s);}for(unsigned i=0;i<500&&!e.relay.disconnectRequested();++i){fakeNow+=250;e.rx(control("inventory",ids));}CHECK(e.relay.disconnectRequested());}
+ {Env e;e.start();for(unsigned i=0;i<512;++i)e.rx(control("inventory"));CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh receive limit");}
+ {Env e;e.start();for(unsigned i=0;i<4096;++i){fakeNow+=1000;e.rx(control("inventory"));}CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh receive limit");}
+ {Env e;e.start();std::vector<std::string>ids;for(int i=0;i<128;++i){std::string s(64,'0');s[62]="0123456789abcdef"[i/16];s[63]="0123456789abcdef"[i%16];ids.push_back(s);}for(unsigned i=0;i<500&&!e.relay.disconnectRequested();++i){fakeNow+=250;e.rx(control("inventory",ids));}CHECK(e.relay.disconnectRequested());CHECK(e.notes.back()=="mesh receive limit");}
  {Env e;e.start();std::vector<std::string>ids(129,id);e.rx(control("inventory",ids));CHECK(e.relay.disconnectRequested());}
  {Env e;LittleFS.files["/mesh/.incoming"]=bytes;Env reboot(false);CHECK(!LittleFS.files.count("/mesh/.incoming"));}
  {Env e;LittleFS.files["/mesh/corrupt"]=bytes;Env reboot(false);CHECK(reboot.relay.storedCount()==0);CHECK(LittleFS.files.size()==1);}
