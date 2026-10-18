@@ -19,7 +19,8 @@ public:
     // not permanent storage: ACK means durable acceptance, not indefinite retention.
     bool begin(const std::string& node,
                std::function<bool(const uint8_t*, size_t)> send,
-               std::function<void(const std::string&)> note);
+               std::function<void(const std::string&)> note,
+               std::function<void(const BundleInfo&)> accepted = {});
     void connected();
     // Transport must also discard queued TX/RX frames on disconnect, so an old
     // session's control/bundle bytes cannot leak into the next connected().
@@ -82,6 +83,8 @@ private:
     std::string node_;
     std::function<bool(const uint8_t*, size_t)> send_;
     std::function<void(const std::string&)> note_;
+    // Saved, verified NEW events only. Called on the main loop; must not reenter.
+    std::function<void(const BundleInfo&)> accepted_;
     std::vector<Entry> entries_;
     size_t fileCount_ = 0, diskBytes_ = 0;
     bool ready_ = false, active_ = false, disconnect_ = false;

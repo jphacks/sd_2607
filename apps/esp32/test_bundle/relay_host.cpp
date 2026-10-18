@@ -22,7 +22,8 @@ const std::string hello="{\"v\":1,\"type\":\"hello\",\"node\":\"fedcba9876543210
 struct Env {
  mesh::Relay relay;bool allow=true;unsigned calls=0;
  std::vector<std::vector<uint8_t>> out;std::vector<std::string>notes;
- Env(bool reset=true){if(reset){LittleFS=MockFS();fakeNow=100000;}CHECK(relay.begin("0123456789abcdef",[&](const uint8_t*p,size_t n){++calls;if(!allow)return false;out.emplace_back(p,p+n);return true;},[&](const std::string&s){notes.push_back(s);}));CHECK(!LittleFS.format);}
+ std::vector<mesh::BundleInfo> received;
+ Env(bool reset=true){if(reset){LittleFS=MockFS();fakeNow=100000;}CHECK(relay.begin("0123456789abcdef",[&](const uint8_t*p,size_t n){++calls;if(!allow)return false;out.emplace_back(p,p+n);return true;},[&](const std::string&s){notes.push_back(s);},[&](const mesh::BundleInfo&info){CHECK(LittleFS.renames>0);received.push_back(info);}));CHECK(!LittleFS.format);}
  void rx(const std::string&s){relay.receive(reinterpret_cast<const uint8_t*>(s.data()),s.size());}
  void rx(const std::vector<uint8_t>&s){relay.receive(s.data(),s.size());}
  void start(){relay.connected();relay.tick();CHECK(type()=="hello");rx(hello);relay.tick();CHECK(type()=="inventory");}
@@ -68,13 +69,15 @@ int main(int argc,char**argv){
  }
  {
   Env e;e.start();e.request(id);e.rx(bytes);if(LittleFS.renameNameErrors)std::cerr<<"mock rename: exceeds provisioned name_max=32, errno="<<ENAMETOOLONG<<"\n";CHECK(e.relay.storedCount()==1);CHECK(LittleFS.files.size()==1);CHECK(LittleFS.files.count("/mesh/00")==1);checkStoredPaths();CHECK(!LittleFS.files.count("/mesh/.incoming"));CHECK(LittleFS.flushes==1&&LittleFS.renames==1);CHECK(e.type()=="want");
+    CHECK(e.received.size()==1);CHECK(e.received[0].id==id);
+    mesh::BundleInfo expected;std::string error;CHECK(mesh::validateBundle(bytes.data(),bytes.size(),expected,error));CHECK(e.received[0].text==expected.text);
   e.allow=false;e.relay.tick();CHECK(e.type()=="want");CHECK(!e.relay.disconnectRequested());fakeNow+=250;e.allow=true;e.relay.tick();CHECK(e.type()=="ack");e.relay.tick();CHECK(e.type()=="inventory"&&e.ids()==1);
-  auto saved=LittleFS.files.begin()->second;fakeNow+=1000;e.rx(bytes);e.relay.tick();CHECK(e.type()=="ack");CHECK(LittleFS.files.begin()->second==saved);CHECK(LittleFS.renames==1);
+  auto saved=LittleFS.files.begin()->second;fakeNow+=1000;e.rx(bytes);e.relay.tick();CHECK(e.type()=="ack");CHECK(LittleFS.files.begin()->second==saved);CHECK(LittleFS.renames==1);CHECK(e.received.size()==1);
   e.relay.disconnected();e.start();CHECK(e.ids()==1);e.rx(control("want",{id}));e.relay.tick();CHECK(e.type()=="bundle");mesh::BundleInfo sent;std::string err;CHECK(mesh::validateBundle(e.out.back().data(),e.out.back().size(),sent,err));CHECK(sent.id==id&&sent.hop==1&&sent.age==1250);
   e.rx(control("ack",{id}));size_t count=e.out.size();fakeNow+=10000;e.relay.tick();CHECK(e.type()=="inventory");e.relay.tick();CHECK(e.out.size()==count+1);
-  Env reboot(false);CHECK(reboot.relay.storedCount()==1);reboot.start();CHECK(reboot.ids()==0);count=reboot.out.size();reboot.rx(control("inventory",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(control("want",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(bytes);CHECK(reboot.relay.disconnectRequested());
+  Env reboot(false);CHECK(reboot.relay.storedCount()==1);CHECK(reboot.received.empty());reboot.start();CHECK(reboot.ids()==0);count=reboot.out.size();reboot.rx(control("inventory",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(control("want",{id}));reboot.relay.tick();CHECK(reboot.out.size()==count);reboot.rx(bytes);CHECK(reboot.relay.disconnectRequested());
  }
- {Env e;e.start();e.rx(bytes);CHECK(e.relay.disconnectRequested());CHECK(e.relay.storedCount()==0);}
+ {Env e;e.start();e.rx(bytes);CHECK(e.relay.disconnectRequested());CHECK(e.relay.storedCount()==0);CHECK(e.received.empty());}
  // Every failed stage must be the FINAL diagnostic, preserve the original
  // errno across cleanup (or say it was not reported), and never send an ACK.
  const char* stages[]={"write","rename","readback","flush","open-temp","open-final",
@@ -89,7 +92,7 @@ int main(int argc,char**argv){
   LittleFS.silentErrors=fault==8||fault==11;
   LittleFS.corruptReadback=fault==9;LittleFS.truncateOnRename=fault==10;
   LittleFS.cleanupErrno=ENAMETOOLONG;
-  e.rx(bytes);CHECK(e.relay.disconnectRequested());CHECK(e.relay.storedCount()==0);
+  e.rx(bytes);CHECK(e.relay.disconnectRequested());CHECK(e.relay.storedCount()==0);CHECK(e.received.empty());
   const std::string diagnostic=e.notes.back();
   CHECK(diagnostic.find(std::string("store ")+stages[fault]+" errno="+std::to_string(codes[fault]))==0);
   CHECK(diagnostic.find("id="+id.substr(0,8))!=std::string::npos);

@@ -209,10 +209,12 @@ python3 apps/esp32/test_bundle/test_ble.py --sanitize
 ```
 
 Relay compiles the production codec/exchange with ArduinoJson 7.4.2, mocking only
-LittleFS and monotonic time. Its 1,527 assertions cover verification before writes,
+LittleFS and monotonic time. Its 1,622 assertions cover verification before writes,
 ACK after readback, the provisioned 32-character filename limit, numeric slots,
 cold restoration, bounded cache replacement, duplicate age preservation, queue
-backpressure, protocol limits, and failed I/O without false ACKs.
+backpressure, protocol limits, and failed I/O without false ACKs. Accepted-message
+callbacks fire only for verified, successfully saved new events, not duplicates,
+failed saves or reboot-restored entries.
 
 BLE compiles production `MeshBle.cpp` with mocked NimBLE/FreeRTOS/Relay. Its 215
 assertions cover nonzero handles, notification queue acceptance versus application
@@ -226,3 +228,16 @@ With the WSL environment above, Relay accepts
 Use the same `PYTHONPATH` environment as for the codec suite. `test_ble.py` needs
 no external libraries. Both harnesses build in temporary directories and run
 ASan/UBSan by default (BLE requires `--sanitize` to enable them).
+
+## Message preview
+
+The preview assumes UTF-8 already validated by the bundle codec. Ten checks cover
+Japanese/emoji boundaries, ASCII controls, NUL, truncation, and exact-length text:
+
+```sh
+g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -Iapps/esp32/include apps/esp32/test_bundle/preview_host.cpp -o /tmp/mesh-preview-test
+/tmp/mesh-preview-test
+```
+
+These do not test physical LCD rendering. Device logs additionally confirm the
+callback runs after saving received bundles; screen appearance needs visual inspection.

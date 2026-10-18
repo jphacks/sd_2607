@@ -218,11 +218,13 @@ void Relay::resetSession() {
 }
 bool Relay::begin(const std::string& node,
                   std::function<bool(const uint8_t*, size_t)> send,
-                  std::function<void(const std::string&)> callback) {
+                  std::function<void(const std::string&)> callback,
+                  std::function<void(const BundleInfo&)> accepted) {
     ready_ = active_ = disconnect_ = false;
     resetSession();
     entries_.clear(); fileCount_ = diskBytes_ = 0;
     node_ = node; send_ = std::move(send); note_ = std::move(callback);
+    accepted_ = std::move(accepted);
     if (!hexId(node_, 16) || !send_) { note("relay configuration invalid"); return false; }
     if (!LittleFS.begin(false)) { note("LittleFS unavailable; not formatted"); return false; }
     if (!LittleFS.exists(DIRECTORY) && !LittleFS.mkdir(DIRECTORY)) { note("store directory failed"); return false; }
@@ -551,6 +553,7 @@ void Relay::bundle(const uint8_t* data, size_t size, uint64_t now) {
         if (!save(data, size, info, now)) return; // save reports the precise stage/errno.
         completed_.push_back(info.id); // Retained even if this cache entry is later evicted.
         note("saved " + info.id.substr(0, 8) + " hop " + std::to_string(info.hop) + " " + std::to_string(size) + "B");
+        if (accepted_) accepted_(info);
     } else {
         // A validated retransmission never overwrites or refreshes residence.
         std::vector<uint8_t> bytes;
