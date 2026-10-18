@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Node 24 native type stripping. No runtime imports from the implementation under test.
-// Run from pds: node verify-production.mts prepare|relay|pipeline|reorder|upstream|upstream-live|selftest
+// Run from pds: node verify-production.mts prepare|relay|pipeline|reorder|upstream|upstream-live|compatibility-live|selftest
 import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Secp256k1Keypair, verifySignature } from '@atproto/crypto';
 import { TID } from '@atproto/common-web';
-import { MST, MemoryBlockstore, readCar, blocksToCarFile } from '@atproto/repo';
+import { MST, BlockMap, MemoryBlockstore, readCar, blocksToCarFile } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { decodeFirst } from 'cborg';
 import { CID } from 'multiformats/cid';
@@ -49,6 +49,7 @@ type State = {
   registered: boolean; fixtures: Fixture[]; probes: Event[]; malformed: Event; liveControl?: Event;
   upstream?: UpstreamEntry;
   upstreamLive?: UpstreamEntry;
+  compatibilityLive?: { fixture: Fixture; attemptedAt?: string; evidence?: Json };
   reorder?: { fixtures: Fixture[]; attemptedAt?: string; parentAttemptedAt?: string; gate?: Json };
 };
 type Ack = { id: string; accepted: boolean | null; message: string };
@@ -68,6 +69,7 @@ function fixtureChain(s: State, planned = false): Fixture[] {
     ...(s.upstream && (planned || s.upstream.attemptedAt) ? [s.upstream.fixture] : []),
     ...(s.reorder && (planned || s.reorder.attemptedAt) ? s.reorder.fixtures : []),
     ...(s.upstreamLive && (planned || s.upstreamLive.attemptedAt) ? [s.upstreamLive.fixture] : []),
+    ...(s.compatibilityLive && (planned || s.compatibilityLive.attemptedAt) ? [s.compatibilityLive.fixture] : []),
   ].sort((a, b) => a.rev < b.rev ? -1 : a.rev > b.rev ? 1 : 0);
 }
 function publicIdentity(s: State) {
@@ -78,6 +80,9 @@ function publicIdentity(s: State) {
       commitCid: s.upstream.fixture.commitCid, base: s.upstream.fixture.base },
     upstreamLive: s.upstreamLive && { relay: s.upstreamLive.relay, eventId: s.upstreamLive.fixture.event.id,
       commitCid: s.upstreamLive.fixture.commitCid, base: s.upstreamLive.fixture.base },
+    compatibilityLive: s.compatibilityLive && { eventId: s.compatibilityLive.fixture.event.id,
+      commitCid: s.compatibilityLive.fixture.commitCid, base: s.compatibilityLive.fixture.base,
+      attemptedAt: s.compatibilityLive.attemptedAt },
     reorder: s.reorder && { eventIds: s.reorder.fixtures.map(f => f.event.id),
       attemptedAt: s.reorder.attemptedAt, parentAttemptedAt: s.reorder.parentAttemptedAt } };
 }
@@ -103,13 +108,13 @@ async function json(url: string, init: RequestInit = {}): Promise<Json> {
 function sign(s: State, kind: number, content: string, tags: string[][] = []) {
   return finalizeEvent({ kind, content, tags, created_at: Math.floor(Date.now() / 1000) }, unb64(s.nostrPrivate));
 }
-async function fixture(s: State, previous: Fixture[]): Promise<Fixture> {
+async function fixture(s: State, previous: Fixture[], label = 'chained record'): Promise<Fixture> {
   const key = await Secp256k1Keypair.import(unb64(s.repoPrivate));
   const rev = TID.nextStr(previous.at(-1)?.rev);
   const path = `${collection}/${rev}`;
   const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
   const deliveryExpiresAt = new Date(Date.parse(createdAt) + 86400_000).toISOString();
-  const text = `[PRODUCTION VERIFICATION TEST ${s.run}] chained record ${previous.length + 1}; not disaster information`;
+  const text = `[PRODUCTION VERIFICATION TEST ${s.run}] ${label} ${previous.length + 1}; not disaster information`;
   const recordBytes = cbor.encode({ $type: collection, text, createdAt, deliveryExpiresAt, extensions: [] });
   const recordCid = await cidFor(recordBytes);
   let tree = await MST.create(new MemoryBlockstore());
@@ -275,7 +280,7 @@ async function relayProbe(s: State) {
   } finally { relay.close(); }
 }
 
-async function verifyCar(bytes: Uint8Array, s: State, fixtures: Fixture[]) {
+async function verifyCar(bytes: Uint8Array, s: State, fixtures: Fixture[], mode: 'snapshot' | 'proof' | 'sync' = 'snapshot') {
   const car = await readCar(bytes);
   const expected = fixtures.at(-1)!;
   assert.equal(car.roots.length, 1);
@@ -299,19 +304,38 @@ async function verifyCar(bytes: Uint8Array, s: State, fixtures: Fixture[]) {
   assert.equal(commit.rev, expected.rev);
   assert.equal(commit.prev, null);
   assert.ok(await verifySignature(s.repoKey, cbor.encode(unsigned), sig), 'Independent original commit signature');
-  const entries = await MST.load(storage, commit.data).list();
-  assert.equal(entries.length, fixtures.length, 'MST record count');
-  for (const f of fixtures) {
-    assert.equal(entries.find(e => e.key === f.path)?.value.toString(), f.recordCid, 'MST leaf');
+  // Rebuild the known signed chain independently; a partial CAR must still bind to its exact MST root.
+  let expectedTree = await MST.create(new MemoryBlockstore());
+  for (const f of fixtures) expectedTree = await expectedTree.add(f.path, CID.parse(f.recordCid));
+  assert.equal(commit.data.toString(), (await expectedTree.getPointer()).toString(), 'Expected MST root');
+  if (mode === 'sync') {
+    assert.ok(bytes.length <= 10_000, 'Sync CAR exceeds 10000 bytes');
+    assert.equal(blockCount, 1, 'Commit-only sync CAR');
+    return { mode, root: expected.commitCid, blockCount, records: 0,
+      allCidHashes: true, originalCommitBytes: true, commitSignature: true, expectedMstRoot: true };
+  }
+  const tree = MST.load(storage, commit.data);
+  if (mode === 'snapshot') assert.equal((await tree.list()).length, fixtures.length, 'MST record count');
+  const records = mode === 'snapshot' ? fixtures : [expected];
+  if (mode === 'proof') {
+    // Require both neighbor paths, not merely an inclusion path for the changed record.
+    for (const { cid, bytes: block } of (await expectedTree.getCoveringProof(expected.path)).entries()) {
+      const received = car.blocks.get(cid);
+      assert.ok(received, 'Covering proof node missing');
+      assert.deepEqual(Buffer.from(received), Buffer.from(block), 'Covering proof node changed');
+    }
+  }
+  for (const f of records) {
+    assert.equal((await tree.get(f.path))?.toString(), f.recordCid, 'MST leaf');
     const record = car.blocks.get(CID.parse(f.recordCid));
     assert.ok(record, 'Original record missing');
     assert.deepEqual(Buffer.from(record), Buffer.from(unb64(f.recordBytes)), 'Original record bytes');
   }
-  return { root: expected.commitCid, blockCount, records: entries.length,
+  return { mode, root: expected.commitCid, blockCount, records: records.length,
     allCidHashes: true, originalCommitBytes: true, commitSignature: true, officialMst: true, originalRecordBytes: true };
 }
-function watchFirehose(s: State) {
-  const socket = new WebSocket(`${relayUrl}/xrpc/com.atproto.sync.subscribeRepos?cursor=0`);
+function watchFirehose(s: State, cursor: number | null = 0) {
+  const socket = new WebSocket(`${relayUrl}/xrpc/com.atproto.sync.subscribeRepos${cursor === null ? '' : `?cursor=${cursor}`}`);
   sockets.add(socket);
   socket.binaryType = 'arraybuffer';
   const frames: { header: Json; body: Json }[] = [];
@@ -330,13 +354,41 @@ function watchFirehose(s: State) {
   return { frames, error: () => frameError, isOpen: () => socket.readyState === WebSocket.OPEN,
     close: () => { socket.close(); sockets.delete(socket); } };
 }
-async function firehose(s: State, fixtures: Fixture[]) {
-  const watch = watchFirehose(s);
+async function verifyRepoFrame(frame: { header: Json; body: Json }, s: State, fixtures: Fixture[]) {
+  const f = fixtures.at(-1)!;
+  const prior = fixtures.at(-2);
+  const { header, body } = frame;
+  assert.equal(header.op, 1);
+  assert.equal(body.rev, f.rev);
+  assert.ok(body.blocks instanceof Uint8Array);
+  if (header.t === '#sync') {
+    assert.equal(body.did, s.did);
+    return verifyCar(body.blocks, s, fixtures, 'sync');
+  }
+  assert.equal(header.t, '#commit');
+  assert.equal(body.repo, s.did);
+  assert.equal(String(body.commit), f.commitCid);
+  assert.equal(body.since, prior?.rev ?? null);
+  assert.equal(body.rebase, false);
+  assert.equal(body.tooBig, false);
+  assert.deepEqual(body.blobs, []);
+  assert.deepEqual(body.ops, [{ action: 'create', path: f.path, cid: CID.parse(f.recordCid) }]);
+  if (prior) {
+    const commit = cbor.decode(unb64(prior.commitBytes)) as { data: CID };
+    assert.equal(String(body.prevData), commit.data.toString());
+  } else assert.equal(body.prevData, undefined);
+  return verifyCar(body.blocks, s, fixtures, 'proof');
+}
+const matchesFixture = (frame: { header: Json; body: Json }, f: Fixture) =>
+  frame.header.t === '#commit' && String(frame.body.commit) === f.commitCid
+  || frame.header.t === '#sync' && frame.body.rev === f.rev;
+async function firehose(s: State, fixtures: Fixture[], cursor: number | null = 0) {
+  const watch = watchFirehose(s, cursor);
   const { frames } = watch;
   try {
     const until = Math.min(deadline, Date.now() + 10_000);
     while (!watch.error() && Date.now() < until && !fixtures.every(f => frames.some(v =>
-      v.header.t === '#commit' && String(v.body.commit) === f.commitCid))) await sleep(50);
+      matchesFixture(v, f)))) await sleep(50);
     assert.ok(!watch.error(), watch.error());
     const identity = frames.find(f => f.header.t === '#identity');
     const account = frames.find(f => f.header.t === '#account');
@@ -354,24 +406,12 @@ async function firehose(s: State, fixtures: Fixture[]) {
     assert.ok(Number(identity.body.seq) < previousCommitSeq, 'Identity before account');
     for (let i = 0; i < fixtures.length; i++) {
       const f = fixtures[i];
-      const frame = frames.find(v => v.header.t === '#commit' && String(v.body.commit) === f.commitCid);
+      const frame = frames.find(v => matchesFixture(v, f));
       assert.ok(frame, `Firehose replay missing commit ${f.commitCid}`);
       const { body } = frame;
       assert.ok(Number(body.seq) > previousCommitSeq, 'Firehose commits must follow chain order');
       previousCommitSeq = Number(body.seq);
-      assert.equal(body.repo, s.did);
-      assert.equal(body.rev, f.rev);
-      assert.equal(body.since, fixtures[i - 1]?.rev ?? null);
-      assert.equal(body.rebase, false);
-      assert.equal(body.tooBig, false);
-      assert.deepEqual(body.blobs, []);
-      assert.deepEqual(body.ops, [{ action: 'create', path: f.path, cid: CID.parse(f.recordCid) }]);
-      if (i) {
-        const prior = cbor.decode(unb64(fixtures[i - 1].commitBytes)) as { data: CID };
-        assert.equal(String(body.prevData), prior.data.toString());
-      }
-      assert.ok(body.blocks instanceof Uint8Array);
-      const car = await verifyCar(body.blocks, s, fixtures.slice(0, i + 1));
+      const car = await verifyRepoFrame(frame, s, fixtures.slice(0, i + 1));
       commits.push({ seq: body.seq, header: frame.header, commitCid: f.commitCid, car });
     }
     return { identity: { header: identity.header, seq: identity.body.seq },
@@ -450,9 +490,9 @@ async function reorder(s: State) {
       watch = watchFirehose(s);
       const readyUntil = Math.min(deadline, Date.now() + 10_000);
       while (!watch.error() && Date.now() < readyUntil && !watch.frames.some(f =>
-        f.header.t === '#commit' && String(f.body.commit) === baseline.commitCid)) await sleep(50);
+        matchesFixture(f, baseline))) await sleep(50);
       assert.ok(!watch.error(), watch.error());
-      assert.ok(watch.isOpen() && watch.frames.some(f => String(f.body.commit) === baseline.commitCid),
+      assert.ok(watch.isOpen() && watch.frames.some(f => matchesFixture(f, baseline)),
         'Firehose must replay the baseline before the negative observation');
       group.attemptedAt ??= new Date().toISOString();
       await save(s);
@@ -476,8 +516,7 @@ async function reorder(s: State) {
         assert.equal(latest.cid, baseline.commitCid, 'Head advanced before withheld parent');
         assert.equal(latest.rev, baseline.rev);
         assert.ok(watch!.isOpen() && !watch!.error(), watch!.error() ?? 'Firehose disconnected during withholding');
-        assert.ok(!watch!.frames.some(f => f.header.t === '#commit'
-          && group.fixtures.some(v => v.commitCid === String(f.body.commit))), 'Premature reorder firehose commit');
+        assert.ok(!watch!.frames.some(f => group.fixtures.some(v => matchesFixture(f, v))), 'Premature reorder firehose commit');
       };
       do { await observe(); await sleep(250); } while (performance.now() - start < 3200);
       await observe(); // A final head sample after at least three full seconds.
@@ -495,8 +534,7 @@ async function reorder(s: State) {
     await save(s); // A lost parent ACK cannot cause a retry to claim a new negative observation.
     if (watch) {
       assert.ok(watch.isOpen() && !watch.error(), watch.error() ?? 'Firehose disconnected before parent release');
-      assert.ok(!watch.frames.some(f => f.header.t === '#commit'
-        && group.fixtures.some(v => v.commitCid === String(f.body.commit))), 'Premature commit before parent release');
+      assert.ok(!watch.frames.some(f => group.fixtures.some(v => matchesFixture(f, v))), 'Premature commit before parent release');
     }
     await publish([parent]);
     watch?.close();
@@ -587,7 +625,83 @@ async function upstream(s: State, live = false) {
     return result;
   } finally { sourceRelay.close(); destination.close(); }
 }
+async function compatibilityLive(s: State) {
+  let entry = s.compatibilityLive;
+  if (entry?.evidence?.ok === true) return { ...entry.evidence, ok: true, reusedEvidence: true };
+  if (!entry) {
+    const previous = fixtureChain(s, true);
+    const head = await json(`${production}/xrpc/com.atproto.sync.getLatestCommit?did=${s.did}`);
+    assert.equal(head.cid, previous.at(-1)!.commitCid, 'Existing head must match the complete saved chain');
+    entry = { fixture: await fixture(s, previous, 'COMPATIBILITY-LIVE test create') };
+    s.compatibilityLive = entry;
+    await validateState(s);
+    await save(s); // Signed event and all recovery keys are durable before publication.
+  }
+  const all = fixtureChain(s, true);
+  const index = all.findIndex(f => f.commitCid === entry.fixture.commitCid);
+  assert.equal(index, all.length - 1, 'Finish compatibility-live before running another optional stage');
+  const previous = all.slice(0, index);
+  const head = await json(`${production}/xrpc/com.atproto.sync.getLatestCommit?did=${s.did}`);
+  const recovered = head.cid === entry.fixture.commitCid;
+  const retried = Boolean(entry.attemptedAt);
+  assert.ok(head.cid === previous.at(-1)!.commitCid || (entry.attemptedAt && recovered),
+    'Unexpected head; refusing to publish a fork');
+  const bootstrap = await firehose(s, previous, null);
+  const cursor = Number(bootstrap.commits.at(-1)!.seq);
+  const watch = watchFirehose(s, cursor);
+  const relay = new Relay(relayUrl);
+  try {
+    const until = Math.min(deadline, Date.now() + 10_000);
+    while (!watch.isOpen() && !watch.error() && Date.now() < until) await sleep(50);
+    assert.ok(watch.isOpen() && !watch.error(), watch.error() ?? 'Reconnect did not open');
+    let ack: Ack | undefined;
+    if (!recovered) {
+      await relay.connect();
+      entry.attemptedAt ??= new Date().toISOString();
+      await save(s); // Persist the attempt before EVENT, including retries after an unknown ACK.
+      relay.send(['EVENT', entry.fixture.event]);
+      assert.ok(await relay.wait(() => relay.frames.some(f => f[0] === 'OK' && f[1] === entry!.fixture.event.id)),
+        'Compatibility create ACK timeout');
+      const frame = relay.frames.find(f => f[0] === 'OK' && f[1] === entry!.fixture.event.id)!;
+      ack = { id: entry.fixture.event.id, accepted: frame[2] === true, message: String(frame[3]).slice(0, 300) };
+      assert.equal(ack.accepted, true, 'Compatibility create rejected');
+    }
+    const untilCommit = Math.min(deadline, Date.now() + 10_000);
+    while (!watch.error() && Date.now() < untilCommit && !watch.frames.some(f => matchesFixture(f, entry!.fixture))) await sleep(50);
+    assert.ok(!watch.error(), watch.error());
+    const frame = watch.frames.find(f => matchesFixture(f, entry!.fixture));
+    assert.ok(frame, 'Reconnect missing compatibility create');
+    let seq = cursor;
+    for (const f of watch.frames) {
+      assert.equal(f.header.op, 1);
+      assert.ok(Number.isSafeInteger(f.body.seq) && Number(f.body.seq) > seq, 'Reconnect sequence strictly after cursor');
+      assert.ok(typeof f.body.time === 'string' && Number.isFinite(Date.parse(f.body.time)));
+      seq = Number(f.body.seq);
+    }
+    assert.equal(frame.header.t, '#commit', 'Small create must use compact #commit, not #sync');
+    const proof = await verifyRepoFrame(frame, s, all);
+    const car = await readCar(frame.body.blocks as Uint8Array);
+    for (const f of previous) assert.equal(car.blocks.get(CID.parse(f.recordCid)), undefined, 'Compact CAR must omit unchanged records');
+    entry.attemptedAt ??= new Date().toISOString();
+    await save(s);
+    const verification = await pipeline(s);
+    assert.equal(verification.ok, true, 'Full getRepo and replay validation must pass');
+    const result = { ok: true, identity: publicIdentity(s), reusedEvidence: false,
+      mode: recovered || retried ? 'recovered-attempt-not-fresh-live' : 'fresh-create-with-cursor-reconnect',
+      freshLive: !recovered && !retried, cursorlessBootstrap: bootstrap, reconnectCursor: cursor,
+      commitSeq: frame.body.seq, proof, unchangedRecordsOmitted: true, ack, verification };
+    entry.evidence = result;
+    await save(s);
+    return result;
+  } finally { watch.close(); relay.close(); }
+}
 async function selftest(s: State) {
+  // Ephemeral identity only: exercise every optional stage without opening recovery state or the network.
+  s.upstream = { relay: 'wss://relay.damus.io', fixture: await fixture(s, fixtureChain(s, true)), attemptedAt: 'selftest' };
+  s.reorder = { fixtures: [], attemptedAt: 'selftest' };
+  for (let i = 0; i < 3; i++) s.reorder.fixtures.push(await fixture(s, fixtureChain(s, true)));
+  s.upstreamLive = { relay: 'wss://relay.damus.io', fixture: await fixture(s, fixtureChain(s, true)), attemptedAt: 'selftest' };
+  s.compatibilityLive = { fixture: await fixture(s, fixtureChain(s, true)), attemptedAt: 'selftest' };
   await validateState(s);
   const fixtures = fixtureChain(s, true);
   if (fixtures.length >= 7) {
@@ -596,6 +710,15 @@ async function selftest(s: State) {
       const alternate: State = { ...s, fixtures: fixtures.slice(0, 3),
         upstream: { relay: 'wss://relay.damus.io', fixture: fixtures[upstreamFirst ? 3 : 6], attemptedAt: 'selftest' },
         reorder: { fixtures: upstreamFirst ? fixtures.slice(4, 7) : fixtures.slice(3, 6), attemptedAt: 'selftest' } };
+      await validateState(alternate);
+      assert.deepEqual(fixtureChain(alternate).map(f => f.commitCid), fixtures.map(f => f.commitCid));
+      alternate.compatibilityLive = { fixture: s.compatibilityLive.fixture };
+      assert.equal(fixtureChain(alternate).length, fixtures.length - 1);
+      assert.equal(fixtureChain(alternate, true).length, fixtures.length);
+      // Compatibility can precede other optional stages too; revisions, not fields, order the chain.
+      alternate.compatibilityLive = { fixture: fixtures[3], attemptedAt: 'selftest' };
+      alternate.upstream = { relay: 'wss://relay.damus.io', fixture: fixtures[8], attemptedAt: 'selftest' };
+      alternate.reorder = { fixtures: fixtures.slice(4, 7), attemptedAt: 'selftest' };
       await validateState(alternate);
       assert.deepEqual(fixtureChain(alternate).map(f => f.commitCid), fixtures.map(f => f.commitCid));
     }
@@ -617,8 +740,45 @@ async function selftest(s: State) {
   const evidence = await verifyCar(car, s, fixtures);
   const bad = { ...head, recordBytes: b64(cbor.encode({ tampered: true })) };
   await assert.rejects(verifyCar(car, s, [...fixtures.slice(0, -1), bad]));
+  const proof = await tree.getCoveringProof(head.path);
+  proof.set(CID.parse(head.commitCid), unb64(head.commitBytes));
+  proof.set(CID.parse(head.recordCid), unb64(head.recordBytes));
+  const compactCar = await blocksToCarFile(CID.parse(head.commitCid), proof);
+  const prior = cbor.decode(unb64(fixtures.at(-2)!.commitBytes)) as { data: CID };
+  const frame = { header: { op: 1, t: '#commit' }, body: { repo: s.did, commit: CID.parse(head.commitCid),
+    rev: head.rev, since: fixtures.at(-2)!.rev, prevData: prior.data, rebase: false, tooBig: false,
+    blobs: [], ops: [{ action: 'create', path: head.path, cid: CID.parse(head.recordCid) }], blocks: compactCar } };
+  const compactEvidence = await verifyRepoFrame(frame, s, fixtures);
+  assert.ok(compactCar.length < car.length);
+  await assert.rejects(verifyCar(compactCar, s, fixtures)); // Compact proof is not a full getRepo snapshot.
+  await assert.rejects(verifyRepoFrame({ ...frame, body: { ...frame.body, ops: [] } }, s, fixtures));
+  await assert.rejects(verifyRepoFrame({ ...frame, body: { ...frame.body, since: null } }, s, fixtures));
+  await assert.rejects(verifyRepoFrame({ ...frame, body: { ...frame.body, prevData: CID.parse(head.commitCid) } }, s, fixtures));
+  await assert.rejects(verifyCar(compactCar, s, [...fixtures.slice(0, -1), bad], 'proof'));
+  const commitOnly = new MemoryBlockstore();
+  await commitOnly.putBlock(CID.parse(head.commitCid), unb64(head.commitBytes));
+  const syncCar = await blocksToCarFile(CID.parse(head.commitCid), commitOnly.blocks);
+  const syncFrame = { header: { op: 1, t: '#sync' }, body: { did: s.did, rev: head.rev, blocks: syncCar } };
+  const syncEvidence = await verifyRepoFrame(syncFrame, s, fixtures);
+  assert.ok(matchesFixture(frame, head) && matchesFixture(syncFrame, head));
+  assert.equal(matchesFixture(syncFrame, fixtures[0]), false);
+  await assert.rejects(verifyRepoFrame({ ...syncFrame, body: { ...syncFrame.body, rev: fixtures[0].rev } }, s, fixtures));
+  const missingRecord = new BlockMap().addMap(proof);
+  missingRecord.delete(CID.parse(head.recordCid));
+  await assert.rejects(verifyCar(await blocksToCarFile(CID.parse(head.commitCid), missingRecord), s, fixtures, 'proof'));
+  const corrupt = new BlockMap().addMap(proof);
+  corrupt.set(CID.parse(head.recordCid), cbor.encode({ tampered: true }));
+  await assert.rejects(verifyCar(await blocksToCarFile(CID.parse(head.commitCid), corrupt), s, fixtures, 'proof'));
+  await assert.rejects(verifyRepoFrame({ ...frame, body: { ...frame.body, blocks: syncCar } }, s, fixtures));
+  await assert.rejects(verifyRepoFrame({ ...syncFrame, body: { ...syncFrame.body, blocks: compactCar } }, s, fixtures));
+  await assert.rejects(verifyRepoFrame({ ...syncFrame, body: { ...syncFrame.body, did: 'did:plc:wrong' } }, s, fixtures));
+  for (const { cid } of (await tree.getCoveringProof(head.path)).entries()) {
+    const incomplete = new BlockMap().addMap(proof);
+    incomplete.delete(cid);
+    await assert.rejects(verifyCar(await blocksToCarFile(CID.parse(head.commitCid), incomplete), s, fixtures, 'proof'));
+  }
   assert.equal(verifyEvent(JSON.parse(JSON.stringify(s.malformed))), false);
-  return { ok: true, identity: publicIdentity(s), evidence, tamperedRecordRejected: true,
+  return { ok: true, identity: publicIdentity(s), evidence, compactEvidence, syncEvidence, tamperedRecordRejected: true,
     malformedSignatureRejectedLocally: true, optionalStageOrderingTested: fixtures.length >= 7, networkRequests: 0 };
 }
 
@@ -630,19 +790,22 @@ const watchdog = setTimeout(() => {
 }, 59_500);
 process.on('exit', () => { if (locked) { try { unlinkSync(lockPath); } catch { /* Already cleaned. */ } } });
 try {
-  assert.ok(['prepare', 'relay', 'pipeline', 'reorder', 'upstream', 'upstream-live', 'selftest'].includes(stage),
-    'Usage: node verify-production.mts prepare|relay|pipeline|reorder|upstream|upstream-live [wss://source]|selftest');
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  // Exclusive lock avoids concurrent invocations generating or publishing different recovery state.
-  const lock = await open(lockPath, 'wx', 0o600);
-  locked = true;
-  await lock.close();
-  try { state = JSON.parse(await readFile(statePath, 'utf8')) as State; }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    assert.equal(stage, 'prepare', 'Run prepare first; no existing recovery state');
-    state = await createState();
-    await save(state);
+  assert.ok(['prepare', 'relay', 'pipeline', 'reorder', 'upstream', 'upstream-live', 'compatibility-live', 'selftest'].includes(stage),
+    'Usage: node verify-production.mts prepare|relay|pipeline|reorder|upstream|upstream-live [wss://source]|compatibility-live|selftest');
+  if (stage === 'selftest') state = await createState();
+  else {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    // Exclusive lock avoids concurrent invocations generating or publishing different recovery state.
+    const lock = await open(lockPath, 'wx', 0o600);
+    locked = true;
+    await lock.close();
+    try { state = JSON.parse(await readFile(statePath, 'utf8')) as State; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      assert.equal(stage, 'prepare', 'Run prepare first; no existing recovery state');
+      state = await createState();
+      await save(state);
+    }
   }
   await validateState(state);
   if (stage !== 'prepare' && stage !== 'selftest') assert.ok(state.registered, 'Run prepare to verify PLC registration first');
@@ -651,7 +814,8 @@ try {
     : stage === 'pipeline' ? await pipeline(state)
     : stage === 'reorder' ? await reorder(state)
     : stage === 'upstream' ? await upstream(state)
-    : stage === 'upstream-live' ? await upstream(state, true) : await selftest(state);
+    : stage === 'upstream-live' ? await upstream(state, true)
+    : stage === 'compatibility-live' ? await compatibilityLive(state) : await selftest(state);
   emit(result);
   if (!result.ok) process.exitCode = 1;
 } catch (error) {
