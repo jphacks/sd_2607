@@ -86,7 +86,11 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
   for (const name of Object.keys(defaults)) {
     if (!Number.isSafeInteger(options[name]) || options[name] < 1) throw new TypeError(`Invalid ${name}`);
   }
-  const groups = new Map((options.groups ?? []).map(group => [new URL(group.endpoint).host.toLowerCase(), group]));
+  const groups = new Map((options.groups ?? []).map(group => {
+    const endpoint = new URL(group.endpoint);
+    return [endpoint.host.toLowerCase(), { ...group, endpoint: endpoint.origin,
+      serviceDid: `did:web:${encodeURIComponent(endpoint.host)}` }];
+  }));
   const query = async (sql, params = []) => (await store.query(sql, params)).rows;
   const connections = new Set();
   let closing = false;
@@ -172,6 +176,12 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         mosimo: { version: 1, kinds: [1, 5], publicTextOnly: true, blobs: false,
                   groups: (options.groups ?? []).map(({ id, endpoint }) => ({ id, endpoint })) } }));
     }
+    if (url.pathname === '/.well-known/did.json') {
+      if (req.method !== 'GET') throw new RequestError('InvalidRequest', 'GET required', 405);
+      const group = groupFor(req);
+      return json(res, 200, { '@context': ['https://www.w3.org/ns/did/v1'], id: group.serviceDid,
+        service: [{ id: `${group.serviceDid}#atproto_pds`, type: 'AtprotoPersonalDataServer', serviceEndpoint: group.endpoint }] });
+    }
     if (url.pathname.startsWith('/internal/')) {
       authenticate(req);
       if (req.method === 'GET' && /^\/internal\/events\/[0-9a-f]{64}$/.test(url.pathname)) {
@@ -192,6 +202,9 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
     if (req.method !== 'GET') throw new RequestError('InvalidRequest', 'GET required', 405);
     const group = groupFor(req);
     const method = url.pathname.slice('/xrpc/'.length);
+    if (method === 'com.atproto.server.describeServer') {
+      return json(res, 200, { did: group.serviceDid, availableUserDomains: [] });
+    }
     if (method === 'com.atproto.sync.listRepos') {
       const limit = limitFor(url);
       const rows = await query('SELECT did, head, rev FROM repos WHERE group_id = $1 AND did > $2 ORDER BY did LIMIT $3', [group.id, url.searchParams.get('cursor') ?? '', limit]);
@@ -411,7 +424,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       const latest = BigInt(row.cursor);
       const cursor = url.searchParams.get('cursor');
       if (url.searchParams.getAll('cursor').length > 1 || (cursor !== null && (!/^\d+$/.test(cursor) || cursor.length > 19 || BigInt(cursor) > 9223372036854775807n))) return failure('InvalidRequest');
-      streamCursor = cursor === null ? latest : BigInt(cursor);
+      streamCursor = cursor === null ? 0n : BigInt(cursor);
       if (streamCursor > latest) return failure('FutureCursor');
       streamReady = true;
       await poll();

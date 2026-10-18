@@ -8,6 +8,7 @@ import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { createServer } from './server.mjs';
+import { validateConfig } from './config.mjs';
 
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
 const collection = 'dev.oriom.mosimo.post';
@@ -69,7 +70,7 @@ async function setup(t, overrides = {}) {
   const store = fakeStore();
   const ingested = [];
   const notifications = [];
-  const instance = createServer({ config: { groups: [{ id: 'one', endpoint: 'http://one.test' }, { id: 'two', endpoint: 'http://two.test' }], pollIntervalMs: 5, ...overrides }, store,
+  const instance = createServer({ config: { groups: [{ id: 'one', endpoint: 'https://one.test' }, { id: 'two', endpoint: 'https://two.test' }], pollIntervalMs: 5, ...overrides }, store,
     ingest: async value => { ingested.push(value); if (value.content === 'reject') return { accepted: false, message: 'invalid: rejected' }; if (store.events.some(row => row.id === value.id)) return { accepted: true, duplicate: true }; store.add(value); return { accepted: true }; },
     resolveIdentity: async () => ({ did, handle: 'alice.test', didDoc: { id: did } }),
     onNotify: async value => { notifications.push(value); } });
@@ -139,6 +140,46 @@ test('health, NIP-11 capabilities, HTTP errors and method handling', async t => 
   const failed = await app.xrpc('com.atproto.sync.listRepos');
   assert.equal(failed.status, 500);
   assert.equal((await failed.json()).message, 'Internal server error');
+});
+
+test('Relay discovery publishes matching per-host service DIDs without account or signing claims', async t => {
+  const config = validateConfig({ groups: [
+    { id: 'one', endpoint: 'https://ONE.test:443/' },
+    { id: 'two', endpoint: 'https://two.test:8443/' },
+  ] });
+  const app = await setup(t, config);
+  for (const [host, serviceDid, endpoint] of [
+    ['one.test', 'did:web:one.test', 'https://one.test'],
+    ['two.test:8443', 'did:web:two.test%3A8443', 'https://two.test:8443'],
+  ]) {
+    const headers = { host };
+    const description = await app.request('/xrpc/com.atproto.server.describeServer', { headers });
+    assert.equal(description.status, 200);
+    assert.match(description.headers.get('content-type'), /^application\/json/);
+    assert.deepEqual(await description.json(), { did: serviceDid, availableUserDomains: [] });
+    const document = await app.request('/.well-known/did.json', { headers });
+    assert.equal(document.status, 200);
+    assert.deepEqual(await document.json(), {
+      '@context': ['https://www.w3.org/ns/did/v1'], id: serviceDid,
+      service: [{ id: `${serviceDid}#atproto_pds`, type: 'AtprotoPersonalDataServer', serviceEndpoint: endpoint }],
+    });
+    assert.notEqual(serviceDid, did);
+  }
+  for (const path of ['/xrpc/com.atproto.server.describeServer', '/.well-known/did.json']) {
+    for (const host of ['missing.test', 'two.test', 'one.test:8443']) {
+      const response = await app.request(path, { headers: { host } });
+      assert.equal(response.status, 404);
+      assert.equal((await response.json()).error, 'UnknownGroup');
+    }
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      assert.equal((await app.request(path, { method })).status, 405);
+    }
+  }
+  for (const method of ['com.atproto.server.createAccount', 'com.atproto.server.createSession', 'com.atproto.repo.uploadBlob']) {
+    assert.equal((await app.xrpc(method)).status, 404);
+    assert.equal((await app.xrpc(method, {}, { method: 'POST' })).status, 405);
+  }
+  assert.equal(app.store.calls.length, 0);
 });
 
 test('NIP-01 history filters use exact IDs/authors, AND tags, OR filters, order and bounds', async t => {
@@ -232,13 +273,37 @@ test('persisted subscribeRepos replay and live frames are byte-exact and group-i
   const replay = await connect(t, app.base, '/xrpc/com.atproto.sync.subscribeRepos?cursor=0');
   assert.deepEqual(await replay.next(), frame(1));
   assert.deepEqual(await replay.next(), frame(2));
-  // Wait for the no-cursor snapshot, not an arbitrary timer, before publishing.
-  const snapshot = new Promise(resolve => { app.store.onHighwater = resolve; });
   const live = await connect(t, app.base, '/xrpc/com.atproto.sync.subscribeRepos');
-  await snapshot;
+  assert.deepEqual(await live.next(), frame(1));
+  assert.deepEqual(await live.next(), frame(2));
   app.store.streams.push({ group_id: 'one', seq: '3', frame: frame(3) });
   assert.deepEqual(await live.next(), frame(3));
   assert.deepEqual(await replay.next(), frame(3));
+});
+
+test('cold subscribeRepos replays persisted identity, account and commits in order across bounded pages', async t => {
+  const app = await setup(t, { maxResults: 1 });
+  const persisted = [
+    ['#identity', { seq: 1, did, handle: 'alice.test', time: '2026-10-18T00:00:00Z' }],
+    ['#account', { seq: 3, did, active: true, time: '2026-10-18T00:00:01Z' }],
+    ['#commit', { seq: 5, repo: did }],
+    ['#commit', { seq: 7, repo: did }],
+  ].map(([type, payload]) => ({ group_id: 'one', seq: String(payload.seq),
+    frame: Buffer.concat([cbor.encode({ op: 1, t: type }), cbor.encode(payload)]) }));
+  app.store.streams.push(...persisted, { group_id: 'two', seq: '2', frame: frame(99) });
+  const before = structuredClone(app.store.streams);
+  const cold = await connect(t, app.base, '/xrpc/com.atproto.sync.subscribeRepos');
+  for (const row of persisted) assert.deepEqual(await cold.next(), row.frame);
+  const resumed = await connect(t, app.base, '/xrpc/com.atproto.sync.subscribeRepos?cursor=3');
+  for (const row of persisted.slice(2)) assert.deepEqual(await resumed.next(), row.frame);
+  const other = await connect(t, app.base, '/xrpc/com.atproto.sync.subscribeRepos', 'two.test');
+  assert.deepEqual(await other.next(), frame(99));
+  app.store.streams.push({ group_id: 'one', seq: '9', frame: frame(9) });
+  assert.deepEqual(await cold.next(), frame(9));
+  assert.deepEqual(await resumed.next(), frame(9));
+  assert.deepEqual(structuredClone(app.store.streams.slice(0, -1)), before);
+  assert.ok(app.store.calls.filter(call => call.sql.includes('FROM streams') && !call.sql.includes('MAX(seq)'))
+    .every(call => call.params[2] === 1 && call.sql.includes('seq > $2')));
 });
 
 test('subscribeRepos rejects future and malformed cursors using standard error frames', async t => {
