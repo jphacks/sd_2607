@@ -41,6 +41,8 @@ extern std::function<void()> onDelay, onConvert, onFrame;
 extern void (*worker)(void*);
 extern void* workerArg;
 extern int createCode, convertCode, initCode, frameCode;
+extern bool sdkActive;
+extern size_t networkPolls;
 extern bool badHash, taskFail, outputStuck, silent, playFail;
 extern size_t hashed, frameIndex, frameCalls, stopCalls, notifications;
 extern std::vector<std::string> converted;
@@ -116,9 +118,10 @@ extern "C" size_t aqdic_open();
 extern "C" void aqdic_close();
 extern "C" size_t aqdic_read(size_t, size_t, void*);
 inline int CAqK2R_Create(uint8_t* work, int size) {
-    assert(work && size == SIZE_AQK2R_MIN_WORK_BUF && aqdic_open() && !(aqdic_open() & 3)); return createCode;
+    assert(work && size == SIZE_AQK2R_MIN_WORK_BUF && aqdic_open() && !(aqdic_open() & 3));
+    sdkActive = !createCode; return createCode;
 }
-inline void CAqK2R_Release() { aqdic_close(); }
+inline void CAqK2R_Release() { sdkActive = false; aqdic_close(); }
 inline int CAqTkPicoF_Init(uint32_t* work, uint16_t count, const char* key) {
     assert(work && count == 320 && key == nullptr); return initCode;
 }
@@ -142,7 +145,11 @@ inline uint8_t CAqTkPicoF_SyntheFrame(short* pcm, uint16_t* count) {
 
 #ifndef SPEECH_MOCK_HEADER
 #include "MeshSpeech.h"
+
 #include <iostream>
+bool sdkActive = false;
+size_t networkPolls = 0;
+namespace mesh { void gatewayWorkPoll() { assert(!sdkActive); ++networkPolls; } }
 MockSerial Serial;
 MockM5 M5;
 uint32_t nowMs = 0;
@@ -320,12 +327,27 @@ int main() {
     assert(!speech.enqueue(id(1), "未初期化"));
     partition.address = 0; assert(!speech.begin()); partition.address = 0x400000;
     badHash = true; assert(!speech.begin()); badHash = false;
+#ifndef MESH_GATEWAY_TTS
     createCode = 200; assert(!speech.begin()); createCode = 0;
     initCode = 121; assert(!speech.begin()); initCode = 0;
+#endif
     taskFail = true; assert(!speech.begin()); taskFail = false;
     assert(speech.begin()); assert(speech.begin());
     assert(Serial.log.find("TTS ready evaluation=1 dictionary_bytes=1969776") != std::string::npos);
     pump(); assert(frameCalls == 0); // Never speak at boot.
+#ifdef MESH_GATEWAY_TTS
+    assert(!mesh::Speech::resourcesBusy());
+    assert(speech.enqueue(id(899), "許可待ち"));
+    pump(); assert(frameCalls == 0 && mesh::Speech::resourcesBusy());
+    mesh::Speech::allowResources(true); pump(); assert(!mesh::Speech::resourcesBusy());
+    resetOutput();
+    assert(speech.enqueue(id(900), "初期化失敗")); createCode = 200; pump(); createCode = 0;
+    assert(Serial.log.find("stage=lazy_init code=200") != std::string::npos);
+    assert(speech.enqueue(id(901), "合成初期化失敗")); initCode = 121; pump(); initCode = 0;
+    assert(Serial.log.find("stage=lazy_init code=121") != std::string::npos);
+    assert(speech.enqueue(id(902), "単一ワーカー")); pump();
+    assert(networkPolls > 0 && !sdkActive);
+#endif
     char bytes[4]; const auto base = aqdic_open();
     assert(base != 0 && !(base & 3));
     assert(aqdic_read(base, 4, bytes) == 4 && bytes[0] == 0x35);

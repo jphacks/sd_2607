@@ -15,6 +15,9 @@ public:
     Speech(const Speech&) = delete;
     Speech& operator=(const Speech&) = delete;
     bool begin();
+    static bool workerAvailable();
+    static bool resourcesBusy();
+    static void allowResources(bool allowed);
     bool enqueue(const std::string& id, const std::string& text);
     bool test();
     bool toggleMuted();
@@ -29,7 +32,8 @@ private:
     speech::Inbox inbox_;
     portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
     TaskHandle_t task_ = nullptr;
-    std::atomic<bool> ready_{false};
+    std::atomic<bool> ready_{false}, resourcesAllowed_{false};
+    bool active_ = false;
     uint8_t* k2rWork_ = nullptr;
     uint32_t* synthWork_ = nullptr;
     int16_t pcm_[3][320]{};

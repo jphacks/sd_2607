@@ -152,9 +152,47 @@ uv run pio run -e m5stack-basic-gateway --target upload --upload-port COM3
 
 **Do not run `uploadfs` or erase flash to enable networking.** Follow the backup procedure above first. `partitions-gateway.csv` merges the old app0/app1 area into one 0x280000-byte app at 0x10000. NVS, LittleFS (`0x290000`), coredump and dictionary (`0x400000`) remain at their old offsets/sizes. This removes the spare OTA slot; no OTA updater is provided. Upload the matching firmware **and partition table** together using PlatformIO; do not flash a gateway image into the smaller default app slot. Downgrading likewise requires the normal profile's matching partition table and firmware. Back up the partition table/whole flash too if recovery of a previous app/boot selection matters. Power-loss/upgrade/rollback on physical hardware has not been tested for this change.
 
-The gateway profile deliberately **does not initialize TTS**, reserving its working memory/task stack for Wi-Fi/TLS. BLE, buttons, receipt verification, custody, screen preview and heartbeat remain. A/C cannot play audio in this profile; **A now requests the optional verified download described below**. **B disables BLE only, not Internet upload/download**; it is not a privacy/offline switch. To stop Internet export, remove the local config and rebuild/flash the gateway profile (which keeps pending entries pinned but starts no networking), or power off. Flashing the normal offline profile restores the original bounded, evictable-cache behavior. A missing header, invalid config or worker failure never silently unpins gateway data.
+The original `m5stack-basic-gateway` profile deliberately **does not initialize TTS**, reserving its working memory/task stack for Wi-Fi/TLS. The separate opt-in `m5stack-basic-gateway-tts` profile below enables evaluated speech with serialized resource ownership. BLE, buttons, receipt verification, custody, screen preview and heartbeat remain. A/C cannot play audio in this profile; **A now requests the optional verified download described below**. **B disables BLE only, not Internet upload/download**; it is not a privacy/offline switch. To stop Internet export, remove the local config and rebuild/flash the gateway profile (which keeps pending entries pinned but starts no networking), or power off. Flashing the normal offline profile restores the original bounded, evictable-cache behavior. A missing header, invalid config or worker failure never silently unpins gateway data.
 
 For compilation without credentials, `uv run pio run -e m5stack-basic-gateway-check` explicitly uses `GatewayConfig.check.h`: non-routable `.invalid` destinations and an intentionally invalid CA, not deployable credentials. Nonempty test values ensure the full TLS/upload/PLC/ingress path survives compiler/linker dead-code elimination. **Never deploy this profile.** The production gateway profile needs the local header; the default example's empty settings fail closed.
+
+### Optional combined gateway + evaluated TTS on Basic
+
+Current approved COM3 deployment results and parent commands: [`GATEWAY-HANDOFF.md`](GATEWAY-HANDOFF.md). Keep the running device powered; reboot restores cached events as cold.
+
+```powershell
+.venv/Scripts/pio.exe run -e m5stack-basic-gateway-tts
+# Only after full backup and explicit local Wi-Fi / ingress provisioning:
+.venv/Scripts/pio.exe run -e m5stack-basic-gateway-tts --target upload --upload-port COM3
+```
+
+This uses **the same gateway partition map**; never run `uploadfs`, format, or erase. `m5stack-basic-gateway-tts-check` compiles the full path with synthetic `.invalid` configuration, and must not be deployed. Default/offline and diagnostic profiles retain their existing speech behavior.
+
+The Basic has no usable PSRAM in this deployment. **Concurrent BLE exchange + TLS + speech is not supported.** Measured failures and the final device results are recorded in `VERIFICATION.md`:
+
+- One 16 KiB speech/network worker replaces two concurrent worker stacks. The loop stack is 12 KiB; no SDK work buffer is retained between utterances. Dictionary mapping and its boot SHA-256 check remain unchanged.
+- Before network work or speech, the main loop stops advertising, requests a physical disconnect, waits for the final callback, then deinitializes NimBLE and frees its 32-entry event queue. Pending custody is never erased. Reinitialization uses the **same boot node ID**, preserves B's desired enable state, and leaves a five-second BLE acquisition window after work. Phones must reconnect/retry unacknowledged transfers. C still cancels/mutes speech cooperatively.
+- Speech cannot allocate SDK resources until the main loop grants permission after BLE is quiescent. Save/readback and trust logging complete before this grant. The worker releases SDK buffers before BLE resumes. A queued speech job also blocks new TLS dispatch. This intentionally delays new BLE receipts during the bounded utterance; the offline profile's concurrent latest-wins behavior is unchanged.
+- Combined network admission requires >=80,000 free bytes and an >=18,000-byte contiguous block **after BLE shutdown**. TLS has separate 16 KiB record buffers plus overhead, not one 32 KiB allocation. Existing per-job worst-case JSON/free-heap checks remain. A refused job retains data and backs off rather than dropping it.
+- On ingress, reserve the bounded incoming frame and one raw winning frame before TLS. For each new frame, close TLS before strict parsing/crypto. Reissue the same finite query and skip byte-identical frames by SHA-256, up to **nine connections (eight unique events plus matching EOSE), 24 frames/connection, 120 seconds/pass** plus bounded SDK/connect completion. A changing/hostile window that exceeds eight events fails closed; partial results are not admitted. Keep only preallocated raw winner/scalar ordering between connections; after EOSE reverify that original winner against the accumulated trust state. Priority failure still uses the separate ordinary REQ pass. Parsing/verification keep the existing 70/65 KiB free-heap guards. No certificate, signature, clock, expiry, priority, or CRL check is skipped.
+- If all 16 slots are pending upload, an explicit download stays queued until at least one positive upload confirmation permits ordinary replacement. No pending original is evicted to admit BSAF.
+
+**Bounded local UART** is available in normal gateway builds, without diagnostic compiler flags: `status`, `download`, `audio on`, `audio off`, `peers *`, or `peers <up to 8 node IDs>`, each newline-terminated. `download` shares A's coalesced request path; `audio on/off` is idempotent, not a toggle. Peer filtering is local test isolation, **not authentication**. Parsing consumes at most 64 bytes/loop and 160 bytes/line; overflow rejects the entire line until newline. No arbitrary text synthesis, credential readback, filesystem erase, or trust-reset command exists.
+
+After releasing any other COM3 owner, use the helper (does not request reset):
+
+```powershell
+.venv/Scripts/python.exe scripts/gateway_serial.py COM3 --command status --seconds 15 --log .pio/gateway-status.log
+.venv/Scripts/python.exe scripts/gateway_serial.py COM3 --audio-on --command download --seconds 300 --log .pio/gateway-download.log --require-ingress-speech
+# Only if explicit peer isolation is needed; restore unrestricted operation afterward:
+.venv/Scripts/python.exe scripts/gateway_serial.py COM3 --peers --command status --seconds 10 --log .pio/gateway-peers-restored.log
+```
+
+Capture is bounded to 1..300 seconds / 8 MiB. `--require-ingress-speech` fails on observed crash/reboot or absent matching **full persisted event ID -> TTS start -> nonzero PCM finish**. It expects a *new* eligible event; duplicates correctly do not speak. `TTS done` proves synthesis/speaker-API completion, not audible quality or commercial SDK licensing.
+
+`scripts/backup_flash.py` reads all 16 MiB twice while remaining in the bootloader between reads, compares SHA-256, and records the actual partition table/region hashes under ignored `private/backups/<UTC>/`. It performs no erase/write operation. Interrupted verification can resume with `--resume <existing directory>`; a mismatch retains both reads and blocks success. Bootloader entry/reset interrupts the running app: do not use backup/flash tools during the parent's live phone test.
+
+The approved lab provisioning helper `scripts/provision_gateway.py` only captures Windows profile keys without printing them, never switches host Wi-Fi, and derives public PEM roots from system-verified TLS chains. It refuses to overwrite an existing private gateway config. The operator-provisioned public root export remains local in ignored `include/IngressTrust.generated.h`; it contains no signing secrets and does not itself enable ingress. Treat private config, linked firmware and full flash backups as sensitive.
 
 ### Delivery, bounds and failure behavior
 
@@ -181,7 +219,7 @@ python3 apps/esp32/test_bundle/test_relay.py
 python3 apps/esp32/test_bundle/test_main_controls.py --sanitize --diagnostic
 ```
 
-No live Wi-Fi/CA rejection/relay OK/PLC registration, ESP32 radio coexistence, flash power-cut, peak TLS heap/stack, or full phone → ESP32 → public PDS/AppView test is claimed for this change. Test with disposable **public** test identities and operator-approved destinations before deployment. Keep phone networking off during that test, independently retrieve and verify the identical full event ID/signature from the relay, check PLC genesis/current state separately, then check the PDS record/head and AppView.
+The original host-only gateway work did not validate hardware. See `VERIFICATION.md` for the later approved combined-profile Wi-Fi/relay/PLC/ingress/speech observations. Simultaneous radio-data coexistence, hardware CA-rejection tests, flash power-cut, long endurance and the parent's fresh two-phone offline → ESP32 → PDS/AppView test remain separate validation tasks. Test with disposable **public** test identities and operator-approved destinations before deployment. Keep phone networking off during that test, independently retrieve and verify the identical full event ID/signature from the relay, check PLC genesis/current state separately, then check the PDS record/head and AppView.
 
 ### Optional wire-v1 Nostr → mesh ingress (A button)
 
@@ -209,7 +247,7 @@ Local operators must **also** add both explicit opt-ins to ignored `private/gate
 #define MESH_INGRESS_TRUST_CLOCK 1
 ```
 
-The public generated root file should not set these local decisions. With missing/invalid public fields, no local selection, either opt-in absent, unknown clock, or unreadable checkpoint, ingress does not run. Root configuration alone does not enable it. The full-path `m5stack-basic-gateway-check` build uses only the synthetic public fixture root, `.invalid` endpoints and invalid TLS CA; it is never deployable. No additional PlatformIO library or partition change was added for ingress. **The existing gateway TTS-disabled tradeoff remains**.
+The public generated root file should not set these local decisions. With missing/invalid public fields, no local selection, either opt-in absent, unknown clock, or unreadable checkpoint, ingress does not run. Root configuration alone does not enable it. The full-path `m5stack-basic-gateway-check` build uses only the synthetic public fixture root, `.invalid` endpoints and invalid TLS CA; it is never deployable. No additional PlatformIO library or partition change was added for ingress. **The original gateway profile remains TTS-disabled; the optional combined profile above time-slices resources instead.**
 
 #### Clock and authorization boundary
 

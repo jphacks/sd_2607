@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="g++")
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--combined", action="store_true")
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     with tempfile.TemporaryDirectory(prefix="mesh-speech-host-") as directory:
@@ -28,6 +29,8 @@ def main():
                               '#undef SPEECH_MOCK_HEADER\n', encoding="utf-8")
         exe = temp / ("speech-host.exe" if os.name == "nt" else "speech-host")
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g"]
+        if args.combined:
+            command += ["-DMESH_GATEWAY_TTS=1", "-pthread"]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         command += ["-I" + str(temp), "-I" + str(here), "-I" + str(here.parent / "include"),

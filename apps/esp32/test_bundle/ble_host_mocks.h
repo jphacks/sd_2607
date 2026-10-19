@@ -1,6 +1,7 @@
 #pragma once
 // Only the platform/relay boundaries are mocked; MeshBle.cpp is compiled unchanged.
 #include "MeshBundle.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -42,6 +43,9 @@ inline int xQueueReceive(QueueHandle_t q, void* value, int) {
     return pdTRUE;
 }
 inline void xQueueReset(QueueHandle_t q) { ++queueResets; q->items.clear(); }
+inline void vQueueDelete(QueueHandle_t q) {
+    mockQueues.erase(std::remove_if(mockQueues.begin(), mockQueues.end(), [q](const std::unique_ptr<MockQueue>& item) { return item.get() == q; }), mockQueues.end());
+}
 
 constexpr uint16_t BLE_HS_CONN_HANDLE_NONE = 0xffff;
 namespace NIMBLE_PROPERTY { constexpr int WRITE = 1, WRITE_NR = 2, NOTIFY = 4; }
@@ -155,6 +159,7 @@ struct NimBLEServer {
 extern NimBLEServer mockServer;
 struct NimBLEDevice {
     static void init(const char*) {}
+    static bool deinit(bool clear) { return clear; }
     static void setMTU(uint16_t) {}
     static NimBLEServer* createServer() { return &mockServer; }
     static NimBLEAdvertising* getAdvertising() { return &mockAdvertising; }

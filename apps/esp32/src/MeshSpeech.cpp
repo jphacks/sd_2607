@@ -1,4 +1,6 @@
 #include "MeshSpeech.h"
+
+#include "MeshGateway.h"
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <aquestalk.h>
@@ -76,21 +78,26 @@ bool Speech::begin() {
     if (ready_.load()) return true;
     if (owner) { error("owner", -1); return false; }
     owner = this;
+#ifndef MESH_GATEWAY_TTS
     k2rWork_ = static_cast<uint8_t*>(std::malloc(SIZE_AQK2R_MIN_WORK_BUF));
     synthWork_ = static_cast<uint32_t*>(std::malloc(AQ_SIZE_WORKBUF * sizeof(uint32_t)));
+#endif
     bool created = false;
     bool mapped = false;
     do {
-        if (!k2rWork_ || !synthWork_) { error("malloc", -1); break; }
         if (!mapDictionary()) break;
         mapped = true;
+#ifndef MESH_GATEWAY_TTS
+        if (!k2rWork_ || !synthWork_) { error("malloc", -1); break; }
         const int rc = CAqK2R_Create(k2rWork_, SIZE_AQK2R_MIN_WORK_BUF);
         created = (rc == 0);
         if (rc || dictionaryReadFailed) { error("k2r_create", rc ? rc : -1); break; }
         const int synth = CAqTkPicoF_Init(synthWork_, 320, nullptr);
         if (synth) { error("synth_init", synth); break; }
+#endif
         if (!M5.Speaker.begin()) { error("speaker_begin", -1); break; }
-        if (xTaskCreate(taskEntry, "mesh-tts", 16384, this, 1, &task_) != pdPASS) {
+        constexpr unsigned stackBytes = 16384;
+        if (xTaskCreate(taskEntry, "mesh-tts", stackBytes, this, 1, &task_) != pdPASS) {
             error("task_create", -1); break;
         }
         ready_.store(true);
@@ -105,6 +112,19 @@ bool Speech::begin() {
     return false;
 }
 
+bool Speech::workerAvailable() { return owner && owner->ready_.load(); }
+bool Speech::resourcesBusy() {
+    if (!owner) return false;
+    portENTER_CRITICAL(&owner->lock_);
+    const bool busy = owner->active_ || owner->inbox_.pending();
+    portEXIT_CRITICAL(&owner->lock_);
+    return busy;
+}
+void Speech::allowResources(bool allowed) {
+    if (owner && owner->resourcesAllowed_.exchange(allowed) != allowed && owner->task_)
+        xTaskNotifyGive(owner->task_);
+}
+
 bool Speech::submit(const std::string& id, const std::string& text, bool local) {
     if (!ready_.load()) { error("not_ready", -1); return false; }
     portENTER_CRITICAL(&lock_);
@@ -114,7 +134,7 @@ bool Speech::submit(const std::string& id, const std::string& text, bool local) 
         error("enqueue", static_cast<int>(result)); return false;
     }
     Serial.printf("TTS queued id=%s\n", id.c_str());
-    xTaskNotifyGive(task_);
+    if (task_) xTaskNotifyGive(task_);
     return true;
 }
 bool Speech::enqueue(const std::string& id, const std::string& text) { return submit(id, text, false); }
@@ -137,14 +157,45 @@ void Speech::taskEntry(void* self) { static_cast<Speech*>(self)->run(); }
 void Speech::run() {
     speech::Job job;
     for (;;) {
+#ifdef MESH_GATEWAY_TTS
+        if (!resourcesAllowed_.load()) {
+            gatewayWorkPoll();
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+            continue;
+        }
+#endif
         bool have;
         portENTER_CRITICAL(&lock_);
         have = inbox_.pop(job);
+        active_ = have;
         portEXIT_CRITICAL(&lock_);
         if (have && ready_.load()) {
-            if (!inbox_.cancelled(job)) speak(job);
+            if (!inbox_.cancelled(job)) {
+#ifdef MESH_GATEWAY_TTS
+
+
+                k2rWork_ = static_cast<uint8_t*>(std::malloc(SIZE_AQK2R_MIN_WORK_BUF));
+                synthWork_ = static_cast<uint32_t*>(std::malloc(AQ_SIZE_WORKBUF * sizeof(uint32_t)));
+                dictionaryReadFailed = false;
+                const int created = k2rWork_ && synthWork_ ? CAqK2R_Create(k2rWork_, SIZE_AQK2R_MIN_WORK_BUF) : -1;
+                const int synth = !created && !dictionaryReadFailed ? CAqTkPicoF_Init(synthWork_, 320, nullptr) : -1;
+                if (!created && !synth) speak(job);
+                else error("lazy_init", created ? created : synth);
+                if (!created) CAqK2R_Release();
+                std::free(k2rWork_); k2rWork_ = nullptr;
+                std::free(synthWork_); synthWork_ = nullptr;
+#else
+                speak(job);
+#endif
+            }
             else Serial.printf("TTS cancel id=%s\n", job.id);
         } else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        portENTER_CRITICAL(&lock_);
+        active_ = false;
+        portEXIT_CRITICAL(&lock_);
+#ifdef MESH_GATEWAY_TTS
+        gatewayWorkPoll();
+#endif
         vTaskDelay(1);
     }
 }

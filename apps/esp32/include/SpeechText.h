@@ -104,6 +104,7 @@ public:
         }
         return Queued;
     }
+    bool pending() const { return havePending_; }
     bool pop(Job& job) {
         if (!havePending_) return false;
         job = pending_; havePending_ = false; return true;

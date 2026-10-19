@@ -69,7 +69,7 @@ void note(const std::string& text) {
     Serial.printf("mesh: %s\n", text.c_str());
     M5.Display.println(text.c_str());
 }
-#ifdef MESH_TEST_DIAGNOSTICS
+#if defined(MESH_TEST_DIAGNOSTICS) || defined(MESH_GATEWAY_BUILD)
 void testCommands() {
     static std::string line;
     static bool overflow = false;
@@ -82,7 +82,18 @@ void testCommands() {
             continue;
         }
         bool ok = false;
-        if (!overflow && line == "peers *") ok = relay.setAllowedPeers({});
+        if (!overflow && line == "status") {
+            Serial.printf("status heap=%u stored=%u radio=%u speech_ready=%u muted=%u\n", ESP.getFreeHeap(), unsigned(relay.storedCount()), unsigned(meshReady && ble.enabled()), unsigned(speechReady), unsigned(speech.muted()));
+            ok = true;
+        }
+#ifdef MESH_GATEWAY_BUILD
+        else if (!overflow && line == "download") ok = mesh::gatewayRequestIngress();
+        else if (!overflow && (line == "audio on" || line == "audio off")) {
+            if (speech.muted() != (line == "audio off")) speech.toggleMuted();
+            showControls(); ok = true;
+        }
+#endif
+        else if (!overflow && line == "peers *") ok = relay.setAllowedPeers({});
         else if (!overflow && line.compare(0, 6, "peers ") == 0) {
             std::vector<std::string> nodes;
             for (size_t at = 6; at < line.size();) {
@@ -93,7 +104,7 @@ void testCommands() {
             }
             if (!nodes.empty()) ok = relay.setAllowedPeers(nodes);
         }
-        note(ok ? "TEST command accepted" : "TEST command rejected");
+        note(ok ? "UART command accepted" : "UART command rejected");
         line.clear(); overflow = false;
     }
 }
@@ -119,9 +130,13 @@ void setup() {
     Serial.printf("ESP32 ready chip=%s flash=%u heap=%u\n",
                   ESP.getChipModel(), ESP.getFlashChipSize(), ESP.getFreeHeap());
 
-#ifndef MESH_GATEWAY_BUILD
+#if !defined(MESH_GATEWAY_BUILD) || defined(MESH_GATEWAY_TTS)
     speechReady = speech.begin();
+#ifdef MESH_GATEWAY_TTS
+    note(speechReady ? "Gateway + TTS eval: A download / C mute" : "TTS unavailable; see README");
+#else
     note(speechReady ? "TTS eval: A test / C mute" : "TTS unavailable; see README");
+#endif
 #else
     note("Gateway profile: TTS off to reserve TLS RAM");
 #endif
@@ -136,8 +151,11 @@ void setup() {
     for (size_t i = 0; i < sizeof(random); ++i) snprintf(node + i * 2, 3, "%02x", random[i]);
     Serial.printf("mesh node=%s profile=android-experimental-v1 peripheral-only\n", node);
     if (relay.begin(node, [](const uint8_t* bytes, size_t size) { return ble.send(bytes, size); }, note, showMessage)) {
+        Serial.printf("memory before_gateway=%u\n", ESP.getFreeHeap());
         mesh::gatewayBegin(relay);
+        Serial.printf("memory before_ble=%u\n", ESP.getFreeHeap());
         meshReady = ble.begin(node);
+        Serial.printf("memory after_ble=%u max_alloc=%u min_heap=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap());
     }
     note(meshReady ? "BLE relay ready" : "Relay unavailable; see README");
     showControls();
@@ -145,7 +163,7 @@ void setup() {
 
 void loop() {
     M5.update();
-#ifdef MESH_TEST_DIAGNOSTICS
+#if defined(MESH_TEST_DIAGNOSTICS) || defined(MESH_GATEWAY_BUILD)
     testCommands();
 #endif
 
@@ -171,8 +189,13 @@ void loop() {
         showControls();
     }
 
+    mesh::gatewayPoll(relay, &ble);
+#ifdef MESH_GATEWAY_TTS
+    // The worker starts SDK work only after gatewayPoll has quiesced BLE.
+    if (meshReady && !mesh::gatewayNetworkBusy() && !mesh::Speech::resourcesBusy()) ble.poll(relay);
+#else
     if (meshReady) ble.poll(relay);
-    mesh::gatewayPoll(relay);
+#endif
 
     static uint32_t lastHeartbeat = 0;
     const uint32_t now = millis();

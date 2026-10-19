@@ -349,7 +349,30 @@ static void busyReceiveYieldsToControls() {
     CHECK(!mockServer.disconnectPending);
 }
 
+static void networkPause() {
+    for (bool userOff : {false, true}) {
+        Env e; e.connect();
+        CHECK(!e.ble.pauseForNetwork(true, e.relay));
+        CHECK(e.ble.enabled() && !mockAdvertising.active && mockServer.disconnectPending);
+        CHECK(!mockQueues.empty()); // The final callback still owns this queue.
+        mockServer.down();
+        CHECK(e.ble.pauseForNetwork(true, e.relay));
+#ifdef MESH_GATEWAY_TTS
+        CHECK(mockQueues.empty());
+#endif
+        const uint8_t byte = 1;
+        CHECK(!e.ble.send(&byte, 1));
+        e.poll(); CHECK(!mockAdvertising.active);
+        if (userOff) e.ble.setEnabled(false, e.relay);
+        CHECK(e.ble.pauseForNetwork(false, e.relay));
+        CHECK(!mockQueues.empty() && mockQueues.back()->capacity == 32);
+        CHECK(e.ble.enabled() == !userOff && mockAdvertising.active == !userOff);
+        if (userOff) e.ble.setEnabled(true, e.relay);
+        CHECK(mockAdvertising.active);
+    }
+}
 int main() {
+    networkPause();
     busyReceiveYieldsToControls();
     notifications(); retries(); fragmentation(); overflowDuringReceive();
     lifecycleLoss(); invalidFramesAndDisconnects(); transitionPoison();

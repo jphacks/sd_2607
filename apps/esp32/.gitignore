@@ -1,0 +1,2 @@
+# Operator-provisioned PUBLIC trust. Keep defaults unprovisioned; review separately.
+/include/IngressTrust.generated.h

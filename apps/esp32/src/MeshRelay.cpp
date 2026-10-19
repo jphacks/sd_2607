@@ -252,6 +252,10 @@ void Relay::resetSession() {
     rxWindow_ = txWindow_ = rxMessages_ = txMessages_ = 0;
     remoteIds_.clear(); advertised_.clear(); completed_.clear(); acks_.clear();
     requests_.clear(); offers_.clear();
+#ifdef MESH_GATEWAY_TTS
+    remoteIds_.shrink_to_fit(); advertised_.shrink_to_fit(); completed_.shrink_to_fit(); acks_.shrink_to_fit();
+    requests_.shrink_to_fit(); offers_.shrink_to_fit();
+#endif
 }
 bool Relay::begin(const std::string& node,
                   std::function<bool(const uint8_t*, size_t)> send,
@@ -462,6 +466,8 @@ bool Relay::ingressWriteState(const std::vector<uint8_t>& bytes) {
     if (LittleFS.exists(temp) && !LittleFS.remove(temp)) return false;
     errno = 0; File file = LittleFS.open(temp,"w");
     if (!file) return false;
+    // Arduino's create-on-missing open can succeed while leaving ENOENT behind.
+    errno = 0;
     bool ok = file.write(bytes.data(),bytes.size()) == bytes.size();
     file.flush(); ok = ok && errno == 0 && file.size() == bytes.size();
     file.close(); ok = ok && errno == 0;

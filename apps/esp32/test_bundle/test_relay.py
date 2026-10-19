@@ -127,7 +127,11 @@ struct MockFS {
             errno = silentErrors ? 0 : EACCES;
             return File();
         }
-        if (*mode == 'w') { files[p].clear(); return File(p, false); }
+        if (*mode == 'w') {
+            // Arduino open() can leave ENOENT after successful create-on-missing.
+            if (std::string(p) == "/ingress-tmp" && !files.count(p)) errno = ENOENT;
+            files[p].clear(); return File(p, false);
+        }
         if (*mode == 'a') { auto& bytes = files[p]; File f(p, false); f.h->pos = bytes.size(); return f; }
         if (!files.count(p)) { errno = ENOENT; return File(); }
         return File(p, false);

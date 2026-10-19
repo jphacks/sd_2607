@@ -1,5 +1,9 @@
 # ESP32 / Android BLE 実機検証
 
+## 2026-10-18 UTC: combined gateway + TTS deployed on COM3
+
+Latest deployment, full-flash backup SHA-256, exact BSAF/ordinary event IDs, PCM counts, measured heap/stack, limitations and parent commands are recorded in [`GATEWAY-HANDOFF.md`](GATEWAY-HANDOFF.md). The final bounded run verified real BSAF download/save/speech/BLE ACK, an additional BLE receipt/speech/relay OK, and subsequent `wifi=1 ingress_clock=1 pending=0 busy=0` without resetting. Both final event IDs were independently retrieved from the authenticated public relay and BIP340-verified; BSAF text was additionally compared byte-for-byte with its exact original source URI/CID. The parent's fresh two-phone offline → PDS/AppView test is still separate. Older unverified-hardware notes below describe earlier revisions, not this deployment.
+
 2026-10-18、Windows PCにUSB接続したM5Stack BasicとASUSAI2501H（Android API 36）で確認。
 Androidの`org.mndt.demo`と`org.mndt.demo.peer`は別のアプリストレージとして使用した。
 検証対象はMNDT §9の暫定形式であり、§3の新CBOR交換ではない。

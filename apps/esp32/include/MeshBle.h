@@ -19,6 +19,8 @@ public:
     void poll(Relay& relay);
     void setEnabled(bool enabled, Relay& relay);
     bool enabled() const { return enabled_; }
+    // Main-loop preflight: quiesce a session without changing the user's B state.
+    bool pauseForNetwork(bool pause, Relay& relay);
 
 private:
     enum Kind : uint8_t { Up, Down, Subscribe, Rx, Mtu };
@@ -37,7 +39,8 @@ private:
     NimBLECharacteristic* tx_ = nullptr;
     uint16_t handle_ = BLE_HS_CONN_HANDLE_NONE, mtu_ = 23;
     bool subscribed_ = false, ready_ = false, recovering_ = false;
-    bool enabled_ = true;
+    bool enabled_ = true, networkPaused_ = false;
+    std::string node_;
         bool txAttempted_ = false, txBlocked_ = false;
     std::deque<std::vector<uint8_t>> out_;
     size_t queuedBytes_ = 0, offset_ = 0;

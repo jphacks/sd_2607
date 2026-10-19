@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="g++")
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--combined", action="store_true")
     parser.add_argument("--diagnostic", action="store_true", help="also exercise opt-in UART test commands")
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
@@ -28,6 +29,8 @@ def main():
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g"]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        if args.combined:
+            command += ["-DMESH_GATEWAY_BUILD=1", "-DMESH_GATEWAY_TTS=1"]
         if args.diagnostic:
             command += ["-DMESH_TEST_DIAGNOSTICS=1"]
         command += ["-I" + str(temp), "-I" + str(here.parent / "include"),

@@ -18,6 +18,7 @@ constexpr size_t MAX_QUEUE = 8, MAX_QUEUED_BYTES = 48000;
 }
 
 bool Ble::begin(const std::string& node) {
+    node_ = node;
 #ifdef MESH_GATT_TRACE
     esp_log_level_set("NimBLE", ESP_LOG_DEBUG);
 #endif
@@ -45,11 +46,11 @@ bool Ble::begin(const std::string& node) {
     auto advertising = NimBLEDevice::getAdvertising();
     if (!advertising->setAdvertisementData(advertisement) || !advertising->setScanResponseData(response)) return false;
     advertising->enableScanResponse(true);
-    return advertising->start();
+    return !enabled_ || networkPaused_ || advertising->start();
 }
 
 void Ble::enqueue(Kind kind, uint16_t handle, uint16_t size, int status, const uint8_t* bytes) {
-    if (overflow_.load()) return;
+    if (!events_ || overflow_.load()) return;
     Event event{};
     event.kind = kind; event.handle = handle; event.size = size; event.status = status;
     if (bytes) {
@@ -104,25 +105,55 @@ bool Ble::recover(Relay& relay) {
     if (!callbackAlive_.load()) {
         // Auto-advertising is disabled: no fresh Up can race this reset. Down
         // publishes callbackAlive_=false after enqueueing its final event.
-        xQueueReset(events_);
+        if (events_) xQueueReset(events_);
         overflow_.store(false);
         recovering_ = false;
-        if (enabled_) NimBLEDevice::getAdvertising()->start();
+        if (enabled_ && !networkPaused_) NimBLEDevice::getAdvertising()->start();
     }
     return true;
 }
 void Ble::setEnabled(bool enabled, Relay& relay) {
-    if (!server_ || enabled == enabled_) return;
+    if (enabled == enabled_) return;
     enabled_ = enabled;
+    if (!server_) return;
     if (!enabled_) {
         drop(relay, "RX/TX disabled by user");
         recover(relay);
-    } else if (!recovering_) {
+    } else if (!recovering_ && !networkPaused_) {
         NimBLEDevice::getAdvertising()->start();
     }
 }
+bool Ble::pauseForNetwork(bool pause, Relay& relay) {
+    if (pause != networkPaused_) {
+#ifdef MESH_GATEWAY_TTS
+        if (!pause && !events_) {
+            if (!server_) {
+                if (!begin(node_)) { Serial.printf("BLE resume failed: stack initialization\n"); return false; }
+            } else events_ = xQueueCreate(32, sizeof(Event));
+            if (!events_) { Serial.printf("BLE resume failed: event queue allocation\n"); return false; }
+        }
+#endif
+        networkPaused_ = pause;
+        if (pause) {
+            drop(relay, "TLS/TTS memory preflight; BLE resumes after work");
+            std::vector<uint8_t>().swap(incoming_);
+        } else if (enabled_ && !recovering_) NimBLEDevice::getAdvertising()->start();
+    }
+    if (pause && events_) recover(relay);
+    const bool quiescent = !callbackAlive_.load() && !recovering_;
+#ifdef MESH_GATEWAY_TTS
+    // Delete only after the final Down callback; no new Up while advertising is off.
+    if (pause && quiescent && events_) {
+        if (!NimBLEDevice::deinit(true)) { Serial.printf("BLE stop failed; no TLS admission\n"); return false; }
+        server_ = nullptr; tx_ = nullptr;
+        vQueueDelete(events_); events_ = nullptr;
+        Serial.printf("BLE stack stopped for TLS/TTS; identity preserved\n");
+    }
+#endif
+    return !pause || quiescent;
+}
 bool Ble::send(const uint8_t* bytes, size_t size) {
-    if (!enabled_ || !ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() ||
+    if (!enabled_ || networkPaused_ || !ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() ||
         !bytes || !size || size > MAX_BUNDLE_BYTES || out_.size() >= MAX_QUEUE ||
         size + 4 > MAX_QUEUED_BYTES - queuedBytes_) return false;
     std::vector<uint8_t> frame(size + 4);
@@ -180,7 +211,7 @@ void Ble::pump(Relay& relay) {
 }
 void Ble::poll(Relay& relay) {
     if (recover(relay)) return;
-    if (!enabled_) return;
+    if (!enabled_ || networkPaused_) return;
     Event event;
     // A busy peer can replenish the queue while verification/storage runs.
     // Return to the main loop regularly so mute/radio buttons remain usable.

@@ -18,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="g++", help="C++11 compiler (default: g++)")
     parser.add_argument("--sanitize", action="store_true", help="Enable ASan and UBSan")
+    parser.add_argument("--combined", action="store_true")
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     esp32 = here.parent
@@ -30,6 +31,8 @@ def main():
             header.write_text('#include "ble_host_mocks.h"\n', encoding="utf-8")
         exe = temp / ("ble-host.exe" if os.name == "nt" else "ble-host")
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g"]
+        if args.combined:
+            command += ["-DMESH_GATEWAY_TTS=1"]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         command += ["-I" + str(temp), "-I" + str(here), "-I" + str(esp32 / "include"),
