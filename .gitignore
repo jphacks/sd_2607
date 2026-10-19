@@ -4,6 +4,7 @@
 **/local.properties
 *.hprof
 .DS_Store
+apps/android/**/__pycache__/
 
 # ESP32 development
 apps/esp32/.venv/
