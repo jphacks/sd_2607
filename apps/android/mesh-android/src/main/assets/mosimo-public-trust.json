@@ -1,4 +1,170 @@
 {
-  "roots": [],
-  "selected": []
+  "roots": [
+    {
+      "rootId": "9d60fc70a23705b9c350caba47acf117374046442950da94979bbe500855676a",
+      "rootPubkey": "03abafed84e161ddcb39e8d7c6937e4c982364fa32a6b642f86daee0dde01e8627",
+      "enabled": true,
+      "scope": {
+        "orgIds": [
+          "mosimo-bsaf-importer"
+        ],
+        "bsaf": [
+          {
+            "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+            "types": [
+              "avalanche-warning",
+              "dense-fog-warning",
+              "dry-air-warning",
+              "flood-warning",
+              "frost-warning",
+              "heavy-rain",
+              "heavy-rain-warning",
+              "icing-warning",
+              "landslide-warning",
+              "linear-rainband-warning",
+              "low-temperature-warning",
+              "melting-snow-warning",
+              "other-warning",
+              "significant-snowfall-warning",
+              "snow-accretion-warning",
+              "snow-warning",
+              "storm-surge-warning",
+              "thunderstorm-warning",
+              "tornado-warning",
+              "typhoon",
+              "wave-warning",
+              "weather-info",
+              "wind-warning"
+            ]
+          },
+          {
+            "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+            "types": [
+              "ashfall",
+              "earthquake",
+              "eruption",
+              "nankai-trough",
+              "tsunami"
+            ]
+          }
+        ]
+      },
+      "snapshotUrl": "https://pds.oriom.dev/.well-known/mosimo/trust/snapshot.cbor",
+      "minSequence": 4
+    }
+  ],
+  "selected": [
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "avalanche-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "dense-fog-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "dry-air-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "flood-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "frost-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "heavy-rain"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "heavy-rain-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "icing-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "landslide-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "linear-rainband-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "low-temperature-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "melting-snow-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "other-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "significant-snowfall-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "snow-accretion-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "snow-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "storm-surge-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "thunderstorm-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "tornado-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "typhoon"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "wave-warning"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "weather-info"
+    },
+    {
+      "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+      "type": "wind-warning"
+    },
+    {
+      "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+      "type": "ashfall"
+    },
+    {
+      "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+      "type": "earthquake"
+    },
+    {
+      "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+      "type": "eruption"
+    },
+    {
+      "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+      "type": "nankai-trough"
+    },
+    {
+      "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+      "type": "tsunami"
+    }
+  ]
 }
