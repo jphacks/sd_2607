@@ -59,9 +59,9 @@
 
 ## 動画リンク
 
-[![プレゼンテーション](https://img.shields.io/badge/YouTube-%E3%83%97%E3%83%AC%E3%82%BC%E3%83%B3%E3%83%86%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/nQAZIvaILJc&t=0)
+[![概要プレゼンテーション](https://img.shields.io/badge/YouTube-%E3%83%97%E3%83%AC%E3%82%BC%E3%83%B3%E3%83%86%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/nQAZIvaILJc&t=0)
 [![実機デモ](https://img.shields.io/badge/YouTube-%E5%AE%9F%E6%A9%9F%E3%83%87%E3%83%A2-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/nQAZIvaILJc&t=239)
-[![M5Stackデモ](https://img.shields.io/badge/YouTube-M5Stack%E3%83%87%E3%83%A2-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/nQAZIvaILJc?t=395)
+[![技術構成解説](https://img.shields.io/badge/YouTube-M5Stack%E3%83%87%E3%83%A2-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/nQAZIvaILJc?t=395)
 
 ## 製品概要
 ### 背景(製品開発のきっかけ、課題等）
