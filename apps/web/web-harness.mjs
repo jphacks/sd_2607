@@ -23,10 +23,14 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
 }
 
-export async function runWeb(fetch, search = '') {
+export async function runWeb(fetch, search = '', config = {
+  appviewUrl: 'https://appview.example.org',
+  clientKey: 'hvc_test_default',
+}) {
   const elements = Object.fromEntries(['feed', 'status', 'more'].map(id => [id, new Element('div')]));
   const context = vm.createContext({
     URL, URLSearchParams, AbortSignal, Date, Map,
+    MOSIMO_CONFIG: config,
     location: { search }, fetch, setInterval() {},
     document: { getElementById: id => elements[id], createElement: tag => new Element(tag) },
   });

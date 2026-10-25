@@ -65,7 +65,7 @@ inputs.mosimo = {
 # hosts/kagoya_vps/default.nix
 { inputs, ... }:
 {
-  imports = [ (inputs.mosimo + "/pds") ];
+  imports = [ (inputs.mosimo + "/nixos") ];
   services.mosimo-pds = {
     enable = true;
     port = 2583;

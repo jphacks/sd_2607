@@ -62,7 +62,7 @@ test('DID/URI diagnostic filters, single record response, and BSAF is not presen
 
 test('public client key and override survive every page and refresh without leaking to PLC', async () => {
   for (const [key, search, apiOrigin] of [
-    ['hvc_c15d9393de6ace328d65633d07d00278', `?did=${did}`, 'https://appview.oriom.dev'],
+    ['hvc_test_default', `?did=${did}`, 'https://appview.example.org'],
     ['hvc_regression_override', `?did=${did}&client_key=hvc_regression_override&appview=https://custom-appview.invalid`, 'https://custom-appview.invalid'],
   ]) {
     const calls = [];

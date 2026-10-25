@@ -2,7 +2,7 @@
 
 ## 配信設定
 
-NixOS構成にこのディレクトリをimportし、`services.mosimo-web.enable` と `services.mosimo-web.domain` を設定します。Caddyで `index.html` を配信し、HTTPS証明書を管理します。
+NixOS構成にはリポジトリの `nixos/` をimportし、`services.mosimo-web` の `enable`、`domain`、`appviewUrl`、`clientKey` を設定します。Caddyで `index.html` と生成された公開設定を配信し、HTTPS証明書を管理します。
 
 ## 接続先の変更
 

@@ -49,6 +49,8 @@ let
     UMask = "0077";
   };
 in {
+  imports = [ ../happyview ];
+
   options.services.mosimo-bsaf = {
     enable = lib.mkEnableOption "DID-allowlisted BSAF collection into HappyView SQLite";
     authors = lib.mkOption {
@@ -105,6 +107,9 @@ in {
   };
   config = lib.mkIf cfg.enable {
     assertions = [{
+      assertion = config.services.happyview.enable;
+      message = "services.mosimo-bsaf requires services.happyview.enable because it writes to HappyView's SQLite database";
+    } {
       assertion = builtins.length cfg.authors <= 10000 && lib.unique cfg.authors == cfg.authors;
       message = "mosimo-bsaf.authors must contain at most 10000 distinct DIDs";
     } {

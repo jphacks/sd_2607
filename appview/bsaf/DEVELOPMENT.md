@@ -2,10 +2,11 @@
 
 ## 登録と有効化
 
-HappyViewと[フィードAPI](../../lexicons/DEVELOPMENT.md#happyviewへの登録)を準備し、NixOS構成にこのディレクトリをimportします。
+HappyViewと[フィードAPI](../../lexicons/DEVELOPMENT.md#happyviewへの登録)を準備し、NixOS構成にリポジトリの統合モジュールをimportします。BSAFを有効にする場合はHappyViewも必須です。
 
 ```nix
-imports = [ (inputs.mosimo + "/appview/bsaf") ];
+imports = [ (inputs.mosimo + "/nixos") ];
+services.happyview.enable = true;
 services.mosimo-bsaf = {
   enable = true;
   authors = [ ];
