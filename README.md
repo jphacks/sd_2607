@@ -11,6 +11,8 @@
 <div align="center">
 
   ## 🎉 JPHACKS 2026 受賞結果 🎉
+  [![JPHacks 2026Award Day Finalist](https://img.shields.io/badge/JPHacks%202026-Award%20Day%20Finalist-blue?style=for-the-badge&logo=nebula)](https://github.com/jphacks/sd_2607)
+
   ### **🏆 Hack Day (仙台会場)**
   [![JPHacks 2026](https://img.shields.io/badge/JPHacks%202026-Audience%20Award-gold?style=for-the-badge&logo=rocket)](https://github.com/jphacks/sd_2607)
   [![三菱重工業株式会社 航空機・飛昇体事業部賞](https://img.shields.io/badge/Sponsor%20Award-三菱重工業株式会社%20航空機・飛昇体事業部-orange?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
