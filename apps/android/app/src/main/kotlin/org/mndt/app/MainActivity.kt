@@ -137,6 +137,16 @@ private fun Demo(mesh: MeshCoordinator) {
                 }, style = MaterialTheme.typography.bodySmall)
                 Text("OS の省電力・強制停止時の即時配送は保証しません。ws:// は暗号化されません。", style = MaterialTheme.typography.bodySmall)
             }
+            item {
+                Text("ブロック中（投稿者 DID 単位。端末・中継は遮断しません）", style = MaterialTheme.typography.titleSmall)
+                if (state.blockedDids.isEmpty()) Text("なし", style = MaterialTheme.typography.bodySmall)
+                state.blockedDids.forEach { did ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(did, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(enabled = state.ready, onClick = { mesh.unblock(did) }) { Text("解除") }
+                    }
+                }
+            }
 
             item {
                 OutlinedTextField(draft, { if (it.toByteArray(Charsets.UTF_8).size <= 2_000) draft = it }, Modifier.fillMaxWidth(), label = { Text("公開する本文（最大 2000 UTF-8 bytes）") }, minLines = 3)
@@ -155,7 +165,10 @@ private fun Demo(mesh: MeshCoordinator) {
             items(state.posts, key = { it.id }) { post ->
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     SelectionContainer { Text(post.content) }
-                    Text("${post.id.take(12)} / 鍵 ${post.pubkey.take(12)}", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${post.id.take(12)} / ${post.did ?: "鍵 ${post.pubkey.take(12)}"}", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall)
+                        post.did?.takeIf { it != state.did }?.let { did -> TextButton(enabled = state.ready, onClick = { mesh.block(did) }) { Text("ブロック") } }
+                    }
                     post.publicAuthorization?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     if (post.volatile) {
                         Text("オンライン取得 / 揮発表示（ディスク保存・メッシュ投入なし）", style = MaterialTheme.typography.bodySmall)

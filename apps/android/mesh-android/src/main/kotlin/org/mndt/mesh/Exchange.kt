@@ -2,6 +2,7 @@ package org.mndt.mesh
 
 import android.util.Log
 import org.mndt.core.AtRepository
+import org.mndt.core.BlockedAuthor
 import org.mndt.core.MeshEngine
 import org.mndt.core.MeshPolicy
 import org.mndt.core.StoredBundle
@@ -10,6 +11,7 @@ import org.mndt.core.StoredBundle
 internal class Session(val link: Link, val handle: String, val began: Long) {
     var peerNode: String? = null
     var peerMax = 0
+    var peerDids = false
     val sent = linkedMapOf<String, Long>()
     var window = 0L
     var messages = 0
@@ -28,10 +30,14 @@ internal class Exchange(
     private val note: (String) -> Unit = {},
     private val allowedPeerNode: String? = null,
     private val allowedAuthor: String? = null,
+    // Author-DID predicate; only skips wants. MeshEngine.admit is the authoritative check after signature verification.
+    private val blocked: (String) -> Boolean = { false },
     // Must durably save before returning; failures must stop the coordinator's links.
     private val accepted: (StoredBundle) -> Unit = {},
 ) {
     val sessions = linkedMapOf<Pair<Link, String>, Session>()
+    // ponytail: in-memory FIFO; a restarted app re-wants a refused bundle once.
+    private val refused = linkedSetOf<String>()
 
     fun connected(link: Link, handle: String) {
         if (sessions.size >= MAX_SESSIONS) { link.disconnect(handle); return }
@@ -67,11 +73,14 @@ internal class Exchange(
 
     fun clear() = sessions.clear()
 
+    /** After an unblock; still-blocked authors are simply refused once more. */
+    fun forgetRefused() = refused.clear()
+
     private fun control(s: Session, c: Control) {
         if (c.type == "hello") {
             require(s.peerNode == null) { "Duplicate HELLO" }
             if (c.node == node || allowedPeerNode != null && c.node != allowedPeerNode) { drop(s); return }
-            s.peerNode = c.node; s.peerMax = c.max
+            s.peerNode = c.node; s.peerMax = c.max; s.peerDids = c.didCap
             s.link.identified(s.handle, c.node)
             log("hello from ${c.node} on ${s.link.name}:${s.handle}")
             inventory(s)
@@ -81,7 +90,9 @@ internal class Exchange(
         when (c.type) {
             "inventory" -> {
                 val owned = engine.entries().map { it.event.id }.toSet()
-                val missing = c.ids.filterNot(owned::contains)
+                val missing = c.ids.filterIndexed { i, id ->
+                    id !in owned && id !in refused && c.dids.getOrNull(i)?.takeIf(String::isNotEmpty)?.let(blocked) != true
+                }
                 log("inventory ${c.ids.size} from ${s.peerNode}, want ${missing.size}")
                 if (missing.isNotEmpty()) send(s, Wire.encode(Control("want", missing)))
                 s.sent.keys.removeAll(c.ids.toSet())
@@ -107,7 +118,12 @@ internal class Exchange(
 
     private fun bundle(s: Session, bytes: ByteArray) {
         require(s.peerNode != null) { "HELLO required" }
-        val entry = engine.accept(bytes, now(), elapsed())
+        val entry = try { engine.accept(bytes, now(), elapsed()) } catch (e: BlockedAuthor) {
+            refused.add(e.id)
+            if (refused.size > MAX_REFUSED) refused.remove(refused.first())
+            log("refused blocked ${e.id.take(8)}")
+            return
+        }
         log("bundle ${bytes.size}B from ${s.peerNode}: ${if (entry == null) "duplicate" else "accepted ${entry.event.id}"}")
         if (entry == null) { inventory(s); return }
         accepted(entry)
@@ -119,11 +135,13 @@ internal class Exchange(
     // android.util.Log throws "not mocked" in JVM unit tests; runCatching keeps Exchange testable there.
     private fun log(text: String) { runCatching { Log.i("Exchange", text) } }
     private fun inventory(s: Session) {
-        val allowed = engine.entries().filter { allowedAuthor == null || it.event.pubkey == allowedAuthor }.map { it.event.id }.toSet()
-        send(s, Wire.encode(Control("inventory", engine.inventory(now(), elapsed()).filter { it in allowed }.takeLast(128))))
+        val allowed = engine.entries().filter { allowedAuthor == null || it.event.pubkey == allowedAuthor }.associateBy { it.event.id }
+        val ids = engine.inventory(now(), elapsed()).filter { it in allowed }.takeLast(128)
+        // Legacy peers (ESP32) disconnect on unknown inventory fields, so dids go only to peers advertising the capability.
+        send(s, Wire.encode(Control("inventory", ids, dids = if (s.peerDids) ids.map { allowed.getValue(it).did ?: "" } else emptyList())))
     }
     private fun send(s: Session, frame: ByteArray): Boolean = s.link.send(s.handle, frame)
     private fun drop(s: Session) { sessions.remove(s.link to s.handle); s.link.disconnect(s.handle) }
 
-    companion object { const val MAX_SESSIONS = 16 }
+    companion object { const val MAX_SESSIONS = 16; const val MAX_REFUSED = 1024 }
 }

@@ -1,11 +1,12 @@
 """Read-only ESP32 lexical-parser differential for observed Android HELLOs.
 
 Compiles the current production JsonShape directly (no copied/reimplemented parser)
-under WSL; writes only an ignored Android .gradle executable. No device access.
+under WSL on Windows (native c++ elsewhere); writes only an ignored Android .gradle executable. No device access.
 """
 import json
 import re
 from pathlib import Path
+import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -23,11 +24,13 @@ int main() {
     }
 }
 '''
-subprocess.run(["wsl.exe", "-d", "Ubuntu", "--", "g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
+host = ["wsl.exe", "-d", "Ubuntu", "--"] if shutil.which("wsl.exe") else []
+subprocess.run(host + ["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror",
                 "-x", "c++", "-o", "apps/android/.gradle/hello-shape", "-"],
                input=program, text=True, check=True, cwd=ROOT, timeout=30)
 nodes = ["707b1f7b29e16363", "07a6b6ee338d7419"]
-hellos = [json.dumps(dict(v=1, type="hello", node=node, max=24000), separators=(",", ":")) for node in nodes]
+# Current Android HELLO (Wire.encode) adds the "dids" capability; ESP32 must still accept it as a 5-member object.
+hellos = [json.dumps(dict(v=1, type="hello", node=node, max=24000, dids=1), separators=(",", ":")) for node in nodes]
 observed = []
 trace = ROOT / "apps/android/evidence/hardware-hello-tx.json"
 if trace.exists():
@@ -40,13 +43,14 @@ if trace.exists():
             if hello not in observed:
                 observed.append(hello)
 cases = hellos + observed + [hellos[0][:-1], hellos[0] + "{}"]
-result = subprocess.run(["wsl.exe", "-d", "Ubuntu", "--", "apps/android/.gradle/hello-shape"],
+result = subprocess.run(host + ["apps/android/.gradle/hello-shape"],
                         input=("\n".join(cases) + "\n").encode("utf-8"), capture_output=True,
                         check=True, cwd=ROOT, timeout=10)
 lines = result.stdout.decode("utf-8").splitlines()
 assert len(lines) == len(cases), result.stdout
 valid_count = len(hellos) + len(observed)
-assert lines[:valid_count] == ["1 60 4"] * valid_count, result.stdout
+assert lines[:len(hellos)] == ["1 69 5"] * len(hellos), result.stdout
+assert lines[len(hellos):valid_count] == ["1 60 4"] * len(observed), result.stdout
 assert all(line.startswith("0 ") for line in lines[valid_count:]), result.stdout
 print(json.dumps(dict(ok=True, parser="current production JsonShape", nodes=nodes,
-                      jsonBytes=60, framedBytes=64, validAccepted=valid_count, actualQueueFrames=len(observed), malformedRejected=2)))
+                      jsonBytes=69, framedBytes=73, legacyJsonBytes=60, validAccepted=valid_count, actualQueueFrames=len(observed), malformedRejected=2)))

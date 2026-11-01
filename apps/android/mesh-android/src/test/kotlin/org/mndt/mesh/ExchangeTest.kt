@@ -2,6 +2,7 @@ package org.mndt.mesh
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.mndt.core.AtRepository
 import org.mndt.core.Author
 import org.mndt.core.MeshEngine
 import org.mndt.core.SecretKeys
@@ -13,10 +14,12 @@ private fun pump() { while (wire.isNotEmpty()) wire.removeFirst()() }
 private class Wired : Link {
     override val name = "test"
     val ends = mutableMapOf<String, Pair<Exchange, Wired>>()
+    val sent = mutableListOf<ByteArray>()
     override fun start(node: String, listener: LinkListener) = Unit
     override fun stop() = Unit
     override fun send(peer: String, frame: ByteArray): Boolean {
         val (remote, link) = ends[peer] ?: return false
+        sent.add(frame)
         wire.addLast { remote.frame(link, peer.reversed(), frame) }; return true
     }
     override fun disconnect(peer: String) { ends.remove(peer) }
@@ -25,13 +28,19 @@ private class Wired : Link {
 class ExchangeTest {
     private val now = 1_800_000_000_000L
     private var clock = 1_000L
-    private fun node(id: Char) = MeshEngine().let { it to Exchange(it, id.toString().repeat(16), { now }, { clock }) }
-    private fun connect(a: Exchange, b: Exchange) {
+    private fun node(id: Char, block: String? = null) = MeshEngine().let { engine ->
+        if (block != null) engine.admit = { AtRepository.did(it) != block }
+        engine to Exchange(engine, id.toString().repeat(16), { now }, { clock }, blocked = { it == block })
+    }
+    private fun connect(a: Exchange, b: Exchange): Pair<Wired, Wired> {
         val la = Wired(); val lb = Wired()
         la.ends["ab"] = b to lb; lb.ends["ba"] = a to la
         a.connected(la, "ab"); b.connected(lb, "ba")
         pump()
+        return la to lb
     }
+    private fun author() = Author(SecretKeys.generate(), "https://pds.invalid")
+    private fun Wired.controls(type: String) = sent.filter { it[0] == '{'.code.toByte() }.map(Wire::decode).filter { it.type == type }
 
     @Test fun storeCarryForwardReachesANodeThatNeverMetTheAuthor() {
         val (ea, a) = node('a'); val (eb, b) = node('b'); val (ec, c) = node('c')
@@ -46,6 +55,63 @@ class ExchangeTest {
         assertEquals(event, carried.event)
         assertEquals(2, carried.hop)
         assertTrue(c.sessions.values.all { it.peerNode == "b".repeat(16) })
+    }
+
+    @Test fun blockingAnAuthorStillRelaysOtherAuthorsThroughThatAuthorsNode() {
+        val authorA = author(); val authorC = author()
+        val (ea, a) = node('a'); val (eb, b) = node('b', block = authorA.did); val (ec, c) = node('c')
+        val postA = authorA.createPost("A本人", now).event
+        val postC = authorC.createPost("Cから中継", now).event
+        ea.originate(postA, now, clock)
+        ec.originate(postC, now, clock)
+        connect(c, a)
+        assertEquals(setOf(postA.id, postC.id), ea.entries().map { it.event.id }.toSet())
+        val (la, lb) = connect(a, b)
+        assertTrue(la.controls("inventory").any { postA.id in it.ids && authorA.did in it.dids })
+        assertEquals(listOf(postC.id), lb.controls("want").flatMap { it.ids })
+        assertEquals(listOf(postC.id), lb.controls("ack").flatMap { it.ids })
+        assertEquals(listOf(postC.id), eb.entries().map { it.event.id })
+        assertEquals("blocking an author never blocks the node", "a".repeat(16), b.sessions.values.single().peerNode)
+        assertEquals("b".repeat(16), a.sessions.values.single { it.link === la }.peerNode)
+    }
+
+    @Test fun blockedAuthorsPostsAreNeverCarriedOnward() {
+        val authorA = author(); val authorB = author()
+        val (ea, a) = node('a'); val (eb, b) = node('b', block = authorA.did); val (ec, c) = node('c')
+        ea.originate(authorA.createPost("A本人", now).event, now, clock)
+        val postB = authorB.createPost("B本人", now).event
+        eb.originate(postB, now, clock)
+        connect(a, b)
+        a.clear(); b.clear()
+        connect(b, c)
+        assertEquals(listOf(postB.id), eb.entries().map { it.event.id })
+        assertEquals(listOf(postB.id), ec.entries().map { it.event.id })
+    }
+
+    @Test fun legacyPeerGetsNoDidHintsAndRefusedBundleIsNotRewanted() {
+        val blockedAuthor = author()
+        val engine = MeshEngine().apply { admit = { AtRepository.did(it) != blockedAuthor.did } }
+        engine.originate(author().createPost("自分", now).event, now, clock)
+        val link = RecordingLink()
+        val receiver = Exchange(engine, "b".repeat(16), { now }, { clock }, blocked = { it == blockedAuthor.did })
+        receiver.connected(link, "peer")
+        link.frames.clear()
+        receiver.frame(link, "peer", "{\"v\":1,\"type\":\"hello\",\"node\":\"${"a".repeat(16)}\",\"max\":24000}".toByteArray())
+        val inventory = json.readTree(link.frames.single())
+        assertEquals("inventory", inventory["type"].textValue())
+        assertFalse("legacy peers disconnect on unknown inventory fields", inventory.has("dids"))
+        val source = MeshEngine()
+        val blocked = blockedAuthor.createPost("ブロック対象", now).event
+        source.originate(blocked, now, clock)
+        link.frames.clear()
+        receiver.frame(link, "peer", Wire.encode(Control("inventory", listOf(blocked.id))))
+        assertEquals(Control("want", listOf(blocked.id)), Wire.decode(link.frames.single()))
+        link.frames.clear()
+        receiver.frame(link, "peer", source.forward(blocked.id, now, clock)!!)
+        receiver.frame(link, "peer", Wire.encode(Control("inventory", listOf(blocked.id))))
+        assertTrue("no ACK and no second want", link.frames.isEmpty())
+        assertFalse(link.disconnected)
+        assertEquals(1, engine.entries().size)
     }
 
     @Test fun durableSaveFinishesBeforeAckOrInventoryLeavesReceiver() {

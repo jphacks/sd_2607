@@ -20,6 +20,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString
 import org.mndt.core.AtRepository
 import org.mndt.core.Author
+import org.mndt.core.BlockedAuthor
 import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
 import org.mndt.core.MeshEngine
@@ -35,7 +36,7 @@ data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
     val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList(),
-    val publicAuthorization: String? = null)
+    val publicAuthorization: String? = null, val did: String? = null)
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -46,7 +47,8 @@ data class MeshState(
     /** Send status: OS default network present, relay socket in use, unsent count per relay, seconds until retry. */
     val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
     val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true,
-    val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList()
+    val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList(),
+    val blockedDids: List<String> = emptyList()
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -88,7 +90,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         require(it.matches(Regex("[0-9a-f]{64}"))) { "Invalid test author" }
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor) { persist(); drainRelay() }
+    private val blocked get() = disk?.blockedDids.orEmpty()
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay() }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -128,6 +131,8 @@ class MeshCoordinator private constructor(private val context: Context) {
 
     init {
         engine.relayed = { id -> disk?.relayAccepted?.values?.any { id in it } == true }
+        // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
+        engine.admit = { AtRepository.did(it) !in blocked }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
         engine.canEvict = { entry ->
             entry.event.pubkey != author?.nostrPubkey ||
@@ -150,7 +155,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                 val wall = now()
                 val monotonic = elapsed()
                 // One unreadable bundle (e.g. after a policy change) must not take the rest of the store down.
-                val lost = saved.bundles.count { runCatching { engine.restore(it.bytes, it.receivedAtMillis, wall, monotonic, it.downtime(bootCount, monotonic)) }.isFailure }
+                // A blocked author's bundle is dropped here too, but that is policy, not corruption.
+                val lost = saved.bundles.count { runCatching { engine.restore(it.bytes, it.receivedAtMillis, wall, monotonic, it.downtime(bootCount, monotonic)) }
+                    .exceptionOrNull().let { e -> e != null && e !is BlockedAuthor } }
                 if (lost > 0) note("保存済み Bundle ${lost} 件を読めず破棄")
                 persist(saved)
                 note("インストール固有の3鍵・DIDを準備済み")
@@ -230,11 +237,11 @@ class MeshCoordinator private constructor(private val context: Context) {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
-                    publicAuthorization = data?.publicAudit?.get(it.event.id))
-            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).map { post ->
+                    publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did)
+            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.map { post ->
                 if (post.volatile && publicEvents.any { it.id == post.id }) post.copy(sourceRelay = DiskState.PDS_RELAY) else post
             },
-            publicBusy = publicBusy
+            publicBusy = publicBusy, blockedDids = blocked
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
@@ -290,6 +297,25 @@ class MeshCoordinator private constructor(private val context: Context) {
         persist(current.copy(relays = current.relays - endpoint))
         if (endpoint == activeRelay) { closeRelay(); relaySubscription.clear() }
         note("リレー削除 $endpoint")
+    }
+    /** Hides one author's posts everywhere; their device still relays other authors' posts to us. */
+    fun block(did: String) = enqueue(critical = true) {
+        check(!fatal)
+        require(did.matches(Regex("did:plc:[a-z2-7]{24}")) && did != author?.did)
+        val current = checkNotNull(disk)
+        if (did in current.blockedDids) return@enqueue
+        require(current.blockedDids.size < DiskState.MAX_BLOCKED)
+        engine.remove { it.did == did }
+        persist(current.copy(blockedDids = current.blockedDids + did))
+        note("ブロック $did")
+        exchange.broadcastInventory()
+    }
+    fun unblock(did: String) = enqueue(critical = true) {
+        check(!fatal)
+        val current = checkNotNull(disk)
+        persist(current.copy(blockedDids = current.blockedDids - did))
+        exchange.forgetRefused()
+        note("ブロック解除 $did")
     }
     /** Reload is an explicit local trust operation. A bad asset disables ingress, not the identity. */
     fun reloadPublicConfig() = enqueue(critical = true) { reloadPublicConfigInternal() }

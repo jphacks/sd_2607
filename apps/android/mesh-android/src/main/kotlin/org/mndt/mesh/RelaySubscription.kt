@@ -105,6 +105,7 @@ internal class RelaySubscription {
 internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String): List<PostView> {
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
-        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true)
+        // ponytail: re-derives the DID (signature check) per refresh; at most MAX_EVENTS, cache by id if it shows in profiles.
+        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = AtRepository.did(it))
     }
 }
