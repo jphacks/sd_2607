@@ -163,10 +163,12 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
         if (rest.isNotEmpty()) Text(rest, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary, maxLines = 3)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                if (post.isPublic) BsafVerification(post)
-                else Text(listOfNotNull(shortDid(post.did, post.pubkey), post.distanceFrom(here)?.let { distanceLabel(it) + "先" }).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
-                Text(" · ${post.routeLabel()}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+                Box(Modifier.weight(1f, fill = false)) {
+                    if (post.isPublic) BsafVerification(post)
+                    else Text(listOfNotNull(shortDid(post.did, post.pubkey), post.distanceFrom(here)?.let { distanceLabel(it) + "先" }).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+                }
+                Text(" · ${post.routeLabel()}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary, softWrap = false)
             }
             if (post.isPublic) Link("詳細 >") { nav.navigate(Routes.post(post.id)) }
             else if (post.latLng() != null) Link("マップで見る >") { nav.navigate(Routes.map(post.id)) }

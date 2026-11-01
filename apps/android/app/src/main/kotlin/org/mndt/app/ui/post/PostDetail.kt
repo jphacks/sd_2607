@@ -25,8 +25,10 @@ import org.mndt.mesh.Relation
 import java.time.Instant
 import java.time.OffsetDateTime
 
-/** BSAF `source:` tag, e.g. 「気象庁」. */
-fun PostView.bsafSource(): String = ext.bsaf?.tags?.firstOrNull { it.startsWith("source:") }?.removePrefix("source:")?.ifBlank { null } ?: "公的情報"
+private val sourceNames = mapOf("jma" to "気象庁")
+/** BSAF `source:` tag, e.g. `jma` → 「気象庁」. */
+fun PostView.bsafSource(): String = ext.bsaf?.tags?.firstOrNull { it.startsWith("source:") }?.removePrefix("source:")?.ifBlank { null }
+    ?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
 
 /** Import-time importer authorization only; never claims the content is 公式. */
 @Composable
