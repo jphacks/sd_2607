@@ -43,13 +43,13 @@ private val EMPTY = featureCollection(emptyList())
 private val STYLE = """
 {"version":8,
  "sources":{
-  "gsi":{"type":"raster","tiles":["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],"tileSize":256,"minzoom":5,"maxzoom":18,"attribution":"地理院タイル"},
+  "gsi":{"type":"raster","tiles":["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],"tileSize":128,"minzoom":5,"maxzoom":18,"attribution":"地理院タイル"},
   "regions":{"type":"geojson","data":$EMPTY},
   "me":{"type":"geojson","data":$EMPTY}
  },
  "layers":[
   {"id":"bg","type":"background","paint":{"background-color":"${Mosimo.bgBase.hex()}"}},
-  {"id":"gsi","type":"raster","source":"gsi","paint":{"raster-brightness-min":1,"raster-brightness-max":0,"raster-saturation":-1,"raster-contrast":0.2}},
+  {"id":"gsi","type":"raster","source":"gsi","paint":{"raster-brightness-min":0.55,"raster-brightness-max":0.04,"raster-saturation":-1,"raster-contrast":0.1}},
   {"id":"regions-fill","type":"fill","source":"regions","paint":{"fill-color":["get","color"],"fill-opacity":0.16}},
   {"id":"regions-line","type":"line","source":"regions","paint":{"line-color":["get","color"],"line-width":1.5,"line-opacity":0.8,"line-dasharray":[2,2]}},
   {"id":"me-accuracy","type":"fill","source":"me","filter":["==",["geometry-type"],"Polygon"],"paint":{"fill-color":"${Mosimo.info.hex()}","fill-opacity":0.15}},
@@ -68,7 +68,7 @@ class MapHandle {
     fun moveTo(lat: Double, lng: Double, zoom: Double? = null, bottomFraction: Double = 0.0) {
         val m = map ?: return
         m.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder().target(LatLng(lat, lng))
-            .zoom(zoom ?: max(m.cameraPosition.zoom, 15.0)).padding(0.0, 0.0, 0.0, height * bottomFraction).build()))
+            .zoom(zoom ?: max(m.cameraPosition.zoom, 14.0)).padding(0.0, 0.0, 0.0, height * bottomFraction).build()))
     }
     fun center(): Pair<Double, Double>? = map?.cameraPosition?.target?.let { it.latitude to it.longitude }
 }

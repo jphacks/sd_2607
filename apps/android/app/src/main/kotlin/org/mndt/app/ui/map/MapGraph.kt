@@ -106,25 +106,25 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     val map = handle.map
     LaunchedEffect(map, fix != null) {
         val f = fix ?: return@LaunchedEffect
-        if (map != null && !vm.centered) { vm.centered = true; handle.moveTo(f.latitude, f.longitude, 15.0) }
+        if (map != null && !vm.centered) { vm.centered = true; handle.moveTo(f.latitude, f.longitude, 14.0) }
     }
     LaunchedEffect(focus, map, state.posts) {
         if (focus == null || focus == vm.handledFocus || map == null) return@LaunchedEffect
         val post = state.posts.firstOrNull { it.id == focus } ?: return@LaunchedEffect
         vm.handledFocus = focus
-        post.latLng()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, 16.0, 0.5) }
+        post.latLng()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, 15.0, 0.5) }
         vm.selected = focus
     }
     val selected = vm.selected?.let { id -> state.posts.firstOrNull { it.id == id } }
     // Closes the detail when the post leaves the list (e.g. its author was blocked from the sheet).
     LaunchedEffect(vm.selected, selected == null) { if (vm.selected != null && selected == null && state.posts.isNotEmpty()) vm.selected = null }
     val point = vm.picked ?: fix?.let { it.latitude to it.longitude }
-    LaunchedEffect(vm.composing) { if (vm.composing) point?.let { (lat, lng) -> handle.moveTo(lat, lng, 16.0, 0.75) } }
+    LaunchedEffect(vm.composing) { if (vm.composing) point?.let { (lat, lng) -> handle.moveTo(lat, lng, 15.0, 0.75) } }
 
     fun pick() {
         vm.composing = false; vm.picking = true
         // Always re-centre with zero padding: the crosshair is the view centre, which must equal the camera target.
-        (point ?: handle.center())?.let { (lat, lng) -> handle.moveTo(lat, lng, if (point != null) 17.0 else handle.map?.cameraPosition?.zoom) }
+        (point ?: handle.center())?.let { (lat, lng) -> handle.moveTo(lat, lng, if (point != null) 15.0 else handle.map?.cameraPosition?.zoom) }
     }
     fun endPick(confirm: Boolean) {
         if (confirm) handle.center()?.let { vm.picked = it }
@@ -168,7 +168,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
                 Spacer(Modifier.weight(1f))
                 SmallFloatingActionButton({
                     if (!granted) askLocation()
-                    fix?.let { handle.moveTo(it.latitude, it.longitude, 16.0) }
+                    fix?.let { handle.moveTo(it.latitude, it.longitude, 15.0) }
                     vm.location.refresh()
                 }, containerColor = Mosimo.bgSurface, contentColor = Mosimo.textPrimary) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Mosimo.info)
