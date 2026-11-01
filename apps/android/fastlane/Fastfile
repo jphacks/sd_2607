@@ -1,0 +1,78 @@
+default_platform(:android)
+
+ANDROID_APPS = {
+  "mosimo" => { module: "app", flavor: "Demo", package: "dev.oriom.mosimo" }
+}.freeze
+ANDROID_PROJECT = File.expand_path("..", __dir__)
+SIGNING_ENV = %w[ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD].freeze
+
+def android_app!(options)
+  ANDROID_APPS.fetch(options[:app].to_s) { UI.user_error!("Unknown app: #{options[:app]}. Choose: #{ANDROID_APPS.keys.join(', ')}") }
+end
+
+def release_options!(options)
+  app = android_app!(options)
+  code = options[:version_code].to_s
+  name = options[:version_name].to_s.strip
+  UI.user_error!("version_code must be an integer between 1 and 2100000000") unless code.match?(/\A[1-9][0-9]*\z/) && code.to_i <= 2_100_000_000
+  UI.user_error!("version_name is required") if name.empty?
+  missing = SIGNING_ENV.select { |key| ENV[key].to_s.strip.empty? }
+  UI.user_error!("Missing signing configuration: #{missing.join(', ')}") unless missing.empty?
+  UI.user_error!("ANDROID_KEYSTORE_PATH must point to a file") unless File.file?(ENV.fetch("ANDROID_KEYSTORE_PATH"))
+  [app, code.to_i, name]
+end
+
+platform :android do
+  desc "Run unit tests, lint, and build a debug APK for the selected app"
+  lane :ci do |options|
+    app = android_app!(options)
+    gradle(
+      project_dir: ANDROID_PROJECT,
+      tasks: [":dtn7-bpv7:test", ":bundle-core:test", ":mesh-android:testDebugUnitTest",
+              ":#{app[:module]}:test#{app[:flavor]}DebugUnitTest",
+              ":#{app[:module]}:lint#{app[:flavor]}Debug", ":#{app[:module]}:assemble#{app[:flavor]}Debug"]
+    )
+  end
+
+  desc "Build a signed release AAB with explicit version_code and version_name"
+  lane :build do |options|
+    app, code, name = release_options!(options)
+    gradle(
+      project_dir: ANDROID_PROJECT,
+      task: ":#{app[:module]}:bundle#{app[:flavor]}Release",
+      print_command: false,
+      print_command_output: false,
+      properties: {
+        "android.injected.version.code" => code,
+        "android.injected.version.name" => name,
+        "android.injected.signing.store.file" => File.expand_path(ENV.fetch("ANDROID_KEYSTORE_PATH")),
+        "android.injected.signing.store.password" => ENV.fetch("ANDROID_KEYSTORE_PASSWORD"),
+        "android.injected.signing.key.alias" => ENV.fetch("ANDROID_KEY_ALIAS"),
+        "android.injected.signing.key.password" => ENV.fetch("ANDROID_KEY_PASSWORD")
+      }
+    )
+    aab = lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
+    UI.user_error!("Gradle did not produce an AAB") unless aab
+    aab
+  end
+
+  desc "Test, build, and publish to Google Play internal testing"
+  lane :internal do |options|
+    app, = release_options!(options)
+    UI.user_error!("SUPPLY_JSON_KEY_DATA is required") if ENV["SUPPLY_JSON_KEY_DATA"].to_s.strip.empty?
+    ci(options)
+    aab = build(options)
+    upload_to_play_store(
+      package_name: app[:package],
+      json_key_data: ENV.fetch("SUPPLY_JSON_KEY_DATA"),
+      aab: aab,
+      track: "internal",
+      release_status: "completed",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true
+    )
+  end
+end

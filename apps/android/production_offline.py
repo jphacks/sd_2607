@@ -16,7 +16,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUT = HERE / '.gradle' / 'production-20261019'
 STATE = OUT / 'state.json'
-PACKAGE = 'org.mndt.demo'
+PACKAGE = 'dev.oriom.mosimo'
 DEVICES = {'ASUS': 'T4AIOC732121JRB', 'OPPO': '4f4ebc6f'}
 
 

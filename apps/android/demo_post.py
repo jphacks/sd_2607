@@ -38,7 +38,7 @@ assert values, "Post was requested: never retry creation"
 state["sourceUi"] = values
 prefix = next(re.match(r"([0-9a-f]{12}) /", t)[1] for t in values if re.match(r"[0-9a-f]{12} /", t))
 state["prefix"] = prefix
-pid = adb(GATEWAY, "shell", "pidof", "org.mndt.demo").strip()
+pid = adb(GATEWAY, "shell", "pidof", "dev.oriom.mosimo").strip()
 for _ in range(25):
     raw = adb(GATEWAY, "logcat", "-d", "--pid=" + pid, "-v", "time", "-s", "Exchange:I", "*:S")
     hits = [l for l in raw.splitlines() if re.search(r": accepted " + prefix + r"[0-9a-f]{52}", l)]

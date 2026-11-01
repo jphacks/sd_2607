@@ -9,16 +9,19 @@ android {
     defaultConfig {
         applicationId = "org.mndt.demo"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-experimental"
+        targetSdk = 36
+        versionCode = providers.gradleProperty("android.injected.version.code").orElse("1").get().toInt()
+        versionName = providers.gradleProperty("android.injected.version.name").orElse("0.1.0-experimental").get()
         manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
         manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
         manifestPlaceholders["mndtTestNode"] = providers.gradleProperty("mndtTestNode").orElse("").get()
     }
     flavorDimensions += "demo"
     productFlavors {
-        create("demo") { dimension = "demo" }
+        create("demo") {
+            dimension = "demo"
+            applicationId = "dev.oriom.mosimo"
+        }
         create("peer") {
             dimension = "demo"
             applicationIdSuffix = ".peer"
