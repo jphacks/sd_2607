@@ -1,10 +1,11 @@
 {
-  "name": "mosimo-website",
+  "name": "mosimo-hp",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "build:pages": "astro build --config astro.pages.config.mjs",
     "preview": "astro preview",
     "check": "astro check"
   },

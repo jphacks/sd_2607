@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "mosimo-website",
+  "name": "mosimo-hp",
 
   "compatibility_date": "2026-10-30",
   "compatibility_flags": ["nodejs_compat"]
