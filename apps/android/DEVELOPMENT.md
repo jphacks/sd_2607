@@ -9,12 +9,39 @@ JDK 21、Android SDK 36を用意し、リポジトリ直下で実行する。
 ```sh
 apps/android/gradlew -p apps/android \
   :dtn7-bpv7:test :bundle-core:test :mesh-android:testDebugUnitTest \
-  :app:assembleDemoDebug :app:assemblePeerDebug
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-APKは `apps/android/app/build/outputs/apk/{demo,peer}/debug/` に生成される。`demo`（`dev.oriom.mosimo`）と `peer`（`org.mndt.demo.peer`）は別の鍵・保存領域を持つ。旧Demoの`org.mndt.demo`とも別インストールとなり、既存の鍵・DID・投稿は自動移行しない。
+APKは `apps/android/app/build/outputs/apk/debug/app-debug.apk` に生成される。アプリのIDは`dev.oriom.mosimo`。
 
-公開ネットワーク試験用のビルドは `:app:assembleVerificationDebug`（`org.mndt.demo.verification`）。実PLC登録・公開投稿を伴う試験に使うため、通常のローカルテストとして実行しない。実行条件は [公開ネットワーク検証報告](../../docs/android-production-verification-2026-10-18.md) を参照。
+
+## mise タスク
+
+`apps/android`で実行する。事前に`mise install`で`mise.toml`のツールを用意する。各タスクは必要に応じてAndroid SDK 36とBuild Toolsを`android sdk install`で用意し、fastlaneを使うタスクは不足するgemを`bundle install`でインストールする。初回はネットワーク接続やAndroid SDKライセンスの承認が必要。
+
+miseの`android-sdk`は独自のSDKディレクトリを`ANDROID_HOME`に設定するため、別のSDKにインストール済みでも、タスク実行時にmise側のSDKへパッケージがインストールされる。
+
+Windowsの古いAndroid CLIには、SDK操作後にネイティブダウンローダーの終了処理で`0xC0000409`（miseでは終了コード9）になる[既知の不具合](https://github.com/aws/aws-lc/issues/3540)がある。この環境ではCLI本体を`1.0.15857036`から`1.1.16717390`へ更新して解消した。`mise exec -- android --version`で本体の版を確認し、古い場合は`mise exec -- android update`を実行する。旧版からの更新では、更新完了の表示後に同じ終了エラーになる場合があるため、次の起動で版を再確認し、`mise run sdk-setup`が成功することを確かめる。miseでランチャーを入れ直すだけでは、ユーザーディレクトリにキャッシュされた古い本体が残ることがある。
+
+Command-line Toolsはmiseで管理し、`sdk-setup`のインストール対象へ`cmdline-tools/23.0`を加えない。Windowsでは実行中のランチャーを自己上書きしようとしてアクセス拒否になる可能性がある。
+
+```sh
+mise tasks                  # タスク一覧
+mise run test               # 単体テスト
+mise run lint               # debugのlint
+mise run apk                # debug APK
+
+mise run fastlane-test      # Fastfileのテスト
+mise run ci                 # fastlaneで単体テスト・lint・debug APKビルド
+mise run aab
+mise run deploy             # Google Play内部テストへ配布
+```
+
+`aab`は署名付きrelease AABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。Google Playへのアップロードは行わない。Playに配布するときは、versionCodeをアップロード済みの全バージョンより大きくする。環境変数と出力先は次節を参照。APKの出力先は上記「ビルド・テスト」を参照。
+
+`deploy`は`secrets/release.sops.yaml`（署名パスワード・alias）と`secrets/deploy.sops.yaml`（`SUPPLY_JSON_KEY_DATA`）を復号して読み込み、テスト・lint・AAB生成後にGoogle Playの`internal`トラックへ配布する。両ファイルを復号できる鍵が必要。秘密値はmiseのログでマスクする。APK・AABのビルドだけでは`deploy.sops.yaml`は読み込まない。
+
+GitHub Actionsなどでは、復号鍵ファイルのパスを`SOPS_AGE_KEY_FILE`、別途用意したアップロードkeystoreの絶対パスを`ANDROID_KEYSTORE_PATH`で指定して`mise run deploy`を実行する。未指定時はそれぞれ`.config/mise/age.txt`と`release_key.jks`を使う。復号鍵とkeystoreはGitに含めない。現在のActions workflowは既存のEnvironment Secretsを使う構成であり、このタスクへの切り替えは行っていない。
 
 ## Fastlane CI/CD・Google Play内部テスト
 
@@ -46,11 +73,11 @@ GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnviro
 
 認証ファイルをローカルに置く場合は、Git管理対象外の`fastlane/credentials/`を使う。秘密情報をコマンド引数や追跡対象ファイルに書かない。keystoreファイルもGit管理対象外とする。
 
-GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`・`version_code`・`version_name`を指定する。`version_code`は1〜2100000000の整数で、既にPlayにアップロードした全トラックの値より大きくする。再実行も新たな配布なら新しいコードを指定する。`version_name`は利用者向けの表示名（例：`0.1.0`）。
+GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`を指定する。バージョンは`app/build.gradle.kts`の`versionCode`と`versionName`を使う。配布前に`versionCode`を1〜2100000000の範囲で、既にPlayにアップロードした全トラックの値より大きくする。新たな配布には新しいコードが必要。
 
 手動配布はテスト成功後に署名済みAABを生成し、`internal`トラックへ`completed`として送信する。ストア掲載情報・画像・変更履歴は更新しない。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
 
-ローカルでAABだけを生成する場合は、次の環境変数を秘密管理ツールなどから設定し、`build`を実行する。JSON鍵は`internal`のときだけ必要。
+ローカルでAABだけを生成する場合は、次の環境変数を秘密管理ツールなどから設定し、`build`を実行する。Gradleの`signingConfigs.release`が署名用の環境変数を直接読み取るため、秘密情報をGradleのコマンドライン引数には渡さない。JSON鍵は`internal`のときだけ必要。
 
 ```text
 ANDROID_KEYSTORE_PATH      アップロードkeystoreの絶対パス
@@ -61,19 +88,19 @@ SUPPLY_JSON_KEY_DATA       サービスアカウントJSON鍵（配布時のみ�
 ```
 
 ```sh
-bundle exec fastlane android build app:mosimo version_code:42 version_name:0.2.0
+bundle exec fastlane android build app:mosimo
 # テストからPlay内部配布まで実行する場合
-bundle exec fastlane android internal app:mosimo version_code:43 version_name:0.2.1
+bundle exec fastlane android internal app:mosimo
 ```
 
-生成先は`app/build/outputs/bundle/demoRelease/app-demo-release.aab`。初回導入時はAABのpackage ID・バージョン・署名証明書を登録済みの値と照合し、Play Consoleの内部テストへの反映を確認する。CI成功は実機のBLE通信・アプリ間相互運用の確認を意味しない。
+生成先は`app/build/outputs/bundle/release/app-release.aab`。初回導入時はAABのpackage ID・バージョン・署名証明書を登録済みの値と照合し、Play Consoleの内部テストへの反映を確認する。CI成功は実機のBLE通信・アプリ間相互運用の確認を意味しない。
 
 ### 別アプリを追加する場合
 
-`apps/android`は複数製品で共有するGradleルート。現在の`:app`は「もしもの防災」用とし、別製品は`:messenger`などのapplicationモジュールとして追加する。UI・applicationId・versionは製品ごとに分け、`:mesh-android`・`:bundle-core`を共有する。`demo`・`peer`・`verification`は既存アプリの試験用variantであり、別製品をflavorとして追加しない。
+`apps/android`は複数製品で共有するGradleルート。現在の`:app`は「もしもの防災」用とし、別製品は`:messenger`などのapplicationモジュールとして追加する。UI・applicationId・versionは製品ごとに分け、`:mesh-android`・`:bundle-core`を共有する。アプリは標準の`debug`・`release`のみを使い、別製品をflavorとして追加しない。
 
 1. 新モジュールを`settings.gradle.kts`へ登録し、既存共通ライブラリへの依存を設定する。
-2. `fastlane/Fastfile`の`ANDROID_APPS`へ識別名・`module`・`flavor`（flavorなしなら空文字）・Playの`package`を追加する。AABはAGP標準の出力名を使う。
+2. `fastlane/Fastfile`の`ANDROID_APPS`へ識別名をキーとして`module`・Playの`package`のみを追加する。flavorはサポートしない。AABはAGP標準の出力名を使う。
 3. `.github/workflows/android.yml`の`inputs.app.options`へ識別名を追加し、CIの`app:`指定もアプリ別matrixにする。
 4. `play-<識別名>`のEnvironmentに対象アプリのSecretsを登録する。Play掲載情報とバージョンコードはアプリごとに管理する。
 
@@ -81,10 +108,11 @@ bundle exec fastlane android internal app:mosimo version_code:43 version_name:0.
 
 ### 任意の試験用フィルタ
 
-Gradleに次のプロパティを渡すと隔離試験に使える。両方とも既定は空で、既存保存データは削除しない。
+Gradleに次のプロパティを渡すと隔離試験に使える。いずれも既定は空で、既存保存データは削除しない。
 
-- `-PmndtTestPeerNode=<16桁小文字hex>`：接続対象を指定nodeに制限する。
-- `-PmndtTestAuthor=<64桁Nostr公開鍵>`：広告・Bundle提供・オンライン搬出・代理登録を指定著者に制限する。
+- `-PmosimoTestPeerNode=<16桁小文字hex>`：接続対象を指定nodeに制限する。
+- `-PmosimoTestAuthor=<64桁Nostr公開鍵>`：広告・Bundle提供・オンライン搬出・代理登録を指定著者に制限する。受信・保存自体は制限しない。
+- `-PmosimoTestNode=<16桁小文字hex>`：自分のnode IDを固定する。未指定ならランダムに生成する。
 
 認証・本番アクセス制御の代替ではない。nodeはプロセスごとの一時値なので、現在のログで確認し、過去のallowlistを再利用しない。
 
@@ -189,7 +217,7 @@ Scope は各 Bot 最大32個の明示的 type、合計64 Bot/type（最大16 Bot
 ```sh
 env JAVA_HOME='C:/Program Files/Microsoft/jdk-21.0.6.7-hotspot' \
   ANDROID_HOME='C:/Users/chiba/AppData/Local/Android/Sdk' \
-  ./gradlew :bundle-core:test :mesh-android:testDebugUnitTest :app:assembleDemoDebug
+  ./gradlew :bundle-core:test :mesh-android:testDebugUnitTest :app:assembleDebug
 node ../esp32/test_bundle/generate_server_fixture.mjs --check --combined
 node wire-v1-fixture.mjs
 node bundle-core/src/test/fixtures/server-publisher-fixture.mjs

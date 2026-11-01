@@ -12,14 +12,7 @@ on:
         options: [mosimo]
         default: mosimo
         required: true
-      version_code:
-        description: Version code greater than all existing Play builds
-        type: string
-        required: true
-      version_name:
-        description: User-visible version (for example 0.1.0)
-        type: string
-        required: true
+
 
 permissions:
   contents: read
@@ -63,7 +56,7 @@ jobs:
         with:
           name: mosimo-ci-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            apps/android/app/build/outputs/apk/demo/debug/*.apk
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
@@ -90,8 +83,7 @@ jobs:
       - name: Test, sign, and distribute to Play internal testing
         env:
           RELEASE_APP: ${{ inputs.app }}
-          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
-          RELEASE_VERSION_NAME: ${{ inputs.version_name }}
+
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -109,15 +101,14 @@ jobs:
           export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/upload.keystore"
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          bundle exec fastlane android internal \
-            "app:$RELEASE_APP" "version_code:$RELEASE_VERSION_CODE" "version_name:$RELEASE_VERSION_NAME"
+          bundle exec fastlane android internal "app:$RELEASE_APP"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ inputs.app }}-internal-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            apps/android/**/build/outputs/bundle/*Release/*.aab
-            apps/android/**/build/outputs/apk/*/debug/*.apk
+            apps/android/**/build/outputs/bundle/release/*.aab
+            apps/android/**/build/outputs/apk/debug/*.apk
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/

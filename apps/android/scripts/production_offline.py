@@ -188,7 +188,7 @@ def prepare(state):
 
 
 def install(state):
-    apk = HERE / 'app/build/outputs/apk/demo/debug/app-demo-debug.apk'
+    apk = HERE / 'app/build/outputs/apk/debug/app-debug.apk'
     for label, info in state['devices'].items():
         assert not info['newPostRequested']
         adb(label, 'shell', 'am', 'force-stop', PACKAGE)

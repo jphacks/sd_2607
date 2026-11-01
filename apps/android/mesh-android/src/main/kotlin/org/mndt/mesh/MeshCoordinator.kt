@@ -77,14 +77,14 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var lastSync = 0L
     private val random = SecureRandom()
     private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
-    private val node = meshNode(metadata?.getString("mndt.test.node")) {
+    private val node = meshNode(metadata?.getString("mosimo.test.node")) {
         ByteArray(8).also(random::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
     }
     // Optional test isolation only: node IDs are ephemeral and are NOT peer authentication.
-    private val allowedPeerNode = metadata?.getString("mndt.test.peer.node")?.takeIf { it.isNotEmpty() }?.also {
+    private val allowedPeerNode = metadata?.getString("mosimo.test.peer.node")?.takeIf { it.isNotEmpty() }?.also {
         require(it.matches(Regex("[0-9a-f]{16}"))) { "Invalid test peer node" }
     }
-    private val allowedAuthor = metadata?.getString("mndt.test.author.pubkey")?.takeIf { it.isNotEmpty() }?.also {
+    private val allowedAuthor = metadata?.getString("mosimo.test.author.pubkey")?.takeIf { it.isNotEmpty() }?.also {
         require(it.matches(Regex("[0-9a-f]{64}"))) { "Invalid test author" }
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))

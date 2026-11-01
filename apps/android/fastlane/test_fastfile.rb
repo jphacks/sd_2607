@@ -41,7 +41,7 @@ class FastfileHarness
 end
 
 class FastfileTest < Minitest::Test
-  OPTIONS = { app: "mosimo", version_code: "42", version_name: "0.2.0" }.freeze
+  OPTIONS = { app: "mosimo" }.freeze
   ENV_KEYS = FastfileHarness::SIGNING_ENV + ["SUPPLY_JSON_KEY_DATA"]
 
   def setup
@@ -62,9 +62,10 @@ class FastfileTest < Minitest::Test
     assert_includes tasks, ":bundle-core:test"
     assert_includes tasks, ":dtn7-bpv7:test"
     assert_includes tasks, ":mesh-android:testDebugUnitTest"
-    assert_includes tasks, ":app:lintDemoDebug"
-    assert_includes tasks, ":app:assembleDemoDebug"
-    refute tasks.any? { |task| task.include?("Verification") }
+    assert_includes tasks, ":app:testDebugUnitTest"
+    assert_includes tasks, ":app:lintDebug"
+    assert_includes tasks, ":app:assembleDebug"
+    refute tasks.any? { |task| task.match?(/Demo|Peer|Verification/) }
   end
 
   def test_unknown_app_cannot_build_or_upload
@@ -72,13 +73,19 @@ class FastfileTest < Minitest::Test
     assert_empty @runner.calls
   end
 
-  def test_invalid_versions_fail_before_gradle
-    [nil, "", "0", "-1", "1.5", "1; echo bad", "2100000001"].each do |code|
-      assert_raises(ArgumentError) { @runner.build(OPTIONS.merge(version_code: code)) }
+  def test_version_overrides_are_rejected_before_gradle
+    [{ version_code: "42" }, { version_name: "0.2.0" }].each do |version|
+      assert_raises(ArgumentError) { @runner.build(OPTIONS.merge(version)) }
+      assert_raises(ArgumentError) { @runner.internal(OPTIONS.merge(version)) }
     end
-    assert_raises(ArgumentError) { @runner.build(OPTIONS.merge(version_name: "  ")) }
     assert_empty @runner.calls
   end
+
+  def test_build_uses_gradle_versions_when_no_overrides_are_given
+    File.stub(:file?, true) { @runner.build(app: "mosimo") }
+    refute @runner.calls.fetch(0).last.key?(:properties)
+  end
+
 
   def test_every_signing_value_is_required
     FastfileHarness::SIGNING_ENV.each do |key|
@@ -108,12 +115,10 @@ class FastfileTest < Minitest::Test
     File.stub(:file?, true) { @runner.internal(OPTIONS) }
     assert_equal [:gradle, :gradle, :upload], @runner.calls.map(&:first)
     build = @runner.calls[1].last
-    assert_equal ":app:bundleDemoRelease", build.fetch(:task)
+    assert_equal ":app:bundleRelease", build.fetch(:task)
     assert_equal false, build.fetch(:print_command)
     assert_equal false, build.fetch(:print_command_output)
-    assert_equal 42, build.fetch(:properties).fetch("android.injected.version.code")
-    assert_equal "0.2.0", build.fetch(:properties).fetch("android.injected.version.name")
-    assert_equal ENV.fetch("ANDROID_KEYSTORE_PATH"), build.fetch(:properties).fetch("android.injected.signing.store.file")
+    refute build.key?(:properties), "Signing secrets and version overrides must not be passed as command-line properties"
     upload = @runner.calls.last.last
     assert_equal "dev.oriom.mosimo", upload.fetch(:package_name)
     assert_equal "internal", upload.fetch(:track)
@@ -132,9 +137,9 @@ class FastfileTest < Minitest::Test
     assert_equal [:gradle], @runner.calls.map(&:first)
   end
 
-  def test_second_app_without_flavors_uses_its_own_tasks_and_package
+  def test_second_app_uses_its_own_tasks_and_package
     @runner.define_singleton_method(:android_app!) do |_options|
-      { module: "messenger", flavor: "", package: "test.messenger" }
+      { module: "messenger", package: "test.messenger" }
     end
     File.stub(:file?, true) { @runner.internal(OPTIONS) }
     assert_includes @runner.calls[0].last.fetch(:tasks), ":messenger:assembleDebug"

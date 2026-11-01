@@ -4,33 +4,30 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 android {
-    namespace = "org.mndt.app"
+    namespace = "dev.oriom.mosimo"
     compileSdk = 36
     defaultConfig {
-        applicationId = "org.mndt.demo"
+        applicationId = "dev.oriom.mosimo"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("android.injected.version.code").orElse("1").get().toInt()
-        versionName = providers.gradleProperty("android.injected.version.name").orElse("0.1.0-experimental").get()
-        manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
-        manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
-        manifestPlaceholders["mndtTestNode"] = providers.gradleProperty("mndtTestNode").orElse("").get()
+        versionCode = 1
+        versionName = "0.1.0"
+        manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
+        manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
+        manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
     }
-    flavorDimensions += "demo"
-    productFlavors {
-        create("demo") {
-            dimension = "demo"
-            applicationId = "dev.oriom.mosimo"
+
+    signingConfigs {
+        create("release") {
+            storeFile = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull?.let { file(it) }
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
         }
-        create("peer") {
-            dimension = "demo"
-            applicationIdSuffix = ".peer"
-            versionNameSuffix = "-peer"
-        }
-        create("verification") {
-            dimension = "demo"
-            applicationId = "org.mndt.demo.verification"
-            versionNameSuffix = "-verification"
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     buildFeatures { compose = true }
