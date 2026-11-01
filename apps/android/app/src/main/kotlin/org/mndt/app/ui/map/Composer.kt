@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import org.mndt.app.ui.post.Category
 import org.mndt.app.ui.theme.Mosimo
@@ -30,7 +31,7 @@ private const val MAX_DETAIL = 140
 fun Composer(vm: MapViewModel, fix: Location?, address: String?, online: Boolean, onPick: () -> Unit) {
     val point = vm.picked ?: fix?.let { it.latitude to it.longitude }
     val fromFix = vm.picked == null && fix != null
-    ModalBottomSheet({ vm.composing = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Mosimo.bgSurface) {
+    MapSheet({ vm.composing = false }, rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("状況を伝える", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
@@ -101,6 +102,24 @@ fun Composer(vm: MapViewModel, fix: Location?, address: String?, online: Boolean
         }
     }
 }
+
+/**
+ * ModalBottomSheet whose height never depends on its own offset. The default contentWindowInsets pad the top by
+ * (status bar − offset), so a sheet tall enough to reach the status bar grows as it rises, which moves the Expanded
+ * anchor, which restarts the settle animation: an endless bounce on some screens. Bottom-only insets plus a cap that
+ * keeps the sheet below the status bar break that loop; overflow scrolls inside the content.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MapSheet(onDismiss: () -> Unit, sheetState: SheetState = rememberModalBottomSheetState(), content: @Composable ColumnScope.() -> Unit) =
+    ModalBottomSheet(onDismiss, sheetState = sheetState, containerColor = Mosimo.bgSurface,
+        contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) }) {
+        val top = WindowInsets.safeDrawing
+        Column(Modifier.fillMaxWidth().layout { m, c ->
+            val p = m.measure(if (c.hasBoundedHeight) c.copy(maxHeight = (c.maxHeight - top.getTop(this)).coerceAtLeast(c.minHeight)) else c)
+            layout(p.width, p.height) { p.place(0, 0) }
+        }, content = content)
+    }
 
 @Composable
 private fun Label(text: String) = Text(text, style = MaterialTheme.typography.titleMedium, color = Mosimo.textSecondary)

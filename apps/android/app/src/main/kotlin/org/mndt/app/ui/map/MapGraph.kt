@@ -104,6 +104,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         }.orEmpty())
     }
     val map = handle.map
+    LaunchedEffect(map) { if (map != null) snapshotFlow { handle.tick.intValue }.collect { vm.camera = map.cameraPosition } }
     LaunchedEffect(map, fix != null) {
         val f = fix ?: return@LaunchedEffect
         if (map != null && !vm.centered) { vm.centered = true; handle.moveTo(f.latitude, f.longitude, 14.0) }
@@ -133,12 +134,9 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     BackHandler(vm.picking) { endPick(false) }
 
     Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
-        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize())
+        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
         if (map != null) Box(Modifier.fillMaxSize()) {
-            shown.forEach { p ->
-                val (lat, lng) = p.latLng() ?: return@forEach
-                key(p.id) { Pin(p, Modifier.at(handle, lat, lng, anchorY = 16.dp)) { vm.selected = p.id } }
-            }
+            Pins(handle, shown) { vm.selected = it }
             if (vm.composing) point?.let { (lat, lng) ->
                 Text("この位置に投稿されます", Modifier.at(handle, lat, lng).padding(bottom = 14.dp).clip(RoundedCornerShape(8.dp))
                     .background(Mosimo.bgBase.copy(alpha = 0.85f)).border(1.dp, Mosimo.info, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -186,7 +184,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
 
     if (vm.composing) Composer(vm, fix, address, state.network && state.onlineActive, ::pick)
     selected?.let { post ->
-        ModalBottomSheet({ vm.selected = null }, containerColor = Mosimo.bgSurface) {
+        MapSheet({ vm.selected = null }) {
             PostDetail(post, Modifier.padding(horizontal = 16.dp), onShowOnMap = null)
         }
     }
@@ -291,7 +289,7 @@ private fun icon(c: Category?): ImageVector = when (c) {
 
 /** Icon circle in the category colour over a dark label pill (Figma 5:233); the icon centre (16dp) is the anchor. */
 @Composable
-private fun Pin(post: PostView, modifier: Modifier, onClick: () -> Unit) {
+fun Pin(post: PostView, modifier: Modifier, onClick: () -> Unit) {
     val c = post.category()
     val color = c?.color ?: Mosimo.info
     val label = post.body().lineSequence().first().trim().let { if (it.length > 10) it.take(10) + "…" else it }.ifEmpty { c?.label.orEmpty() }

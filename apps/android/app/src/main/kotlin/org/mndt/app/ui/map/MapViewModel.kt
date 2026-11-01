@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
+import org.maplibre.android.camera.CameraPosition
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.post.Category
 import org.mndt.mesh.Extensions
@@ -31,6 +32,8 @@ class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepo
     var selected by mutableStateOf<String?>(null)
     var handledFocus: String? = null
     var centered = false
+    /** Last camera, restored when the MapView is recreated (tab switch). */
+    var camera: CameraPosition? = null
 
     var composing by mutableStateOf(false)
     var picking by mutableStateOf(false)

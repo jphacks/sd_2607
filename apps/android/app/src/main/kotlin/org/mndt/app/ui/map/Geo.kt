@@ -1,5 +1,7 @@
 package org.mndt.app.ui.map
 
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.asin
@@ -57,3 +59,24 @@ fun polygonFeature(ring: List<Pair<Double, Double>>, color: String) =
 fun pointFeature(lat: Double, lng: Double) = """{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[$lng,$lat]}}"""
 
 fun featureCollection(features: List<String>) = """{"type":"FeatureCollection","features":[${features.joinToString(",")}]}"""
+
+private val DIRS = listOf(0 to -1, 1 to 0, 0 to 1, -1 to 0, 1 to -1, 1 to 1, -1 to 1, -1 to -1)
+
+/**
+ * Greedy screen-space declutter in list order (earlier rects win their true spot). Each rect keeps its place or takes the
+ * first offset on rings of half its own size (8 directions, [rings] rings) that clears every placed rect by [gap].
+ * Returns the shift per rect.
+ */
+// ponytail: O(n²·candidates), fine for a few hundred pins; switch to clustering if counts grow.
+fun declutter(rects: List<IntRect>, gap: Int, rings: Int = 4): List<IntOffset> {
+    val placed = ArrayList<IntRect>(rects.size)
+    return rects.map { r ->
+        val sx = (r.width + gap) / 2
+        val sy = (r.height + gap) / 2
+        val candidates = listOf(IntOffset.Zero) + (1..rings).flatMap { i -> DIRS.map { (dx, dy) -> IntOffset(dx * i * sx, dy * i * sy) } }
+        // ponytail: a cluster denser than the outer ring overlaps there; clustering is the fix if that shows up.
+        val shift = candidates.firstOrNull { o -> r.translate(o).inflate(gap).let { c -> placed.none { it.overlaps(c) } } } ?: candidates.last()
+        placed += r.translate(shift)
+        shift
+    }
+}

@@ -84,7 +84,7 @@ fun Modifier.at(handle: MapHandle, lat: Double, lng: Double, anchorY: Dp? = null
 }
 
 @Composable
-fun MapLibreView(handle: MapHandle, regions: String, me: String, onClick: (Double, Double) -> Unit, modifier: Modifier = Modifier) {
+fun MapLibreView(handle: MapHandle, regions: String, me: String, onClick: (Double, Double) -> Unit, modifier: Modifier = Modifier, camera: CameraPosition? = null) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val click by rememberUpdatedState(onClick)
@@ -120,7 +120,7 @@ fun MapLibreView(handle: MapHandle, regions: String, me: String, onClick: (Doubl
     LaunchedEffect(view) {
         view.getMapAsync { m ->
             m.uiSettings.apply { isLogoEnabled = false; isAttributionEnabled = false; isRotateGesturesEnabled = false; isTiltGesturesEnabled = false }
-            m.cameraPosition = CameraPosition.Builder().target(LatLng(36.5, 138.0)).zoom(5.0).build()
+            m.cameraPosition = camera ?: CameraPosition.Builder().target(LatLng(36.5, 138.0)).zoom(5.0).build()
             m.addOnCameraMoveListener { handle.tick.intValue++ }
             m.addOnCameraIdleListener { handle.tick.intValue++ }
             m.addOnMapClickListener { click(it.latitude, it.longitude); true }
