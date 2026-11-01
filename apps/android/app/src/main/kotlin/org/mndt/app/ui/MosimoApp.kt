@@ -52,8 +52,13 @@ fun MosimoApp() {
     val nav = rememberNavController()
     val route = nav.currentBackStackEntryAsState().value?.destination?.route
     FirstLaunchPermissions()
+    val mesh = koinInject<MeshCoordinator>()
+    val error = mesh.state.collectAsStateWithLifecycle().value.error
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(error) { if (error != null) { snackbar.showSnackbar(error); mesh.clearError() } }
     Scaffold(
         containerColor = Mosimo.bgBase,
+        snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = { if (route in tabs) BottomBar(route, nav) },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding)) {

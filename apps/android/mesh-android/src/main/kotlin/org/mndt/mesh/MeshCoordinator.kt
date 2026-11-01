@@ -50,7 +50,9 @@ data class MeshState(
     val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
     val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true,
     val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList(),
-    val blockedDids: List<String> = emptyList()
+    val blockedDids: List<String> = emptyList(),
+    /** Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh. */
+    val lastReceivedAtMillis: Long? = null, val lastReceivedOnline: Boolean = false,
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
