@@ -14,8 +14,12 @@ internal val json = ObjectMapper(JsonFactory.builder()
     .streamReadConstraints(StreamReadConstraints.builder().maxNestingDepth(32).maxStringLength(8_000_000).build())
     .build()).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
 
-/** Contact control message (mndt §3). [node]/[max] are HELLO capability fields; [ids] are Nostr event IDs. */
-internal data class Control(val type: String, val ids: List<String> = emptyList(), val node: String = "", val max: Int = 0)
+/**
+ * Contact control message (mndt §3). [node]/[max]/[didCap] are HELLO capability fields; [ids] are Nostr event IDs.
+ * [dids] is an optional inventory hint parallel to [ids] (author DID or ""), unverified.
+ */
+internal data class Control(val type: String, val ids: List<String> = emptyList(), val node: String = "", val max: Int = 0,
+    val dids: List<String> = emptyList(), val didCap: Boolean = false)
 
 /** Lab-only node override; normal installs keep per-process randomness. Not an identity or authentication. */
 internal fun meshNode(configured: String?, randomNode: () -> String): String =
@@ -55,10 +59,12 @@ internal object Wire {
     const val MAX_BYTES = 32768
     private val idPattern = Regex("[0-9a-f]{64}")
     private val nodePattern = Regex("[0-9a-f]{16}")
+    private val didPattern = Regex("did:plc:[a-z2-7]{24}")
     fun encode(control: Control): ByteArray {
         val root = json.createObjectNode().put("v", 1).put("type", control.type)
-        if (control.type == "hello") root.put("node", control.node).put("max", control.max)
+        if (control.type == "hello") root.put("node", control.node).put("max", control.max).put("dids", 1)
         else root.putArray("ids").also { a -> control.ids.forEach(a::add) }
+        if (control.dids.isNotEmpty()) root.putArray("dids").also { a -> control.dids.forEach(a::add) }
         return json.writeValueAsBytes(root).also { decode(it) }
     }
     fun decode(bytes: ByteArray): Control {
@@ -72,15 +78,21 @@ internal object Wire {
             val id = node["node"]?.textValue()
             val max = node["max"]
             require(id != null && nodePattern.matches(id) && max != null && max.isIntegralNumber && max.canConvertToInt() && max.intValue() in 1..MAX_BYTES)
-            return Control(type, node = id, max = max.intValue())
+            val dids = node["dids"]
+            return Control(type, node = id, max = max.intValue(), didCap = dids != null && dids.isIntegralNumber && dids.canConvertToInt() && dids.intValue() == 1)
         }
-        require(node.fieldNames().asSequence().toSet() == setOf("v", "type", "ids"))
+        val fields = node.fieldNames().asSequence().toSet()
+        require(fields == setOf("v", "type", "ids") || type == "inventory" && fields == setOf("v", "type", "ids", "dids"))
         val ids = node["ids"]
         require(ids != null && ids.isArray && ids.size() <= 128)
         val values = ids.map { require(it.isTextual && idPattern.matches(it.textValue())); it.textValue() }
         require(values.distinct().size == values.size)
         require(type != "ack" || values.size == 1)
-        return Control(type!!, values)
+        val dids = node["dids"]?.let { array ->
+            require(array.isArray && array.size() == values.size)
+            array.map { require(it.isTextual && (it.textValue().isEmpty() || didPattern.matches(it.textValue()))); it.textValue() }
+        }.orEmpty()
+        return Control(type!!, values, dids = dids)
     }
 }
 

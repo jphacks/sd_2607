@@ -143,6 +143,9 @@ object AtRepository {
         return change
     }
 
+    /** Author DID from the commit; null for non-post events (e.g. PLC genesis), which are never blocked. */
+    fun did(event: NostrEvent): String? = runCatching { (CanonicalCbor.decode(restore(event).commitBytes) as Map<*, *>)["did"] as String }.getOrNull()
+
     private fun field(event: NostrEvent, name: String): String =
         event.tags.single { it.firstOrNull() == TAG_PREFIX + name }.also { require(it.size == 2) }[1]
     private fun timestampTag(event: NostrEvent, name: String): String =

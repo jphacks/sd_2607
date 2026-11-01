@@ -12,9 +12,72 @@ apps/android/gradlew -p apps/android \
   :app:assembleDemoDebug :app:assemblePeerDebug
 ```
 
-APKは `apps/android/app/build/outputs/apk/{demo,peer}/debug/` に生成される。`demo`（`org.mndt.demo`）と `peer`（`org.mndt.demo.peer`）は別の鍵・保存領域を持つ。
+APKは `apps/android/app/build/outputs/apk/{demo,peer}/debug/` に生成される。`demo`（`dev.oriom.mosimo`）と `peer`（`org.mndt.demo.peer`）は別の鍵・保存領域を持つ。旧Demoの`org.mndt.demo`とも別インストールとなり、既存の鍵・DID・投稿は自動移行しない。
 
 公開ネットワーク試験用のビルドは `:app:assembleVerificationDebug`（`org.mndt.demo.verification`）。実PLC登録・公開投稿を伴う試験に使うため、通常のローカルテストとして実行しない。実行条件は [公開ネットワーク検証報告](../../docs/android-production-verification-2026-10-18.md) を参照。
+
+## Fastlane CI/CD・Google Play内部テスト
+
+Rubyは`.ruby-version`（4.0.7）、Bundlerは`Gemfile.lock`の`BUNDLED WITH`に合わせる（CIも同じファイルを読む）。以下は`apps/android`から実行する。
+
+```sh
+bundle install
+bundle exec ruby fastlane/test_fastfile.rb
+bundle exec fastlane android ci app:mosimo
+```
+
+CIはPRと`main`へのpushで単体テスト・lint・debug APKビルドを実行し、APKとレポートをActions Artifactsへ保存する。実機試験・PLC登録・公開投稿は実行しない。
+
+### 署名と配布
+
+Play Consoleの`dev.oriom.mosimo`に初回AABが登録済みで、Android Publisher APIが有効、サービスアカウントに対象アプリのテストトラックへのリリース権限があることを確認する。署名には、Playへ登録した既存の**アップロード鍵**を使う。
+
+GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnvironment Secretsを登録する。
+
+| Secret | 値 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | アップロードkeystoreのBase64文字列 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystoreのパスワード |
+| `ANDROID_KEY_ALIAS` | アップロード鍵のalias |
+| `ANDROID_KEY_PASSWORD` | 鍵のパスワード |
+| `SUPPLY_JSON_KEY_DATA` | サービスアカウントJSON鍵の全文 |
+
+同じEnvironmentの**Deployment branches and tags**を`Selected branches and tags`にし、`main`だけを許可する。これで`main`以外のrefから実行した配布ジョブはSecretを読む前に拒否される。
+
+認証ファイルをローカルに置く場合は、Git管理対象外の`fastlane/credentials/`を使う。秘密情報をコマンド引数や追跡対象ファイルに書かない。keystoreファイルもGit管理対象外とする。
+
+GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`・`version_code`・`version_name`を指定する。`version_code`は1〜2100000000の整数で、既にPlayにアップロードした全トラックの値より大きくする。再実行も新たな配布なら新しいコードを指定する。`version_name`は利用者向けの表示名（例：`0.1.0`）。
+
+手動配布はテスト成功後に署名済みAABを生成し、`internal`トラックへ`completed`として送信する。ストア掲載情報・画像・変更履歴は更新しない。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
+
+ローカルでAABだけを生成する場合は、次の環境変数を秘密管理ツールなどから設定し、`build`を実行する。JSON鍵は`internal`のときだけ必要。
+
+```text
+ANDROID_KEYSTORE_PATH      アップロードkeystoreの絶対パス
+ANDROID_KEYSTORE_PASSWORD  keystoreのパスワード
+ANDROID_KEY_ALIAS          鍵alias
+ANDROID_KEY_PASSWORD       鍵のパスワード
+SUPPLY_JSON_KEY_DATA       サービスアカウントJSON鍵（配布時のみ）
+```
+
+```sh
+bundle exec fastlane android build app:mosimo version_code:42 version_name:0.2.0
+# テストからPlay内部配布まで実行する場合
+bundle exec fastlane android internal app:mosimo version_code:43 version_name:0.2.1
+```
+
+生成先は`app/build/outputs/bundle/demoRelease/app-demo-release.aab`。初回導入時はAABのpackage ID・バージョン・署名証明書を登録済みの値と照合し、Play Consoleの内部テストへの反映を確認する。CI成功は実機のBLE通信・アプリ間相互運用の確認を意味しない。
+
+### 別アプリを追加する場合
+
+`apps/android`は複数製品で共有するGradleルート。現在の`:app`は「もしもの防災」用とし、別製品は`:messenger`などのapplicationモジュールとして追加する。UI・applicationId・versionは製品ごとに分け、`:mesh-android`・`:bundle-core`を共有する。`demo`・`peer`・`verification`は既存アプリの試験用variantであり、別製品をflavorとして追加しない。
+
+1. 新モジュールを`settings.gradle.kts`へ登録し、既存共通ライブラリへの依存を設定する。
+2. `fastlane/Fastfile`の`ANDROID_APPS`へ識別名・`module`・`flavor`（flavorなしなら空文字）・Playの`package`を追加する。AABはAGP標準の出力名を使う。
+3. `.github/workflows/android.yml`の`inputs.app.options`へ識別名を追加し、CIの`app:`指定もアプリ別matrixにする。
+4. `play-<識別名>`のEnvironmentに対象アプリのSecretsを登録する。Play掲載情報とバージョンコードはアプリごとに管理する。
+
+参考：[Fastlane Gradle action](https://docs.fastlane.tools/actions/gradle/) / [Play配布](https://docs.fastlane.tools/actions/upload_to_play_store/)
 
 ### 任意の試験用フィルタ
 

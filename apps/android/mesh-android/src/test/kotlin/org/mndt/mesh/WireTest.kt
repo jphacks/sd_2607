@@ -25,9 +25,9 @@ class WireTest {
     }
 
     @Test fun helloCarriesCapabilitiesAndControlsAreBounded() {
-        val hello = Control("hello", node = "0123456789abcdef", max = 24_000)
+        val hello = Control("hello", node = "0123456789abcdef", max = 24_000, didCap = true)
         assertEquals(hello, Wire.decode(Wire.encode(hello)))
-        assertEquals(hello, Wire.decode("{\"v\":1,\"type\":\"hello\",\"node\":\"0123456789abcdef\",\"max\":24000,\"future\":true}".toByteArray()))
+        assertEquals(hello.copy(didCap = false), Wire.decode("{\"v\":1,\"type\":\"hello\",\"node\":\"0123456789abcdef\",\"max\":24000,\"future\":true}".toByteArray()))
         val id = "a".repeat(64)
         assertEquals(listOf(id), Wire.decode(Wire.encode(Control("inventory", listOf(id)))).ids)
         listOf(
@@ -46,15 +46,33 @@ class WireTest {
         assertTrue(runCatching { Wire.encode(Control("inventory", List(129) { id })) }.isFailure)
     }
 
+    @Test fun inventoryMayCarryParallelAuthorDidHints() {
+        val ids = listOf("a".repeat(64), "b".repeat(64))
+        val did = "did:plc:" + "a2".repeat(12)
+        val hinted = Control("inventory", ids, dids = listOf(did, ""))
+        assertEquals(hinted, Wire.decode(Wire.encode(hinted)))
+        assertFalse(json.readTree(Wire.encode(Control("inventory", ids))).has("dids"))
+        assertEquals(Control("inventory", ids), Wire.decode(Wire.encode(Control("inventory", ids))))
+        val idsJson = ids.joinToString(",") { "\"$it\"" }
+        listOf(
+            "{\"v\":1,\"type\":\"inventory\",\"ids\":[$idsJson],\"dids\":[\"$did\"]}",
+            "{\"v\":1,\"type\":\"inventory\",\"ids\":[$idsJson],\"dids\":[\"$did\",\"did:plc:short\"]}",
+            "{\"v\":1,\"type\":\"inventory\",\"ids\":[$idsJson],\"dids\":[\"$did\",1]}",
+            "{\"v\":1,\"type\":\"inventory\",\"ids\":[$idsJson],\"dids\":\"$did\"}",
+            "{\"v\":1,\"type\":\"want\",\"ids\":[$idsJson],\"dids\":[\"$did\",\"\"]}",
+            "{\"v\":1,\"type\":\"ack\",\"ids\":[\"${ids[0]}\"],\"dids\":[\"$did\"]}",
+        ).forEach { bad -> assertTrue(bad, runCatching { Wire.decode(bad.toByteArray()) }.isFailure) }
+    }
+
     @Test fun observedHardwareNodeHellosHaveExactJsonAndSurviveEveryGattChunkSize() {
         for (node in listOf("707b1f7b29e16363", "07a6b6ee338d7419")) {
             val bytes = Wire.encode(Control("hello", node = node, max = 24_000))
-            val expected = "{\"v\":1,\"type\":\"hello\",\"node\":\"$node\",\"max\":24000}"
+            val expected = "{\"v\":1,\"type\":\"hello\",\"node\":\"$node\",\"max\":24000,\"dids\":1}"
             assertEquals(expected, bytes.toString(Charsets.UTF_8))
-            assertEquals(60, bytes.size)
+            assertEquals(69, bytes.size)
             val framed = Frames.encode(bytes)
-            assertArrayEquals(byteArrayOf(0, 0, 0, 60), framed.copyOf(4))
-            for (chunkSize in 1..64) {
+            assertArrayEquals(byteArrayOf(0, 0, 0, 69), framed.copyOf(4))
+            for (chunkSize in 1..73) {
                 val reader = FrameReader()
                 val decoded = framed.toList().chunked(chunkSize).flatMap { reader.feed(it.toByteArray()) }
                 assertEquals(1, decoded.size)

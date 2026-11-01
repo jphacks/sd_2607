@@ -159,4 +159,20 @@ class MeshEngineTest {
         assertEquals(MeshPolicy.MAX_ENTRIES, a.entries().size)
         assertFalse("oldest live entry goes next", a.entries().any { it.event.id == events[0].id })
     }
+
+    @Test fun blockedAuthorIsRefusedBeforeEvictionAndCanBePurged() {
+        val engine = MeshEngine()
+        val authors = List(MeshPolicy.MAX_ENTRIES) { Author(SecretKeys.generate(), "https://pds.invalid") }
+        authors.forEach { engine.originate(it.createPost("p", now).event, now, 0) }
+        val before = engine.entries()
+        assertEquals(authors[3].did, before[3].did)
+        val blocked = post()
+        val bytes = MeshEngine().originate(blocked, now, 0).bytes
+        engine.admit = { AtRepository.did(it) != author.did }
+        assertEquals(blocked.id, assertThrows(BlockedAuthor::class.java) { engine.accept(bytes, now, 0) }.id)
+        assertEquals("a blocked bundle never evicts a stored one", before, engine.entries())
+        assertTrue(engine.remove { it.did == authors[0].did })
+        assertFalse(engine.remove { it.did == author.did })
+        assertEquals(MeshPolicy.MAX_ENTRIES - 1, engine.entries().size)
+    }
 }
