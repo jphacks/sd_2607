@@ -12,7 +12,7 @@ SOURCE = "T4AIOC732121JRB"
 GATEWAY = "4f4ebc6f"
 PACKAGE = "org.mndt.demo.peer"
 TARGET = "f44162129aa31843a58af01310d78b61fba6505d23aeed2590ad1862ac2f4c8f"
-OUT = Path(__file__).with_name("hardware-two-phone-f441.json")
+OUT = Path(__file__).resolve().parent.parent / "evidence/hardware-two-phone-f441.json"
 
 
 def adb(serial, *args):

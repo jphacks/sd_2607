@@ -30,7 +30,7 @@ try {
     commitCid: decoded.commitCid.toString(), rev: decoded.commit.rev,
     nostrSignatureVerified: true, base: null,
   };
-  writeFileSync(new URL('./hardware-f441-public-event.json', import.meta.url), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx' });
+  writeFileSync(new URL('./evidence/hardware-f441-public-event.json', import.meta.url), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx' });
   console.log(JSON.stringify({ ...evidence, event: { id: event.id, pubkey, content } }, null, 2));
 } finally {
   clearTimeout(timer);

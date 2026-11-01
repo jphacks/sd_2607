@@ -1,9 +1,5 @@
-**/.gradle/
-**/.kotlin/
-**/build/
-**/local.properties
-*.hprof
 .DS_Store
+
 apps/android/**/__pycache__/
 
 # Android release credentials and generated Fastlane files

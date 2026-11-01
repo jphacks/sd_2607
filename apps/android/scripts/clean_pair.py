@@ -13,9 +13,10 @@ from pathlib import Path
 
 from two_phone_verify import adb, click as visible_click, texts, SOURCE, GATEWAY, PACKAGE, ADB
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 ROOT = HERE.parents[1]
-STATE = HERE / "hardware-clean-pair.json"
+EVIDENCE = HERE / "evidence"
+STATE = EVIDENCE / "hardware-clean-pair.json"
 SOURCE_NODE = "c047ef246330f71e"
 GATEWAY_NODE = "1047f1d5e2cd2f66"
 AUTHOR = "3503d6e4193c79c955f57704322b47a92bd7a78d5d8d3be971c6ba65021cc818"
@@ -229,7 +230,7 @@ def publish(state):
 
 
 def upload(state):
-    checkpoint = json.loads((HERE / "hardware-clean-before-upload.json").read_text(encoding="utf-8"))
+    checkpoint = json.loads((EVIDENCE / "hardware-clean-before-upload.json").read_text(encoding="utf-8"))
     assert checkpoint["absent"] and checkpoint["eventId"] == state["eventId"]
     offline(state)
     assert network(GATEWAY)["physicalValidated"]

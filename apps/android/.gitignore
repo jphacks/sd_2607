@@ -1,0 +1,12 @@
+# Android build outputs and local configuration
+.gradle/
+.kotlin/
+build/
+local.properties
+*.hprof
+__pycache__/
+
+# Signing credentials
+*.jks
+*.keystore
+/key.properties

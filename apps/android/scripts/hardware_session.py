@@ -16,7 +16,7 @@ import serial
 
 ADB = "C:/Users/chiba/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 TARGET = "77588a3c"
-OUTPUT = Path(__file__).with_name("hardware-BLE1328-serial.json")
+OUTPUT = Path(__file__).resolve().parent.parent / "evidence/hardware-BLE1328-serial.json"
 
 
 def adb(*args):
@@ -45,7 +45,7 @@ def main():
         parser.error("target must be 8-64 lowercase hex")
     source = "org.mndt.demo.peer" if args.source == "peer" else "dev.oriom.mosimo"
     receiver = "org.mndt.demo.peer" if args.source == "demo" else "dev.oriom.mosimo"
-    output_path = Path(__file__).with_name(args.output)
+    output_path = OUTPUT.with_name(args.output)
     if output_path.exists():
         raise RuntimeError("Refusing to overwrite evidence")
     records = []
@@ -67,7 +67,7 @@ def main():
         port.open()  # DTR/RTS are configured before open; no reset/provisioning operation.
         record("action", "COM3 opened without asserting DTR/RTS")
         if args.apply_peer_filter:
-            nodes = json.loads(Path(__file__).with_name("hardware-current-nodes.json").read_text())["nodes"]
+            nodes = json.loads(OUTPUT.with_name("hardware-current-nodes.json").read_text())["nodes"]
             for package, identity in nodes.items():
                 if adb("shell", "pidof", package).strip() != identity["pid"]:
                     raise RuntimeError("Node ledger process changed")

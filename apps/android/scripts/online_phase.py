@@ -12,7 +12,7 @@ from pathlib import Path
 
 from hardware_session import adb, click
 
-OUTPUT = Path(__file__).with_name("hardware-f441-direct-online.json")
+OUTPUT = Path(__file__).resolve().parent.parent / "evidence/hardware-f441-direct-online.json"
 PREFIX = "f44162129aa3"
 
 
@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output", default=OUTPUT.name)
     args = parser.parse_args()
-    output_path = Path(__file__).with_name(args.output)
+    output_path = OUTPUT.with_name(args.output)
     if output_path.exists():
         raise RuntimeError("Refusing to overwrite evidence")
     baseline = {k: adb("shell", "settings", "get", "global", k).strip()
