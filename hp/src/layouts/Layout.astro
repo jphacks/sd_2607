@@ -1,4 +1,6 @@
 ---
+import { SEO } from 'astro-seo';
+import { GoogleAnalytics } from 'astro-analytics';
 import '../styles/global.scss';
 
 interface Props {
@@ -18,18 +20,18 @@ const imageUrl = new URL(image, Astro.site);
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{pageTitle}</title>
-    <meta name="description" content={description} />
-    <link rel="canonical" href={canonical} />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content={pageTitle} />
-    <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
-    <meta property="og:site_name" content="Mosimo Protocol" />
-    <meta property="og:locale" content="ja_JP" />
-    <meta property="og:image" content={imageUrl} />
-    <meta property="og:image:alt" content={imageAlt} />
-    <meta name="twitter:card" content="summary_large_image" />
+    <SEO
+      title={pageTitle}
+      description={description}
+      canonical={canonical}
+      openGraph={{
+        basic: { title: pageTitle, type: 'website', image: imageUrl.href, url: canonical },
+        optional: { description, siteName: 'Mosimo Protocol', locale: 'ja_JP' },
+        image: { alt: imageAlt },
+      }}
+      twitter={{ card: 'summary_large_image' }}
+    />
+    {import.meta.env.PROD && <GoogleAnalytics id="G-MX2ERBGC2W" />}
   </head>
   <body>
     <a class="skip-link" href="#content">本文へスキップ</a>
