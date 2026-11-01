@@ -1,0 +1,21 @@
+{
+  "name": "mosimo-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.4.3",
+    "astro": "^7.4.4",
+    "sass": "^1.89.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}

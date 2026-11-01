@@ -1,0 +1,51 @@
+---
+import '../styles/global.scss';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'Mosimo Protocolのリファレンス実装「もしもの防災」について。' } = Astro.props;
+const pageTitle = title === 'Mosimo Protocol' ? title : `${title} | Mosimo Protocol`;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+  </head>
+  <body>
+    <a class="skip-link" href="#content">本文へスキップ</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-brand" href="/" aria-label="Mosimo Protocol ホーム">MOSIMO<br />PROTOCOL</a>
+        <nav aria-label="メインナビゲーション">
+          <a href="/reference/mobile">もしもの防災</a>
+          <a href="https://github.com/jphacks/sd_2607">GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
+    </header>
+    <div id="content"><slot /></div>
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div><a class="footer-brand" href="/">MOSIMO PROTOCOL</a><p>災害時の情報共有のための共通プロトコル</p></div>
+        <nav aria-label="フッターナビゲーション">
+          <a href="/reference/mobile">もしもの防災</a>
+          <a href="/reference/mobile/policy">プライバシーポリシー</a>
+          <a href="https://github.com/jphacks/sd_2607">GitHub ↗</a>
+          <a href="https://jisaku.dev">Team JISAKU ↗</a>
+        </nav>
+      </div>
+      <div class="site-footer-bottom">© Team JISAKU <a href="#">ページの先頭へ ↑</a></div>
+    </footer>
+  </body>
+</html>

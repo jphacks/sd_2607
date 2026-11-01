@@ -1,0 +1,289 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+---
+
+<Layout
+  title="もしもの防災"
+  description="圏外でも公開テキストを作成し、近くの端末へ中継する Mosimo Android デモアプリを紹介します。"
+>
+  <main class="mobile-page">
+    <section class="mobile-hero" aria-labelledby="mobile-title">
+      <div class="mobile-hero-inner">
+        <div class="mobile-hero-copy">
+          <p class="mobile-eyebrow">MOSIMO PROTOCOL / ANDROID DEMO</p>
+          <div class="mobile-title">
+            <img src="/images/mosimo-bosai-icon.png" width="512" height="512" alt="" />
+            <h1 id="mobile-title">もしもの防災</h1>
+          </div>
+          <p class="mobile-lead">
+            もしもの防災は、インターネットに接続できない場所でも、公開テキストを作成し、近くの端末へ渡す
+            Android デモアプリです。
+          </p>
+          <a class="mobile-button" href="#mobile-features">
+            できることを見る <span aria-hidden="true">↓</span>
+          </a>
+        </div>
+        <img class="mobile-visual" src="/images/mosimo-bosai-feature.png" width="1024" height="500" alt="" />
+      </div>
+    </section>
+
+    <section
+      class="mobile-section"
+      id="mobile-features"
+      aria-labelledby="mobile-features-title"
+    >
+      <div class="mobile-section-heading">
+        <p class="mobile-eyebrow">01 / FEATURES</p>
+        <h2 id="mobile-features-title">
+          投稿を作り、
+          <br />
+          端末から端末へ。
+        </h2>
+        <p>
+          近くの端末と投稿を交換し、受け取った端末が保存して、別の端末へ運びます。
+        </p>
+      </div>
+      <div class="mobile-cards">
+        <article class="mobile-card mobile-card-yellow">
+          <span class="mobile-number">01</span>
+          <h3>圏外で投稿を作る</h3>
+          <p>
+            公開テキストを端末内で作成し、投稿者の電子署名を付けて保存します。
+          </p>
+        </article>
+        <article class="mobile-card mobile-card-light">
+          <span class="mobile-number">02</span>
+          <h3>近くの端末へ渡す</h3>
+          <p>
+            Bluetooth や同じ LAN
+            で、まだ持っていない投稿を交換します。全端末が同時につながっている必要はありません。
+          </p>
+        </article>
+        <article class="mobile-card mobile-card-yellow">
+          <span class="mobile-number">03</span>
+          <h3>接続できたら送信</h3>
+          <p>
+            オンライン送信を有効にすると、接続できたときに預かった投稿を署名とともに送信先へ届けます。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section
+      class="mobile-section mobile-details"
+      aria-labelledby="mobile-details-title"
+    >
+      <div class="mobile-section-heading">
+        <p class="mobile-eyebrow">02 / HOW IT WORKS</p>
+        <h2 id="mobile-details-title">
+          画面で操作し、
+          <br />
+          状況を確かめる。
+        </h2>
+      </div>
+      <div class="mobile-details-body">
+        <p>
+          中継の開始・停止や送信先の管理に加え、近隣端末や投稿の配送状況を画面で確認できます。中継は画面を閉じた後や端末の再起動後にも続けられます。
+        </p>
+        <p>
+          投稿は署名を検証し、暗号化して保存できた後に受理を応答します。署名は投稿内容の真実性や、投稿者の実社会での身元を保証するものではありません。
+        </p>
+      </div>
+    </section>
+
+    <section
+      class="mobile-section mobile-note"
+      aria-labelledby="mobile-note-title"
+    >
+      <div>
+        <p class="mobile-eyebrow">03 / PLEASE NOTE</p>
+        <h2 id="mobile-note-title">ご利用にあたって</h2>
+      </div>
+      <div>
+        <p>
+          このアプリは実験実装です。対象は公開テキストのみで、画像・音声、投稿の削除・訂正、iOS
+          には対応していません。
+        </p>
+        <p>
+          すべての投稿の配送は保証されません。省電力制限や強制停止の影響も受けます。Bluetooth
+          中継から Web 表示までの全経路は、一続きには実証されていません。
+        </p>
+        <p>
+          投稿は公開されます。名前、電話番号、詳しい居場所は投稿しないでください。
+        </p>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<style lang="scss">
+  .mobile-page {
+    color: #171717;
+    background: #f8f6ed;
+    font-family: system-ui, sans-serif;
+    line-height: 1.75;
+  }
+
+  .mobile-hero {
+    background: #ffd600;
+    border-bottom: 3px solid #171717;
+  }
+
+  .mobile-hero-inner,
+  .mobile-section {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 6rem 1.5rem;
+  }
+
+  .mobile-hero-inner {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 4rem;
+    align-items: center;
+  }
+
+  .mobile-eyebrow {
+    margin: 0 0 1.5rem;
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+  }
+
+  .mobile-page h1,
+  .mobile-page h2,
+  .mobile-page h3 {
+    line-height: 1.25;
+  }
+  .mobile-page h1 {
+    margin: 0;
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    letter-spacing: -0.04em;
+  }
+  .mobile-page h2 {
+    margin: 0;
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    letter-spacing: -0.03em;
+  }
+  .mobile-page h3 {
+    font-size: 1.4rem;
+  }
+  .mobile-lead {
+    max-width: 35rem;
+    margin: 2rem 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .mobile-button {
+    display: inline-flex;
+    gap: 2rem;
+    align-items: center;
+    padding: 0.9rem 1.3rem;
+    border: 3px solid #171717;
+    background: #171717;
+    color: #fff;
+    font-weight: 700;
+    text-decoration: none;
+    box-shadow: 5px 5px 0 #fff;
+  }
+  .mobile-button:hover {
+    background: #fff;
+    color: #171717;
+  }
+  .mobile-button:focus-visible {
+    outline: 3px solid #171717;
+    outline-offset: 6px;
+  }
+  .mobile-title {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .mobile-title img {
+    width: clamp(4rem, 8vw, 6rem);
+    flex: none;
+    height: auto;
+    border: 2px solid #171717;
+  }
+  .mobile-visual {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 3px solid #171717;
+    box-shadow: 10px 10px 0 #171717;
+  }
+  .mobile-section-heading {
+    max-width: 43rem;
+    margin-bottom: 3rem;
+  }
+  .mobile-section-heading > p:last-child {
+    margin: 1.5rem 0 0;
+  }
+  .mobile-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .mobile-card {
+    padding: 1.75rem;
+    border: 3px solid #171717;
+    box-shadow: 6px 6px 0 #171717;
+  }
+  .mobile-card h3 {
+    margin: 2rem 0 1rem;
+  }
+  .mobile-card p {
+    margin: 0;
+  }
+  .mobile-card-yellow {
+    background: #ffd600;
+  }
+  .mobile-card-light {
+    background: #fff;
+  }
+  .mobile-number {
+    color: #b50020;
+    font-size: 0.9rem;
+    font-weight: 900;
+  }
+  .mobile-details,
+  .mobile-note {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    border-top: 3px solid #171717;
+  }
+  .mobile-details-body p:first-child,
+  .mobile-note > div:last-child p:first-child {
+    margin-top: 0;
+  }
+  .mobile-note {
+    background: #fff;
+  }
+  .mobile-note h2 {
+    font-size: clamp(1.8rem, 3vw, 2.5rem);
+  }
+
+  @media (max-width: 720px) {
+    .mobile-hero-inner,
+    .mobile-section {
+      padding: 4rem 1.25rem;
+    }
+    .mobile-hero-inner,
+    .mobile-details,
+    .mobile-note {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+    .mobile-cards {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+    .mobile-section-heading {
+      margin-bottom: 2rem;
+    }
+    .mobile-details .mobile-section-heading {
+      margin-bottom: 0;
+    }
+  }
+</style>
