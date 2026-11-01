@@ -8,7 +8,9 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
+import com.fasterxml.jackson.databind.JsonNode
 import org.mndt.core.Author
+import org.mndt.core.NostrEvent
 import org.mndt.core.PublicIngress
 import org.mndt.core.SecretKeys
 import java.util.Base64
@@ -98,6 +100,67 @@ class PublicDownloadTest {
         try {
             assertTrue(runCatching { PublicDownload.fetch(http, 9, server.url("/").toString(), 500) }.isFailure)
         } finally { server.close(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+    }
+
+    private val base = 1792368000L
+    /** Newest first, one second apart; signing is the slow part so the 700 are built once. */
+    private val history by lazy { Author(SecretKeys.generate(), "https://pds.invalid").let { a -> (0 until 700).map { a.createPost("p$it", (base - it) * 1000).event } } }
+
+    /** Plain-REQ relay over [events] (created_at DESC, inclusive until); closes the socket on page [failOn]. */
+    private fun more(events: List<NostrEvent>, first: PublicDownload.Batch, now: Long = base, failOn: Int = 0): Pair<PublicDownload.Pages, List<JsonNode>> = runBlocking {
+        val filters = LinkedBlockingQueue<JsonNode>()
+        val server = MockWebServer()
+        val listener = object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val frame = json.readTree(text)
+                if (frame[0].textValue() != "REQ") return
+                val id = frame[1].textValue(); val f = frame[2]
+                filters.add(f)
+                if (filters.size == failOn) { webSocket.close(1000, "gone"); return }
+                events.sortedByDescending { it.createdAt }.filter { f["until"] == null || it.createdAt <= f["until"].longValue() }
+                    .take(f["limit"].intValue()).forEach { webSocket.send("[\"EVENT\",\"$id\",${it.toJson()}]") }
+                webSocket.send("[\"EOSE\",\"$id\"]")
+            }
+        }
+        repeat(8) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+        val http = OkHttpClient()
+        try { PublicDownload.more(http, 3, first, now, server.url("/").toString(), 2000) to filters.toList() }
+        finally { server.close(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+    }
+
+    @Test fun inclusiveUntilWalkDedupesAndStopsOnShortPage() {
+        val events = history.take(150)
+        val (pages, filters) = more(events, PublicDownload.Batch(events.take(32), fallback = true))
+        assertNull(pages.failure)
+        assertEquals(events.drop(32), pages.events)
+        assertEquals(listOf(base - 31, base - 130), filters.map { it["until"].longValue() })
+        assertTrue(filters.all { it["limit"].intValue() == 100 && it["#t"][0].textValue() == "mosimo.oriom.dev" })
+    }
+
+    @Test fun priorityBatchDoesNotSeedCursorAndShortFirstBatchStops() {
+        val events = history.take(150)
+        val (pages, filters) = more(events, PublicDownload.Batch(events.takeLast(32), fallback = false))
+        assertNull(filters.first()["until"])
+        assertEquals(118, pages.events.size)
+        assertTrue(pages.events.none { it in events.takeLast(32) })
+        assertEquals(PublicDownload.Pages(emptyList()) to emptyList<JsonNode>(), more(events, PublicDownload.Batch(events.take(31), fallback = true)))
+    }
+
+    @Test fun stopsAtWindowAndAtTotalCap() {
+        // 24 h window: now is set so only the newest 200 fall inside it.
+        val (windowed, windowFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true), now = base - 199 + PublicDownload.WINDOW_SECONDS)
+        assertEquals(history.subList(32, 200), windowed.events)
+        assertEquals(2, windowFilters.size)
+        val (capped, cappedFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true), now = base)
+        assertEquals(PublicDownload.MAX_EVENTS - 32, capped.events.size)
+        assertEquals(history.subList(32, PublicDownload.MAX_EVENTS), capped.events)
+        assertEquals(5, cappedFilters.size)
+    }
+
+    @Test fun failedPageKeepsEarlierPages() {
+        val (pages, _) = more(history, PublicDownload.Batch(history.take(32), fallback = true), failOn = 2)
+        assertNotNull(pages.failure)
+        assertEquals(history.subList(32, 131), pages.events)
     }
 
     @Test fun snapshotTransportRequiresCborSuccessHttpsAndBoundedBody() {

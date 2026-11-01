@@ -102,11 +102,18 @@ internal class RelaySubscription {
     val atCapacity: Boolean get() = full
 }
 
+private val dids = object : LinkedHashMap<String, String?>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>) = size > 1024
+}
+/** Memoized by event ID (null DIDs too): refresh() rebuilds up to PublicDownload.MAX_EVENTS display posts every second. */
+internal fun didOf(event: NostrEvent): String? = synchronized(dids) {
+    if (event.id in dids) dids[event.id] else AtRepository.did(event).also { dids[event.id] = it }
+}
+
 internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String): List<PostView> {
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
-        // ponytail: re-derives the DID (signature check) per refresh; at most MAX_EVENTS, cache by id if it shows in profiles.
-        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = AtRepository.did(it),
+        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = didOf(it),
             createdAt = it.createdAt, ext = Extensions.of(it))
     }
 }

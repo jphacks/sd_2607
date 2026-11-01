@@ -95,7 +95,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
     private val blocked get() = disk?.blockedDids.orEmpty()
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay() }
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay(); received(online = false) }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -180,7 +180,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 if (network == validated || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
                 validated = network
-                enqueue(critical = true) { networkChanged(fresh = false) }
+                enqueue(critical = true) { networkChanged(fresh = false); requestPublic(manual = false) }
             }
             override fun onLost(network: Network) = enqueue(critical = true) { refresh() }
         })
@@ -202,6 +202,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private fun now() = System.currentTimeMillis()
     private fun elapsed() = SystemClock.elapsedRealtime()
+    private fun received(online: Boolean) = mutableState.update { it.copy(lastReceivedAtMillis = now(), lastReceivedOnline = online) }
     private fun note(text: String) = mutableState.update { it.copy(diagnostics = (it.diagnostics + text).takeLast(16)) }
     private fun issue(text: String) { mutableState.update { it.copy(error = text) }; note(text) }
     fun clearError() = enqueue(critical = true) { mutableState.update { it.copy(error = null) } }
@@ -211,6 +212,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (engine.clockConfidence != value) cancelPublicDownload()
         engine.clockConfidence = value
         exchange.broadcastInventory()
+        if (value == ClockConfidence.TRUSTED) requestPublic(manual = false)
     }
     private fun acceptedAnywhere(id: String) = disk?.relayAccepted?.values?.any { id in it } == true
     private fun refresh() {
@@ -243,8 +245,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
                     publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did,
                     createdAt = it.event.createdAt, ext = Extensions.of(it.event))
-            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.map { post ->
-                if (post.volatile && publicEvents.any { it.id == post.id }) post.copy(sourceRelay = DiskState.PDS_RELAY) else post
+            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.let { posts ->
+                val publicIds = publicEvents.mapTo(hashSetOf()) { it.id }
+                posts.map { post -> if (post.volatile && post.id in publicIds) post.copy(sourceRelay = DiskState.PDS_RELAY) else post }
             },
             publicBusy = publicBusy, blockedDids = blocked
         ) }
@@ -348,18 +351,15 @@ class MeshCoordinator private constructor(private val context: Context) {
         publicGeneration++
         publicJob?.cancel(); publicJob = null; publicBusy = false
     }
-    /** Manual user request only; no AppView access and no client-side conversion/signing. */
-    fun requestPublicInformation() = enqueue(critical = true) {
-        if (fatal || disk == null || publicBusy) return@enqueue
-        if (!onlineAllowed() || !validatedInternet()) {
-            mutableState.update { it.copy(publicStatus = "公的情報: オンライン接続が必要 / 保留") }; return@enqueue
-        }
-        if (engine.clockConfidence != ClockConfidence.TRUSTED) {
-            mutableState.update { it.copy(publicStatus = "公的情報: 時計 unknown / 認可保留") }; return@enqueue
-        }
-        if (elapsed() < publicNext) {
-            mutableState.update { it.copy(publicStatus = "公的情報: 取得頻度制限（30秒）") }; return@enqueue
-        }
+    /** Pull-to-refresh; also auto-run on network validation and clock trust. No AppView access and no client-side conversion/signing. */
+    fun requestPublicInformation() = enqueue(critical = true) { requestPublic(manual = true) }
+    /** Auto triggers skip guard failures silently; only a manual request explains them. */
+    private fun requestPublic(manual: Boolean) {
+        fun skip(status: String) { if (manual) mutableState.update { it.copy(publicStatus = status) } }
+        if (fatal || disk == null || publicBusy) return
+        if (!onlineAllowed() || !validatedInternet()) return skip("公的情報: オンライン接続が必要 / 保留")
+        if (engine.clockConfidence != ClockConfidence.TRUSTED) return skip("公的情報: 時計 unknown / 認可保留")
+        if (elapsed() < publicNext) return skip("公的情報: 取得頻度制限（30秒）")
         publicNext = elapsed() + 30000
         publicBusy = true
         val generation = ++publicGeneration
@@ -390,15 +390,19 @@ class MeshCoordinator private constructor(private val context: Context) {
                 memory = decision.memory
                 event to decision
             }.sortedByDescending { it.second.receipt?.priority ?: minOf(PublicIngress.priority(it.first), 1) }
+            var imported = 0
+            fun summary(fallback: Boolean) = "PDS ${if (fallback) "通常REQ fallback" else "priority-v1"}: ${publicEvents.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）"
             enqueue(critical = true) complete@{
                 if (generation != publicGeneration || fatal || !onlineAllowed()) return@complete
-                publicBusy = false; publicJob = null
+                // A successful first batch stays busy while display-only older pages load.
+                if (batch.isFailure) { publicBusy = false; publicJob = null }
                 // Generation fences reload/clock changes/cancellation. History has one writer (this request).
                 // Atomically write high-water, sticky CRL and serial history BEFORE considering any ingress.
                 persist(checkNotNull(disk).copy(publicTrust = memory))
                 batch.onSuccess { result ->
+                    val known = publicEvents.mapTo(hashSetOf()) { it.id } + engine.entries().map { it.event.id }
+                    if (result.events.any { it.id !in known }) received(online = true)
                     publicEvents = result.events
-                    var imported = 0
                     val reports = mutableListOf<String>()
                     for ((event, decision) in decisions) {
                         if (fatal) break
@@ -416,10 +420,21 @@ class MeshCoordinator private constructor(private val context: Context) {
                         }
                         reports += "${event.id.take(8)} $outcome\n${decision.status}"
                     }
-                    mutableState.update { it.copy(publicStatus = "PDS ${if (result.fallback) "通常REQ fallback" else "priority-v1"}: ${result.events.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）",
+                    mutableState.update { it.copy(publicStatus = summary(result.fallback) + if (result.events.size >= PublicDownload.LIMIT) " / 続きを取得中…" else "",
                         publicResults = (failures + reports).take(40)) }
                     if (imported > 0) { exchange.broadcastInventory(); drainRelay() }
                 }.onFailure { failure -> mutableState.update { it.copy(publicStatus = "公的情報取得失敗: ${failure.message}", publicResults = failures) } }
+            }
+            val first = batch.getOrNull() ?: return@launch
+            val pages = PublicDownload.more(http, generation, first, now() / 1000)
+            ensureActive()
+            enqueue(critical = true) pages@{
+                if (generation != publicGeneration || fatal || !onlineAllowed()) return@pages
+                publicBusy = false; publicJob = null
+                val known = publicEvents.mapTo(hashSetOf()) { it.id } + engine.entries().map { it.event.id }
+                if (pages.events.any { it.id !in known }) received(online = true)
+                publicEvents = (first.events + pages.events).distinctBy { it.id }.take(PublicDownload.MAX_EVENTS)
+                mutableState.update { it.copy(publicStatus = summary(first.fallback) + (pages.failure?.let { f -> " / 続き取得中断: $f" } ?: "")) }
             }
         }
     }
@@ -563,7 +578,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         } catch (_: Exception) { relayFailure(); return }
         when (reply) {
             // General subscription remains display-only; authorized ingress uses the explicit public request.
-            is RelayReply.Event -> if (relaySubscription.atCapacity) closeRelayRead()
+            is RelayReply.Event -> { received(online = true); if (relaySubscription.atCapacity) closeRelayRead() }
             RelayReply.Full -> closeRelayRead()
             RelayReply.Eose, RelayReply.Closed -> relayReadDeadline = 0
             is RelayReply.Ok -> relayOk(reply)

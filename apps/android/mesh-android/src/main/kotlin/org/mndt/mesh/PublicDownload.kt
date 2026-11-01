@@ -29,8 +29,14 @@ internal fun readPublicTrust(node: JsonNode?): PublicIngress.Memory {
 
 internal object PublicDownload {
     const val LIMIT = 32
-    fun request(id: String, priority: Boolean): String {
-        val filter = mapOf("kinds" to listOf(1), "#t" to listOf("mosimo.oriom.dev"), "limit" to LIMIT)
+    /** Display-only pages after the first: plain REQ walked back by `until`, never engine ingress or disk. */
+    const val PAGE_LIMIT = 100
+    const val MAX_EVENTS = 500
+    // ponytail: fixed 8 MiB in-memory display cap; size it from device memory if 500 events ever stop fitting.
+    const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
+    const val WINDOW_SECONDS = 24 * 3600L
+    fun request(id: String, priority: Boolean, limit: Int = LIMIT, until: Long? = null): String {
+        val filter = mapOf("kinds" to listOf(1), "#t" to listOf("mosimo.oriom.dev"), "limit" to limit) + (until?.let { mapOf("until" to it) } ?: emptyMap())
         return json.writeValueAsString(if (priority) listOf("MOSIMO-REQ", id, mapOf("order" to "priority-v1", "filter" to filter)) else listOf("REQ", id, filter))
     }
     fun snapshot(http: OkHttpClient, root: PublicIngress.Root): ByteArray = http.newCall(Request.Builder()
@@ -42,6 +48,8 @@ internal object PublicDownload {
         body.byteStream().use { it.readBounded(32768) }
     }
     data class Batch(val events: List<NostrEvent>, val fallback: Boolean)
+    /** [events] excludes the first batch; [failure] keeps the pages fetched before it. */
+    data class Pages(val events: List<NostrEvent>, val failure: String? = null)
     private data class Frame(val text: String? = null, val opened: Boolean = false, val bytes: Int = 0)
 
     private class Budget {
@@ -60,9 +68,41 @@ internal object PublicDownload {
         error("Ordinary REQ failed/timed out; not an empty success")
     }
 
+    /**
+     * Older pages after a full [first] batch, until a short page, the 24 h window, [MAX_EVENTS] or [MAX_TOTAL_BYTES].
+     * priority-v1 has no time order, so its batch never seeds the cursor; `until` is inclusive, hence the id dedupe.
+     */
+    suspend fun more(http: OkHttpClient, token: Long, first: Batch, nowSeconds: Long, relay: String = DiskState.PDS_RELAY,
+        timeoutMillis: Long = 15000): Pages {
+        if (first.events.size < LIMIT) return Pages(emptyList())
+        val seen = first.events.mapTo(hashSetOf()) { it.id }
+        var bytes = first.events.sumOf { it.toJson().toByteArray(Charsets.UTF_8).size }
+        val extra = mutableListOf<NostrEvent>()
+        val cutoff = nowSeconds - WINDOW_SECONDS
+        var until = if (first.fallback) first.events.minOf { it.createdAt } else null
+        var page = 0
+        while (seen.size < MAX_EVENTS) {
+            val budget = Budget()
+            val ok = runCatching { attempt(http, relay, "public-$token-m${++page}", false, timeoutMillis, budget, PAGE_LIMIT, until) }
+            if (ok.getOrNull() != true) return Pages(extra, ok.exceptionOrNull()?.message ?: "page $page failed/timed out")
+            var added = 0
+            for (event in budget.events.values) {
+                if (event.id in seen || event.createdAt < cutoff) continue
+                val size = event.toJson().toByteArray(Charsets.UTF_8).size
+                if (seen.size >= MAX_EVENTS || bytes + size > MAX_TOTAL_BYTES) return Pages(extra)
+                seen += event.id; extra += event; bytes += size; added++
+            }
+            val oldest = budget.events.values.minOfOrNull { it.createdAt } ?: break
+            // No progress: a full page sharing one created_at cannot be walked past with an inclusive cursor.
+            if (budget.events.size < PAGE_LIMIT || oldest < cutoff || added == 0) break
+            until = oldest
+        }
+        return Pages(extra)
+    }
+
     private suspend fun attempt(http: OkHttpClient, relay: String, id: String, priority: Boolean,
-        timeoutMillis: Long, budget: Budget): Boolean {
-        val frames = Channel<Frame>(LIMIT + 2)
+        timeoutMillis: Long, budget: Budget, limit: Int = LIMIT, until: Long? = null): Boolean {
+        val frames = Channel<Frame>(limit + 2)
         val queuedBytes = AtomicInteger()
         val ws = http.newWebSocket(Request.Builder().url(relay).build(), object : WebSocketListener() {
             private fun offer(socket: WebSocket, frame: Frame) {
@@ -84,7 +124,7 @@ internal object PublicDownload {
         })
         try {
             if (withTimeoutOrNull(15000) { frames.receiveCatching().getOrNull()?.opened } != true) return false
-            if (!ws.send(request(id, priority))) return false
+            if (!ws.send(request(id, priority, limit, until))) return false
             val completed = withTimeoutOrNull(timeoutMillis) {
                 while (true) {
                     val received = frames.receiveCatching()
@@ -103,7 +143,7 @@ internal object PublicDownload {
                             require(event.kind == 1 && event.tags.any { it == listOf("t", "mosimo.oriom.dev") })
                             if (event.id !in budget.events) {
                                 val bytes = event.toJson().toByteArray(Charsets.UTF_8).size
-                                require(budget.events.size < LIMIT && bytes <= RelaySubscription.MAX_BYTES - budget.totalBytes) { "Public request capacity" }
+                                require(budget.events.size < limit && bytes <= RelaySubscription.MAX_BYTES - budget.totalBytes) { "Public request capacity" }
                                 budget.events[event.id] = event; budget.totalBytes += bytes
                             }
                         }
