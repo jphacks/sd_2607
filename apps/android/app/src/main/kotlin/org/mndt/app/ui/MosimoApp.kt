@@ -30,36 +30,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
-import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavController
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.unit.IntOffset
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.ui.NavDisplay
 import org.koin.compose.koinInject
 import org.mndt.app.location.LocationRepository
-import org.mndt.app.ui.map.mapGraph
-import org.mndt.app.ui.settings.settingsGraph
+import org.mndt.app.ui.map.mapEntries
+import org.mndt.app.ui.settings.settingsEntries
 import org.mndt.app.ui.theme.Mosimo
-import org.mndt.app.ui.timeline.timelineGraph
+import org.mndt.app.ui.timeline.timelineEntries
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 
-private val tabs = listOf(Routes.TIMELINE, Routes.MAP, Routes.SETTINGS)
+/** Calibration knob: slightly softer than the default spring so the slide reads as following the finger. */
+private val slideSpec = spring(stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
 
-/** Pushes slide in from the end; switching tabs slides toward the tab's side of the bottom bar. */
-private fun slideDirection(from: NavBackStackEntry, to: NavBackStackEntry): SlideDirection {
-    val a = tabs.indexOf(from.destination.route)
-    val b = tabs.indexOf(to.destination.route)
-    return if (a >= 0 && b >= 0 && b < a) SlideDirection.End else SlideDirection.Start
+private fun AnimatedContentTransitionScope<*>.slide(forward: Boolean): ContentTransform {
+    val direction = if (forward) SlideDirection.Start else SlideDirection.End
+    return slideIntoContainer(direction, slideSpec) togetherWith slideOutOfContainer(direction, slideSpec)
 }
 
 @Composable
 fun MosimoApp() {
-    val nav = rememberNavController()
-    val route = nav.currentBackStackEntryAsState().value?.destination?.route
+    val nav = rememberNavigator()
     FirstLaunchPermissions()
     val mesh = koinInject<MeshCoordinator>()
     val error = mesh.state.collectAsStateWithLifecycle().value.error
@@ -68,51 +70,50 @@ fun MosimoApp() {
     Scaffold(
         containerColor = Mosimo.bgBase,
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = { if (route in tabs) BottomBar(route, nav) },
+        bottomBar = { if (nav.atTabRoot) BottomBar(nav) },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding)) {
-            if (route in tabs) RelayPermissionBanner()
-            NavHost(nav, startDestination = Routes.MAP, Modifier.weight(1f),
-                enterTransition = { slideIntoContainer(slideDirection(initialState, targetState)) },
-                exitTransition = { slideOutOfContainer(slideDirection(initialState, targetState)) },
-                popEnterTransition = { slideIntoContainer(SlideDirection.End) },
-                popExitTransition = { slideOutOfContainer(SlideDirection.End) }) {
-                timelineGraph(nav)
-                mapGraph(nav)
-                settingsGraph(nav)
-            }
+            if (nav.atTabRoot) RelayPermissionBanner()
+            NavDisplay(
+                nav.backStack, Modifier.weight(1f), onBack = nav::pop,
+                entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
+                transitionSpec = { slide(nav.forward) },
+                popTransitionSpec = { slide(nav.forward) },
+                // Predictive back: the outgoing screen follows the finger toward the end edge.
+                predictivePopTransitionSpec = { slide(forward = false) },
+                entryProvider = entryProvider {
+                    timelineEntries(nav)
+                    mapEntries()
+                    settingsEntries(nav)
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun BottomBar(route: String?, nav: NavController) {
-    fun go(target: String) = nav.navigate(if (target == Routes.MAP) Routes.map() else target) {
-        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-        launchSingleTop = true
-        restoreState = true
-    }
+private fun BottomBar(nav: Navigator) {
     Row(
         Modifier.fillMaxWidth().background(Mosimo.bgSurface).drawBehind { drawLine(Mosimo.border, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx()) }
             .navigationBarsPadding().height(64.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Tab("タイムライン", Icons.AutoMirrored.Outlined.List, route == Routes.TIMELINE) { go(Routes.TIMELINE) }
+        TabItem("タイムライン", Icons.AutoMirrored.Outlined.List, nav.tab == Tab.TIMELINE) { nav.select(Tab.TIMELINE) }
         // Center tab is the raised yellow circle (Figma Nav Bar 3:178).
-        val mapActive = route == Routes.MAP
-        Column(Modifier.weight(1f).clickable { go(Routes.MAP) }, horizontalAlignment = Alignment.CenterHorizontally) {
+        val mapActive = nav.tab == Tab.MAP
+        Column(Modifier.weight(1f).clickable { nav.select(Tab.MAP) }, horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.offset(y = (-10).dp).size(52.dp).clip(CircleShape).background(Mosimo.primary), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Place, contentDescription = null, tint = Mosimo.onPrimary)
             }
             Text("状況マップ", Modifier.offset(y = (-6).dp), style = MaterialTheme.typography.labelSmall,
                 color = if (mapActive) Mosimo.primary else Mosimo.textTertiary, fontWeight = if (mapActive) FontWeight.Bold else null)
         }
-        Tab("設定", Icons.Outlined.Settings, route == Routes.SETTINGS) { go(Routes.SETTINGS) }
+        TabItem("設定", Icons.Outlined.Settings, nav.tab == Tab.SETTINGS) { nav.select(Tab.SETTINGS) }
     }
 }
 
 @Composable
-private fun RowScope.Tab(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
+private fun RowScope.TabItem(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
     val color = if (active) Mosimo.textPrimary else Mosimo.textTertiary
     Column(Modifier.weight(1f).fillMaxHeight().clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center) {

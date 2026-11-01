@@ -26,9 +26,8 @@ import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import androidx.navigation.NavController
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.compose.composable
+import androidx.navigation3.runtime.EntryProviderScope
+import androidx.navigation3.runtime.NavKey
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
@@ -41,7 +40,9 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.Banner
-import org.mndt.app.ui.Routes
+import org.mndt.app.ui.Navigator
+import org.mndt.app.ui.PostKey
+import org.mndt.app.ui.TimelineKey
 import org.mndt.app.ui.post.*
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.core.ClockConfidence
@@ -57,9 +58,9 @@ val timelineModule = module {
     viewModel { TimelineViewModel(get(), androidContext().getSharedPreferences("app", Context.MODE_PRIVATE)) }
 }
 
-fun NavGraphBuilder.timelineGraph(nav: NavController) {
-    composable(Routes.TIMELINE) { TimelineScreen(nav) }
-    composable(Routes.POST) { entry -> PostScreen(entry.arguments?.getString("id").orEmpty(), nav) }
+fun EntryProviderScope<NavKey>.timelineEntries(nav: Navigator) {
+    entry<TimelineKey> { TimelineScreen(nav) }
+    entry<PostKey> { PostScreen(it.id, nav) }
 }
 
 class TimelineViewModel(private val mesh: MeshCoordinator, private val prefs: SharedPreferences) : ViewModel() {
@@ -89,7 +90,7 @@ private fun dayLabel(day: LocalDate): String = when (day) {
 private fun String.titleAndRest(): Pair<String, String> = trim().let { it.substringBefore('\n') to it.substringAfter('\n', "").trim() }
 
 @Composable
-private fun TimelineScreen(nav: NavController, vm: TimelineViewModel = koinViewModel()) {
+private fun TimelineScreen(nav: Navigator, vm: TimelineViewModel = koinViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val (all, annotations) = vm.cards.collectAsStateWithLifecycle().value
     val location = koinInject<LocationRepository>()
@@ -147,11 +148,11 @@ private fun DayHeader(label: String) = Text(label, Modifier.padding(vertical = 8
     .padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, color = Mosimo.textSecondary, fontWeight = FontWeight.Bold)
 
 @Composable
-private fun PostCard(post: PostView, annotations: List<PostView>, here: android.location.Location?, nav: NavController) {
+private fun PostCard(post: PostView, annotations: List<PostView>, here: android.location.Location?, nav: Navigator) {
     val (title, rest) = (if (post.isPublic) post.content else post.body()).titleAndRest()
     Column(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(Mosimo.bgSurface).border(1.dp, Mosimo.border, MaterialTheme.shapes.medium)
-            .clickable { nav.navigate(Routes.post(post.id)) }.padding(12.dp),
+            .clickable { nav.push(PostKey(post.id)) }.padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -170,8 +171,8 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
                 }
                 Text(" · ${post.routeLabel()}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary, softWrap = false)
             }
-            if (post.isPublic) Link("詳細 >") { nav.navigate(Routes.post(post.id)) }
-            else if (post.latLng() != null) Link("マップで見る >") { nav.navigate(Routes.map(post.id)) }
+            if (post.isPublic) Link("詳細 >") { nav.push(PostKey(post.id)) }
+            else if (post.latLng() != null) Link("マップで見る >") { nav.showOnMap(post.id) }
         }
         if (!post.isPublic) AnnotationActions(post, annotations)
     }
@@ -188,15 +189,15 @@ private fun Empty(title: String, detail: String?) = Column(Modifier.fillMaxSize(
 }
 
 @Composable
-private fun PostScreen(id: String, nav: NavController) {
+private fun PostScreen(id: String, nav: Navigator) {
     val state by koinInject<MeshCoordinator>().state.collectAsStateWithLifecycle()
     val post = state.posts.firstOrNull { it.id == id }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "戻る", tint = Mosimo.textPrimary) }
+            IconButton(onClick = { nav.pop() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "戻る", tint = Mosimo.textPrimary) }
             Text("投稿", style = MaterialTheme.typography.titleMedium, color = Mosimo.textPrimary)
         }
         if (post == null) Empty("この投稿は見つかりません", null)
-        else PostDetail(post, Modifier.weight(1f), onShowOnMap = { nav.navigate(Routes.map(post.id)) }, onBlocked = { nav.popBackStack() })
+        else PostDetail(post, Modifier.weight(1f), onShowOnMap = { nav.showOnMap(post.id) }, onBlocked = { nav.pop() })
     }
 }

@@ -36,16 +36,17 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavController
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.compose.composable
+import androidx.navigation3.runtime.EntryProviderScope
+import androidx.navigation3.runtime.NavKey
+import kotlinx.serialization.Serializable
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 import org.koin.dsl.module
 import org.mndt.app.BuildConfig
 import org.mndt.app.location.LocationRepository
-import org.mndt.app.ui.Routes
+import org.mndt.app.ui.Navigator
+import org.mndt.app.ui.SettingsKey
+import org.mndt.app.ui.Tab
 import org.mndt.app.ui.openAppSettings
 import org.mndt.app.ui.post.shortDid
 import org.mndt.app.ui.startRelay
@@ -56,23 +57,23 @@ import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 import kotlin.math.roundToInt
 
-private const val TRUST = "settings/trust"
-private const val ADVANCED = "settings/advanced"
-private const val IDENTITY = "settings/identity"
-private const val BLOCKED = "settings/blocked"
+@Serializable private data object TrustKey : NavKey
+@Serializable private data object AdvancedKey : NavKey
+@Serializable private data object IdentityKey : NavKey
+@Serializable private data object BlockedKey : NavKey
 
 val settingsModule = module { }
 
-fun NavGraphBuilder.settingsGraph(nav: NavController) {
-    composable(Routes.SETTINGS) { SettingsScreen(nav) }
-    composable(TRUST) { TrustScreen(nav) }
-    composable(ADVANCED) { AdvancedScreen(nav) }
-    composable(IDENTITY) { IdentityScreen(nav) }
-    composable(BLOCKED) { BlockedScreen(nav) }
+fun EntryProviderScope<NavKey>.settingsEntries(nav: Navigator) {
+    entry<SettingsKey> { SettingsScreen(nav) }
+    entry<TrustKey> { TrustScreen(nav) }
+    entry<AdvancedKey> { AdvancedScreen(nav) }
+    entry<IdentityKey> { IdentityScreen(nav) }
+    entry<BlockedKey> { BlockedScreen(nav) }
 }
 
 @Composable
-private fun SettingsScreen(nav: NavController) {
+private fun SettingsScreen(nav: Navigator) {
     val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
@@ -98,16 +99,16 @@ private fun SettingsScreen(nav: NavController) {
             }
             Line()
             SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元", sources.map { it.org }.distinct().joinToString(" / ").ifEmpty { null },
-                "${sources.size}件") { nav.navigate(TRUST) }
+                "${sources.size}件") { nav.push(TrustKey) }
             Line()
-            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "リレー・オンライン搬出・診断") { nav.navigate(ADVANCED) }
+            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "リレー・オンライン搬出・診断") { nav.push(AdvancedKey) }
         }
         Header("あなたの情報")
         Group {
             SettingRow(Icons.Outlined.Key, Mosimo.primary, "署名鍵とID",
-                if (state.ready) "${shortDid(state.did.ifEmpty { null }, state.publicKey)}・端末で安全に保管" else "準備中") { nav.navigate(IDENTITY) }
+                if (state.ready) "${shortDid(state.did.ifEmpty { null }, state.publicKey)}・端末で安全に保管" else "準備中") { nav.push(IdentityKey) }
             Line()
-            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedDids.size}件") { nav.navigate(BLOCKED) }
+            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedDids.size}件") { nav.push(BlockedKey) }
         }
         Header("このアプリについて")
         Group {
@@ -123,7 +124,7 @@ private fun SettingsScreen(nav: NavController) {
 }
 
 @Composable
-private fun LocationCard(nav: NavController) {
+private fun LocationCard(nav: Navigator) {
     val context = LocalContext.current
     val activity = LocalActivity.current
     val repo = koinInject<LocationRepository>()
@@ -168,11 +169,7 @@ private fun LocationCard(nav: NavController) {
                 ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             }
             ActionButton(Icons.Outlined.Map, "地図で確認") {
-                nav.navigate(Routes.map()) {
-                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                    launchSingleTop = true
-                    restoreState = true
-                }
+                nav.select(Tab.MAP)
             }
         }
     }
@@ -242,9 +239,9 @@ internal fun SwitchRow(icon: ImageVector?, tint: Color, title: String, subtitle:
 
 /** Sub-screens have no bottom bar, so they carry their own back bar. */
 @Composable
-internal fun SubScreen(title: String, nav: NavController, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxSize()) {
+internal fun SubScreen(title: String, nav: Navigator, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxSize()) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る", tint = Mosimo.textPrimary) }
+        IconButton({ nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る", tint = Mosimo.textPrimary) }
         Text(title, style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
     }
     Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),

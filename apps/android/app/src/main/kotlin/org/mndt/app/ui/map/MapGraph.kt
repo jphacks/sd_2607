@@ -31,16 +31,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavController
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.NavType
-import androidx.navigation.compose.composable
-import androidx.navigation.navArgument
+import androidx.navigation3.runtime.EntryProviderScope
+import androidx.navigation3.runtime.NavKey
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 import org.mndt.app.ui.Banner
-import org.mndt.app.ui.Routes
+import org.mndt.app.ui.MapKey
 import org.mndt.app.ui.openAppSettings
 import org.mndt.app.ui.post.Category
 import org.mndt.app.ui.post.PostDetail
@@ -55,11 +52,8 @@ import org.mndt.mesh.Region
 
 val mapModule = module { viewModel { MapViewModel(get(), get()) } }
 
-@Suppress("UNUSED_PARAMETER")
-fun NavGraphBuilder.mapGraph(nav: NavController) {
-    composable(Routes.MAP, arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true })) {
-        MapScreen(it.arguments?.getString("focus"))
-    }
+fun EntryProviderScope<NavKey>.mapEntries() {
+    entry<MapKey> { MapScreen(it.focus) }
 }
 
 private const val NEARBY_METERS = 1000f

@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 android {
     namespace = "org.mndt.app"
@@ -56,7 +57,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
-    implementation("androidx.navigation:navigation-compose:2.9.8")
+    implementation("androidx.navigation3:navigation3-runtime:1.1.7")
+    implementation("androidx.navigation3:navigation3-ui:1.1.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-navigation3:2.10.0")
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("io.insert-koin:koin-androidx-compose:4.1.1")
     implementation("org.maplibre.gl:android-sdk:13.6.1")

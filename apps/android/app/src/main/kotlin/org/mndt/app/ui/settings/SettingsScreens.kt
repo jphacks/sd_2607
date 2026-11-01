@@ -16,7 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavController
+import org.mndt.app.ui.Navigator
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,7 +45,7 @@ internal fun trustSources(context: Context): List<TrustSource> = runCatching {
 }.getOrDefault(emptyList())
 
 @Composable
-internal fun TrustScreen(nav: NavController) = SubScreen("公式情報とみなす発信元", nav) {
+internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす発信元", nav) {
     val context = LocalContext.current
     val sources = remember { trustSources(context) }
     if (sources.isEmpty()) Text("なし", style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
@@ -60,7 +60,7 @@ internal fun TrustScreen(nav: NavController) = SubScreen("公式情報とみな�
 }
 
 @Composable
-internal fun AdvancedScreen(nav: NavController) = SubScreen("詳細設定", nav) {
+internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
     var relay by rememberSaveable { mutableStateOf("") }
@@ -114,7 +114,7 @@ internal fun AdvancedScreen(nav: NavController) = SubScreen("詳細設定", nav)
 }
 
 @Composable
-internal fun IdentityScreen(nav: NavController) = SubScreen("署名鍵とID", nav) {
+internal fun IdentityScreen(nav: Navigator) = SubScreen("署名鍵とID", nav) {
     val state by koinInject<MeshCoordinator>().state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -131,7 +131,7 @@ internal fun IdentityScreen(nav: NavController) = SubScreen("署名鍵とID", na
 }
 
 @Composable
-internal fun BlockedScreen(nav: NavController) = SubScreen("ブロックリスト", nav) {
+internal fun BlockedScreen(nav: Navigator) = SubScreen("ブロックリスト", nav) {
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
     Text("投稿者 DID 単位で非表示にします。端末・中継は遮断しません。", style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
