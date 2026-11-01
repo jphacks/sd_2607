@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -47,6 +49,13 @@ import org.mndt.mesh.MeshService
 
 private val tabs = listOf(Routes.TIMELINE, Routes.MAP, Routes.SETTINGS)
 
+/** Pushes slide in from the end; switching tabs slides toward the tab's side of the bottom bar. */
+private fun slideDirection(from: NavBackStackEntry, to: NavBackStackEntry): SlideDirection {
+    val a = tabs.indexOf(from.destination.route)
+    val b = tabs.indexOf(to.destination.route)
+    return if (a >= 0 && b >= 0 && b < a) SlideDirection.End else SlideDirection.Start
+}
+
 @Composable
 fun MosimoApp() {
     val nav = rememberNavController()
@@ -63,7 +72,11 @@ fun MosimoApp() {
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding)) {
             if (route in tabs) RelayPermissionBanner()
-            NavHost(nav, startDestination = Routes.MAP, Modifier.weight(1f)) {
+            NavHost(nav, startDestination = Routes.MAP, Modifier.weight(1f),
+                enterTransition = { slideIntoContainer(slideDirection(initialState, targetState)) },
+                exitTransition = { slideOutOfContainer(slideDirection(initialState, targetState)) },
+                popEnterTransition = { slideIntoContainer(SlideDirection.End) },
+                popExitTransition = { slideOutOfContainer(SlideDirection.End) }) {
                 timelineGraph(nav)
                 mapGraph(nav)
                 settingsGraph(nav)
