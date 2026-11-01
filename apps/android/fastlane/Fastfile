@@ -1,7 +1,7 @@
 default_platform(:android)
 
 ANDROID_APPS = {
-  "mosimo" => { module: "app", package: "dev.oriom.mosimo" }
+  "mosimo" => { module: "app", package: "dev.jisaku.mosimo" }
 }.freeze
 ANDROID_PROJECT = File.expand_path("..", __dir__)
 SIGNING_ENV = %w[ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD].freeze

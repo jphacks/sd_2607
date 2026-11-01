@@ -120,7 +120,7 @@ class FastfileTest < Minitest::Test
     assert_equal false, build.fetch(:print_command_output)
     refute build.key?(:properties), "Signing secrets and version overrides must not be passed as command-line properties"
     upload = @runner.calls.last.last
-    assert_equal "dev.oriom.mosimo", upload.fetch(:package_name)
+    assert_equal "dev.jisaku.mosimo", upload.fetch(:package_name)
     assert_equal "internal", upload.fetch(:track)
     assert_equal "completed", upload.fetch(:release_status)
     assert_equal "/tmp/test-only.aab", upload.fetch(:aab)

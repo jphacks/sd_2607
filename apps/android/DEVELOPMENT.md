@@ -12,7 +12,7 @@ apps/android/gradlew -p apps/android \
   :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-APKは `apps/android/app/build/outputs/apk/debug/app-debug.apk` に生成される。アプリのIDは`dev.oriom.mosimo`。
+APKは `apps/android/app/build/outputs/apk/debug/app-debug.apk` に生成される。アプリのIDは`dev.jisaku.mosimo`。旧アプリとは別インストールになり、鍵・DID・投稿は自動移行しない。
 
 
 ## mise タスク
@@ -57,7 +57,7 @@ CIはPRと`main`へのpushで単体テスト・lint・debug APKビルドを実�
 
 ### 署名と配布
 
-Play Consoleの`dev.oriom.mosimo`に初回AABが登録済みで、Android Publisher APIが有効、サービスアカウントに対象アプリのテストトラックへのリリース権限があることを確認する。署名には、Playへ登録した既存の**アップロード鍵**を使う。
+Play Consoleで`dev.jisaku.mosimo`を登録し、初回AABの登録、Android Publisher APIの有効化、サービスアカウントへの対象アプリのテストトラックへのリリース権限の付与を確認する。署名には、対象アプリに登録した**アップロード鍵**を使う。
 
 GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnvironment Secretsを登録する。
 

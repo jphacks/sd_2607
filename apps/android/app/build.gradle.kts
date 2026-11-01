@@ -3,11 +3,12 @@ plugins {
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
 android {
-    namespace = "dev.oriom.mosimo"
+    namespace = "dev.jisaku.mosimo"
     compileSdk = 36
     defaultConfig {
-        applicationId = "dev.oriom.mosimo"
+        applicationId = "dev.jisaku.mosimo"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -40,7 +41,9 @@ android {
         resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
     }
 }
+
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+
 dependencies {
     implementation(project(":mesh-android"))
     implementation(platform("androidx.compose:compose-bom:2025.11.01"))
