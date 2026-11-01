@@ -13,7 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 OUT = HERE / '.gradle' / 'production-20261019'
 STATE = OUT / 'state.json'
 PACKAGE = 'org.mndt.demo'

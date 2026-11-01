@@ -8,7 +8,7 @@ from clean_pair import adb, click, seek, texts, card, network
 
 SOURCE = "4f4ebc6f"
 GATEWAY = "T4AIOC732121JRB"
-OUT = Path(__file__).with_name("hardware-working-demo-message.json")
+OUT = Path(__file__).resolve().parent.parent / "evidence/hardware-working-demo-message.json"
 assert not OUT.exists(), "Do not generate a second demo message"
 content = "TEST ONLY - NOT DISASTER INFORMATION DEMO-" + datetime.datetime.now().strftime("%H%M%S")
 state = {"at": datetime.datetime.now().astimezone().isoformat(), "content": content, "source": "OPPO Peer", "gateway": "ASUS Demo"}

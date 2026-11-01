@@ -31,5 +31,5 @@ for serial, package, export in ((OPPO, "org.mndt.demo.peer", False), (ASUS, "org
     print(json.dumps(apps[serial], ensure_ascii=False), flush=True)
 report["apps"] = apps
 report["otherApps"] = "ASUS Peer and existing OPPO Demo force-stopped; old OPPO Demo not uninstalled/updated"
-Path(__file__).with_name("hardware-working-demo-state.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+(Path(__file__).resolve().parent.parent / "evidence/hardware-working-demo-state.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(json.dumps(report, ensure_ascii=False), flush=True)

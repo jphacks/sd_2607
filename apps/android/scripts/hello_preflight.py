@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 source = (ROOT / "apps/esp32/src/MeshRelay.cpp").read_text(encoding="utf-8")
 start = source.index("struct JsonShape {")
 end = source.index("\n};", start) + len("\n};")
@@ -29,7 +29,7 @@ subprocess.run(["wsl.exe", "-d", "Ubuntu", "--", "g++", "-std=c++11", "-Wall", "
 nodes = ["707b1f7b29e16363", "07a6b6ee338d7419"]
 hellos = [json.dumps(dict(v=1, type="hello", node=node, max=24000), separators=(",", ":")) for node in nodes]
 observed = []
-trace = ROOT / "apps/android/hardware-hello-tx.json"
+trace = ROOT / "apps/android/evidence/hardware-hello-tx.json"
 if trace.exists():
     for line in json.loads(trace.read_text(encoding="utf-8"))["lines"]:
         match = re.search(r"\[HELLO-PROBE\].*offset=0.*bytes=([0-9a-f]+)$", line)
