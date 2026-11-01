@@ -67,15 +67,21 @@ fun MosimoApp() {
     val error = mesh.state.collectAsStateWithLifecycle().value.error
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(error) { if (error != null) { snackbar.showSnackbar(error); mesh.clearError() } }
+    val context = LocalContext.current
+    val relayBlocked = nav.atTabRoot && !mesh.state.collectAsStateWithLifecycle().value.running && !MeshPermissions.granted(context)
+    // Edge to edge: no top inset here, so the map runs under the status bar; other screens pad themselves.
     Scaffold(
         containerColor = Mosimo.bgBase,
+        contentWindowInsets = WindowInsets.navigationBars,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = { if (nav.atTabRoot) BottomBar(nav) },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding)) {
-            if (nav.atTabRoot) RelayPermissionBanner()
+            if (relayBlocked) Box(Modifier.statusBarsPadding()) {
+                Banner("中継が止まっています", "近くのデバイスへの権限が必要です", "許可する", Mosimo.warning) { openAppSettings(context) }
+            }
             NavDisplay(
-                nav.backStack, Modifier.weight(1f), onBack = nav::pop,
+                nav.backStack, Modifier.weight(1f).then(if (relayBlocked) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier), onBack = nav::pop,
                 entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
                 transitionSpec = { slide(nav.forward) },
                 popTransitionSpec = { slide(nav.forward) },
@@ -150,16 +156,6 @@ fun startRelay(context: Context) {
 
 fun openAppSettings(context: Context) = context.startActivity(
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-
-@Composable
-private fun RelayPermissionBanner() {
-    val context = LocalContext.current
-    val mesh = koinInject<MeshCoordinator>()
-    val state by mesh.state.collectAsStateWithLifecycle()
-    // Re-read on every state tick: the user may grant in system settings and come back.
-    if (state.running || MeshPermissions.granted(context)) return
-    Banner("中継が止まっています", "近くのデバイスへの権限が必要です", "許可する", Mosimo.warning) { openAppSettings(context) }
-}
 
 /** Full-width notice row with one action; shared by permission and status banners. */
 @Composable

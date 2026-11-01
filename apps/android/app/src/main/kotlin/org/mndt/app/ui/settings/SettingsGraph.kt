@@ -85,7 +85,7 @@ private fun SettingsScreen(nav: Navigator) {
             notify.launch(Manifest.permission.POST_NOTIFICATIONS)
         else startRelay(context)
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)
         Header("通信（もしもプロトコル）")
@@ -239,7 +239,7 @@ internal fun SwitchRow(icon: ImageVector?, tint: Color, title: String, subtitle:
 
 /** Sub-screens have no bottom bar, so they carry their own back bar. */
 @Composable
-internal fun SubScreen(title: String, nav: Navigator, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxSize()) {
+internal fun SubScreen(title: String, nav: Navigator, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxSize().statusBarsPadding()) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton({ nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る", tint = Mosimo.textPrimary) }
         Text(title, style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)

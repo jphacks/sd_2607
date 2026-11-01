@@ -30,8 +30,9 @@ class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepo
     val state = mesh.state
     var filter by mutableStateOf(emptySet<Category>())
     var selected by mutableStateOf<String?>(null)
-    /** Top post id of the fanned-out pin stack. */
-    var expanded by mutableStateOf<String?>(null)
+    /** Posts of the tapped pin stack shown in the detail panel, newest first; [selected] is the one opened from it. */
+    var stack by mutableStateOf(emptyList<String>())
+    var hereCollapsed by mutableStateOf(false)
     var handledFocus: String? = null
     var centered = false
     /** Last camera, restored when the MapView is recreated (tab switch). */

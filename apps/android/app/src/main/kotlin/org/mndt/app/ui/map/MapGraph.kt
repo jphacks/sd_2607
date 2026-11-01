@@ -3,6 +3,17 @@ package org.mndt.app.ui.map
 import android.Manifest
 import android.location.Location
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import org.mndt.app.ui.post.dateTime
+import org.mndt.app.ui.post.shortDid
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -109,11 +120,13 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         val post = state.posts.firstOrNull { it.id == focus } ?: return@LaunchedEffect
         vm.handledFocus = focus
         post.latLng()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, 15.0, 0.5) }
-        vm.selected = focus
+        vm.stack = listOf(focus); vm.selected = focus
     }
     val selected = vm.selected?.let { id -> state.posts.firstOrNull { it.id == id } }
-    // Closes the detail when the post leaves the list (e.g. its author was blocked from the sheet).
+    val stacked = remember(vm.stack, state.posts) { vm.stack.mapNotNull { id -> state.posts.firstOrNull { it.id == id } } }
+    // Drops posts that left the list (e.g. their author was blocked from the panel).
     LaunchedEffect(vm.selected, selected == null) { if (vm.selected != null && selected == null && state.posts.isNotEmpty()) vm.selected = null }
+    fun closePanel() { vm.stack = emptyList(); vm.selected = null }
     val point = vm.picked ?: fix?.let { it.latitude to it.longitude }
     LaunchedEffect(vm.composing) { if (vm.composing) point?.let { (lat, lng) -> handle.moveTo(lat, lng, 15.0, 0.75) } }
 
@@ -127,11 +140,12 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         vm.picking = false; vm.composing = true
     }
     BackHandler(vm.picking) { endPick(false) }
+    BackHandler(!vm.picking && (selected != null || stacked.isNotEmpty())) { if (selected != null && stacked.size > 1) vm.selected = null else closePanel() }
 
     Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
-        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) else vm.expanded = null }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
+        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
         if (map != null) Box(Modifier.fillMaxSize()) {
-            Pins(handle, shown, vm.expanded, onExpand = { vm.expanded = it }) { vm.selected = it }
+            Pins(handle, shown) { ids -> vm.stack = ids; vm.selected = ids.singleOrNull() }
             if (vm.composing) point?.let { (lat, lng) ->
                 Text("この位置に投稿されます", Modifier.at(handle, lat, lng).padding(bottom = 14.dp).clip(RoundedCornerShape(8.dp))
                     .background(Mosimo.bgBase.copy(alpha = 0.85f)).border(1.dp, Mosimo.info, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -140,7 +154,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         }
         if (vm.picking) Icon(Icons.Filled.Place, null, Modifier.align(Alignment.Center).offset(y = (-20).dp).size(40.dp), tint = Mosimo.info)
 
-        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding()) {
             if (!granted) Banner("位置情報の権限がありません", "地図は使えます。投稿時は地図で位置を指定します", "許可する", Mosimo.warning) { askLocation() }
             if (vm.picking) Banner("投稿する位置を選ぶ", "地図を動かすかタップして、中央の印を合わせてください", null)
             else {
@@ -173,24 +187,66 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
                 Button({ endPick(true) }, Modifier.weight(1f).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
                     Text("この位置にする")
                 }
-            } else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS }, vm::compose)
+            } else if (selected != null || stacked.isNotEmpty()) PostPanel(selected, stacked, onSelect = { vm.selected = it }, onBack = { vm.selected = null }, onClose = ::closePanel)
+            else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS }, vm.hereCollapsed,
+                { vm.hereCollapsed = it }, vm::compose)
         }
     }
 
     if (vm.composing) Composer(vm, fix, address, state.network && state.onlineActive, ::pick)
-    selected?.let { post ->
-        MapSheet({ vm.selected = null }) {
-            PostDetail(post, Modifier.padding(horizontal = 16.dp), onShowOnMap = null)
+}
+
+private val sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+private fun Modifier.sheet() = fillMaxWidth().clip(sheetShape).background(Mosimo.bgSurface).border(1.dp, Mosimo.border, sheetShape)
+
+/** Non-modal panel for a tapped pin: the map stays pannable above it. A stack lists its posts; one post shows its detail. */
+@Composable
+private fun PostPanel(selected: PostView?, stack: List<PostView>, onSelect: (String) -> Unit, onBack: () -> Unit, onClose: () -> Unit) {
+    Column(Modifier.sheet().heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.55f).dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (selected != null && stack.size > 1) IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "一覧に戻る", tint = Mosimo.textPrimary) }
+            Text(if (selected != null) "投稿" else "この地点の投稿 ${stack.size}件", Modifier.weight(1f).padding(start = 12.dp),
+                style = MaterialTheme.typography.titleMedium, color = Mosimo.textPrimary)
+            IconButton(onClose) { Icon(Icons.Filled.Close, "閉じる", tint = Mosimo.textSecondary) }
         }
+        if (selected != null) PostDetail(selected, Modifier.weight(1f, fill = false).padding(horizontal = 16.dp), onShowOnMap = null)
+        else LazyColumn(Modifier.weight(1f, fill = false), contentPadding = PaddingValues(bottom = 8.dp)) {
+            items(stack, key = { it.id }) { p -> StackRow(p) { onSelect(p.id) } }
+        }
+    }
+}
+
+@Composable
+private fun StackRow(post: PostView, onClick: () -> Unit) {
+    val c = post.category()
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(28.dp).clip(CircleShape).background(c?.color ?: Mosimo.info), contentAlignment = Alignment.Center) {
+            Icon(icon(c), null, Modifier.size(16.dp), tint = Mosimo.bgBase)
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(post.body().lineSequence().first().ifBlank { c?.label.orEmpty() }, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${dateTime(post.createdAt)}・${shortDid(post.did, post.pubkey)}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Mosimo.textTertiary)
     }
 }
 
 /** Persistent bottom card (Figma 5:233): where am I, how many posts nearby, quick-post chips. */
 @Composable
-private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: Boolean, nearby: Int, onCompose: (Category?) -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).background(Mosimo.bgSurface)
-        .border(1.dp, Mosimo.border, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).padding(16.dp),
+private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: Boolean, nearby: Int, collapsed: Boolean,
+    onCollapse: (Boolean) -> Unit, onCompose: (Category?) -> Unit) {
+    val threshold = with(LocalDensity.current) { 24.dp.toPx() }
+    var drag by remember { mutableFloatStateOf(0f) }
+    Column(Modifier.sheet().animateContentSize().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Handle: tap or swipe down to leave only the title and location, swipe up to bring the chips and CTA back.
+        Box(Modifier.fillMaxWidth().clickable(onClickLabel = if (collapsed) "広げる" else "たたむ") { onCollapse(!collapsed) }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(onDragStart = { drag = 0f }, onDragEnd = { if (drag > threshold) onCollapse(true) else if (drag < -threshold) onCollapse(false) }) { _, dy -> drag += dy }
+            }.padding(top = 10.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(width = 36.dp, height = 4.dp).clip(CircleShape).background(Mosimo.borderStrong))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("今、ここの状況は？", style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
@@ -211,10 +267,10 @@ private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: 
                 Text("周辺 ${nearby}件", Modifier.padding(start = 4.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
             }
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!collapsed) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(Category.SAFE, Category.CAUTION, Category.DANGER, Category.SHELTER, Category.BLOCKED).forEach { c -> MosimoChip(c.label, false) { onCompose(c) } }
         }
-        Button({ onCompose(null) }, Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
+        if (!collapsed) Button({ onCompose(null) }, Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
             Icon(Icons.Filled.Place, null)
             Text("この場所の状況を投稿する", Modifier.padding(start = 8.dp))
         }
