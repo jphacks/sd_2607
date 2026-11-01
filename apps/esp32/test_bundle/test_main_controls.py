@@ -17,8 +17,11 @@ def main():
     parser.add_argument("--cxx", default="g++")
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--combined", action="store_true")
+    parser.add_argument("--speech-disabled", action="store_true", help="exercise the audio-free build")
     parser.add_argument("--diagnostic", action="store_true", help="also exercise opt-in UART test commands")
     args = parser.parse_args()
+    if args.speech_disabled and args.combined:
+        parser.error("--speech-disabled tests the non-gateway build and cannot be combined with --combined")
     here = Path(__file__).resolve().parent
     with tempfile.TemporaryDirectory(prefix="mesh-main-controls-host-") as directory:
         temp = Path(directory)
@@ -33,6 +36,8 @@ def main():
             command += ["-DMESH_GATEWAY_BUILD=1", "-DMESH_GATEWAY_TTS=1"]
         if args.diagnostic:
             command += ["-DMESH_TEST_DIAGNOSTICS=1"]
+        if args.speech_disabled:
+            command += ["-DMESH_SPEECH_DISABLED=1"]
         command += ["-I" + str(temp), "-I" + str(here.parent / "include"),
                     str(here / "main_controls_host.cpp"), "-o", str(exe)]
         print("+", " ".join(command), flush=True)

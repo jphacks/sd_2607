@@ -205,6 +205,6 @@ BSAFの `original.createdAt` と任意 `botDefinition.retrievedAt` は実在す�
 
 追加の共有公開fixture `../esp32/test_bundle/wire-v1-combined-server-fixture.json` は実サーバーAPIが発行した JMA 5種 + Kikikuru 23種の同一 certificate・連続28投稿を含む。上記 generator の `--write --combined` で再生成し、`--check --combined` で byte/provenance drift を検出する（テスト専用の決定的乱数、秘密鍵の読込・出力なし）。Gradle はこのJSONだけを test resource に追加し、APK/default trust に含めない。`PublicIngressTest` は全28種の認可・mesh payload一致、未選択extra・unknown/disabled root・root Scope拡大の拒否、32/33 types/Bot・64/65総数境界を検査する。Kikikuruの23種は一次 bot-definition の `type` options に固定し、元定義の更新で自動追加しない。
 
-実機の Keystore/電断 AtomicFile 試験・配布 root と本番 importer/relay の Android end-to-end は別途必要。ここで APK ビルドや JVM テストを通しても、その実機検証が完了したとはしない。ESP32 combined版の後続実機結果は [GATEWAY-HANDOFF.md](../esp32/GATEWAY-HANDOFF.md) にあり、Androidでの全経路検証とは区別する。
+実機の Keystore/電断 AtomicFile 試験・配布 root と本番 importer/relay の Android end-to-end は別途必要。ここで APK ビルドや JVM テストを通しても、その実機検証が完了したとはしない。ESP32 combined版の後続実機結果は [GATEWAY-HANDOFF.md](../esp32/history/GATEWAY-HANDOFF.md) にあり、Androidでの全経路検証とは区別する。
 
 一般の公的発信・update/cancel認可、多段証明、rootの本番配布・移行UI、独立した鍵対応宣言の配送は範囲外。公的転載identity内の既存format binding検証は対応する。

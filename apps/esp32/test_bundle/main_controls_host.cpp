@@ -10,6 +10,7 @@
 #include <vector>
 
 static unsigned checks = 0;
+static unsigned speechBegins = 0, speechTests = 0, speechToggles = 0, speechEnqueues = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { std::cerr << "FAIL " << __LINE__ << ": " << #x << '\n'; std::abort(); } } while (0)
 static uint32_t fakeMs = 0;
 uint32_t millis() { return fakeMs; }
@@ -37,7 +38,7 @@ constexpr int TFT_BLACK = 0, TFT_DARKGREY = 1;
 namespace fonts { const int lgfxJapanGothic_12 = 12; }
 struct MockDisplay {
     int x = 0, y = 0, clipHeight = 0;
-    std::vector<std::string> previews, headings, statuses;
+    std::vector<std::string> previews, headings, statuses, notes;
     int width() const { return 320; }
     int height() const { return 240; }
     int getCursorX() const { return x; }
@@ -62,6 +63,7 @@ struct MockDisplay {
     }
     void println(const char* text) {
         if (clipHeight == 56 && y == 14) previews.emplace_back(text);
+        else notes.emplace_back(text);
     }
 };
 struct MockButton {
@@ -86,13 +88,13 @@ struct Speech {
     static bool resourcesBusy() { return false; }
     unsigned begins = 0, tests = 0, toggles = 0;
     std::vector<std::pair<std::string, std::string>> enqueued;
-    bool begin() { ++begins; return true; }
-    bool test() { ++tests; return true; }
+    bool begin() { ++begins; ++speechBegins; return true; }
+    bool test() { ++tests; ++speechTests; return true; }
     // Deliberately record even when muted: main must skip enqueue itself.
     bool enqueue(const std::string& id, const std::string& text) {
-        enqueued.emplace_back(id, text); return true;
+        ++speechEnqueues; enqueued.emplace_back(id, text); return true;
     }
-    bool toggleMuted() { ++toggles; isMuted = !isMuted; return isMuted; }
+    bool toggleMuted() { ++toggles; ++speechToggles; isMuted = !isMuted; return isMuted; }
     bool muted() const { return isMuted; }
 };
 struct Relay {
@@ -162,6 +164,44 @@ static void acceptFresh(const std::string& id, const std::string& text) {
     CHECK(M5.Display.headings.back() == "RX " + id.substr(0, 8) + "\n");
 }
 
+#ifdef MESH_SPEECH_DISABLED
+int main() {
+    setup();
+    CHECK(meshReady && ble.begins == 1 && relay.begins == 1);
+    CHECK(ble.node == relay.node && ble.node == "0001020304050607");
+    CHECK(bool(relay.accepted) && bool(relay.send) && ble.enabled());
+    CHECK(speechBegins == 0);
+    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:OFF");
+    const uint8_t byte = 1;
+    CHECK(relay.send(&byte, 1) && ble.sends == 1);
+    acceptFresh("11111111-first", "Received without audio");
+    CHECK(speechEnqueues == 0);
+
+    press(M5.BtnA);
+    CHECK(M5.Display.notes.back().find("unavailable") != std::string::npos);
+    press(M5.BtnC);
+    CHECK(M5.Display.notes.back().find("unavailable") != std::string::npos);
+    CHECK(speechTests == 0 && speechToggles == 0 && ble.enabled());
+    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:OFF");
+
+    press(M5.BtnB);
+    CHECK(!ble.enabled() && ble.enableCalls == std::vector<bool>({false}));
+    CHECK(M5.Display.statuses.back() == "RX/TX:OFF  AUDIO:OFF");
+    CHECK(!relay.send(&byte, 1));
+    press(M5.BtnA);
+    CHECK(M5.Display.notes.back().find("unavailable") != std::string::npos);
+    press(M5.BtnC);
+    CHECK(M5.Display.notes.back().find("unavailable") != std::string::npos);
+    CHECK(!ble.enabled() && speechTests == 0 && speechToggles == 0);
+    press(M5.BtnB);
+    CHECK(ble.enabled() && ble.enableCalls == std::vector<bool>({false, true}));
+    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:OFF");
+    acceptFresh("22222222-second", "Radio back on");
+    CHECK(speechEnqueues == 0 && relay.send(&byte, 1));
+    fakeMs = 5000; loop();
+    std::cout << "PASS main controls without speech: " << checks << " assertions (actual main.cpp, host boundaries)\n";
+}
+#else
 int main() {
     setup();
     CHECK(meshReady && speechReady);
@@ -274,3 +314,4 @@ int main() {
     fakeMs = 5000; loop(); // Exercise heartbeat dependencies as well.
     std::cout << "PASS main controls: " << checks << " assertions (actual main.cpp, host boundaries)\n";
 }
+#endif

@@ -275,7 +275,11 @@ ASan/UBSan by default (BLE requires `--sanitize` to enable them).
 
 ```sh
 python3 apps/esp32/test_bundle/test_main_controls.py --sanitize
+python3 apps/esp32/test_bundle/test_main_controls.py --speech-disabled --sanitize
 ```
+
+The `--speech-disabled` variant checks A/C unavailable, AUDIO:OFF, BLE toggling,
+transmission and reception without speech. It exercises the non-gateway build.
 
 85 assertions compile the actual `main.cpp` with host hardware boundaries: C
 changes only audio mute, reception still updates the preview while muted, B toggles

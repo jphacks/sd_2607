@@ -28,5 +28,4 @@ M5Stack Basic（ESP32）を使った、公開テキスト投稿のBluetooth中�
 
 - [プロジェクト全体](../../README.md) / [Androidアプリ](../android/README.md)
 - [セットアップ・実装詳細・バックアップ・実機試験](DEVELOPMENT.md)
-- [実機検証記録と検証範囲](VERIFICATION.md) / [gateway＋音声の実機記録・操作手順](GATEWAY-HANDOFF.md) / [ホストテスト](test_bundle/README.md)
-- [メッシュ転送仕様](../../protocol/mndt.md)
+- [メッシュ転送仕様](../../protocol)

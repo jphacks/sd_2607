@@ -1,0 +1,33 @@
+[tools]
+python = "3.12"
+uv = "0.7.2"
+
+[tasks.sync]
+description = "Install locked Python dependencies"
+run = "uv sync --locked"
+
+[tasks.build]
+description = "Build firmware for a PlatformIO environment"
+usage = '''
+arg "<environment>" default="m5stack-tts" {
+  choices "m5stack" "m5stack-tts" "m5stack-wifi" "m5stack-wifi-tts"
+}
+'''
+run = 'uv run --locked pio run -e {{ usage.environment }}'
+
+[tasks.upload]
+description = "Build and upload firmware to the device"
+usage = '''
+arg "<environment>" default="m5stack-tts" {
+  choices "m5stack" "m5stack-tts" "m5stack-wifi" "m5stack-wifi-tts"
+}
+'''
+run = 'uv run --locked pio run -e {{ usage.environment }} --target upload'
+
+[tasks.devices]
+description = "List serial devices"
+run = "uv run --locked pio device list"
+
+[tasks.monitor]
+description = "Open the serial monitor (pass options after --)"
+run = "uv run --locked pio device monitor"

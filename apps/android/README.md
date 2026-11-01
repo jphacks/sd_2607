@@ -39,4 +39,4 @@
 - [ビルド・実装詳細・試験時の注意](DEVELOPMENT.md)
 - [ESP32中継ノード](../esp32/README.md) / [PDS](../../pds/README.md)
 - [公開ネットワーク検証報告](../../docs/android-production-verification-2026-10-18.md)
-- [実機検証の条件・制限](VERIFICATION.md) / [ESP32との中継検証](../esp32/VERIFICATION.md)
+- [実機検証の条件・制限](VERIFICATION.md) / [ESP32との中継検証](../esp32/history/VERIFICATION.md)

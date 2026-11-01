@@ -5,17 +5,34 @@
 #include "MeshBle.h"
 #include "MeshRelay.h"
 #include "MeshGateway.h"
+#ifndef MESH_SPEECH_DISABLED
 #include "MeshSpeech.h"
+#endif
+#if defined(MESH_SPEECH_DISABLED) && defined(MESH_GATEWAY_TTS)
+#error "Gateway TTS requires speech"
+#endif
 #include "MessagePreview.h"
 
 namespace {
 mesh::Relay relay;
 mesh::Ble ble;
+#ifndef MESH_SPEECH_DISABLED
 mesh::Speech speech;
+#endif
 bool meshReady = false;
+#if !defined(MESH_SPEECH_DISABLED) || defined(MESH_TEST_DIAGNOSTICS) || defined(MESH_GATEWAY_BUILD)
 bool speechReady = false;
+#endif
 constexpr int PREVIEW_HEIGHT = 56;
 constexpr int STATUS_HEIGHT = 14;
+
+bool audioMuted() {
+#ifndef MESH_SPEECH_DISABLED
+    return speech.muted();
+#else
+    return false;
+#endif
+}
 
 void note(const std::string& text);
 void showControls() {
@@ -28,8 +45,12 @@ void showControls() {
     M5.Display.setFont(nullptr);
     M5.Display.setTextSize(1);
     M5.Display.setCursor(0, 0);
-    M5.Display.printf("RX/TX:%s  AUDIO:%s", meshReady ? (ble.enabled() ? "ON" : "OFF") : "ERR",
-                      speechReady ? (speech.muted() ? "MUTE" : "ON") : "ERR");
+#ifdef MESH_SPEECH_DISABLED
+    const char* audioStatus = "OFF";
+#else
+    const char* audioStatus = speechReady ? (audioMuted() ? "MUTE" : "ON") : "ERR";
+#endif
+    M5.Display.printf("RX/TX:%s  AUDIO:%s", meshReady ? (ble.enabled() ? "ON" : "OFF") : "ERR", audioStatus);
     M5.Display.clearClipRect();
     M5.Display.setTextSize(2);
     M5.Display.setScrollRect(0, PREVIEW_HEIGHT, M5.Display.width(), M5.Display.height() - PREVIEW_HEIGHT);
@@ -62,7 +83,9 @@ void showMessage(const mesh::BundleInfo& message) {
     Serial.printf("Message preview updated id=%.8s\n", message.id.c_str());
     if (!message.certifiedImporter.empty())
         note("Importer checked at ingress: " + message.certifiedImporter + " priority=" + std::to_string(message.effectivePriority));
-    if (speechReady && !speech.muted()) speech.enqueue(message.id, message.text);
+#ifndef MESH_SPEECH_DISABLED
+    if (speechReady && !audioMuted()) speech.enqueue(message.id, message.text);
+#endif
 }
 
 void note(const std::string& text) {
@@ -83,15 +106,17 @@ void testCommands() {
         }
         bool ok = false;
         if (!overflow && line == "status") {
-            Serial.printf("status heap=%u stored=%u radio=%u speech_ready=%u muted=%u\n", ESP.getFreeHeap(), unsigned(relay.storedCount()), unsigned(meshReady && ble.enabled()), unsigned(speechReady), unsigned(speech.muted()));
+            Serial.printf("status heap=%u stored=%u radio=%u speech_ready=%u muted=%u\n", ESP.getFreeHeap(), unsigned(relay.storedCount()), unsigned(meshReady && ble.enabled()), unsigned(speechReady), unsigned(audioMuted()));
             ok = true;
         }
 #ifdef MESH_GATEWAY_BUILD
         else if (!overflow && line == "download") ok = mesh::gatewayRequestIngress();
+#ifndef MESH_SPEECH_DISABLED
         else if (!overflow && (line == "audio on" || line == "audio off")) {
-            if (speech.muted() != (line == "audio off")) speech.toggleMuted();
+            if (audioMuted() != (line == "audio off")) speech.toggleMuted();
             showControls(); ok = true;
         }
+#endif
 #endif
         else if (!overflow && line == "peers *") ok = relay.setAllowedPeers({});
         else if (!overflow && line.compare(0, 6, "peers ") == 0) {
@@ -115,8 +140,10 @@ void setup() {
     Serial.begin(115200);
     auto config = M5.config();
     M5.begin(config);
+#ifndef MESH_SPEECH_DISABLED
     M5.Speaker.setVolume(96);
     Serial.printf("Speaker ready=%d\n", M5.Speaker.begin());
+#endif
 
     M5.Display.setTextSize(1);
     M5.Display.setCursor(0, STATUS_HEIGHT);
@@ -130,7 +157,7 @@ void setup() {
     Serial.printf("ESP32 ready chip=%s flash=%u heap=%u\n",
                   ESP.getChipModel(), ESP.getFlashChipSize(), ESP.getFreeHeap());
 
-#if !defined(MESH_GATEWAY_BUILD) || defined(MESH_GATEWAY_TTS)
+#ifndef MESH_SPEECH_DISABLED
     speechReady = speech.begin();
 #ifdef MESH_GATEWAY_TTS
     note(speechReady ? "Gateway + TTS eval: A download / C mute" : "TTS unavailable; see README");
@@ -138,7 +165,7 @@ void setup() {
     note(speechReady ? "TTS eval: A test / C mute" : "TTS unavailable; see README");
 #endif
 #else
-    note("Gateway profile: TTS off to reserve TLS RAM");
+    note("Speech disabled at build time");
 #endif
 
     uint8_t random[8];
@@ -170,9 +197,11 @@ void loop() {
     if (M5.BtnA.wasPressed()) {
 #ifdef MESH_GATEWAY_BUILD
         note(mesh::gatewayRequestIngress() ? "Priority download requested" : "Ingress disabled; see root/clock config");
-#else
+#elif !defined(MESH_SPEECH_DISABLED)
         const bool queued = speechReady && speech.test();
         note(queued ? "Speech test queued" : "Speech test unavailable");
+#else
+        note("Speech test unavailable");
 #endif
     }
     if (M5.BtnB.wasPressed()) {
@@ -184,8 +213,12 @@ void loop() {
     }
 
     if (M5.BtnC.wasPressed()) {
+#ifndef MESH_SPEECH_DISABLED
         const bool muted = speech.toggleMuted();
         note(muted ? "Audio muted" : "Audio enabled");
+#else
+        note("Audio unavailable");
+#endif
         showControls();
     }
 
@@ -204,7 +237,7 @@ void loop() {
         Serial.printf("alive uptime_ms=%lu heap=%u stored=%u stack_free=%u radio=%u muted=%u\n",
                       static_cast<unsigned long>(now), ESP.getFreeHeap(),
                       static_cast<unsigned>(relay.storedCount()), uxTaskGetStackHighWaterMark(nullptr),
-                                            unsigned(meshReady && ble.enabled()), unsigned(speech.muted()));
+                                            unsigned(meshReady && ble.enabled()), unsigned(audioMuted()));
     }
     delay(10);
 }

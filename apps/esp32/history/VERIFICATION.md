@@ -42,7 +42,7 @@ Androidでの受理時刻は10:17:37。送信元がESP32のnode IDであるこ�
 - paddingなしBase64回帰16件（うちAndroid Kotlin実装が生成したfixture 8件）
 - Relay保存・交換・置換・失敗時ACK抑制：1,527アサーション
 - BLE実装の非ゼロ接続ハンドル・分割・再接続・オーバーフロー・送信待ち：215アサーション
-- ホストのC++テストはASan/UBSan有効。再実行方法は[`test_bundle/README.md`](test_bundle/README.md)参照
+- ホストのC++テストはASan/UBSan有効。再実行方法は[`test_bundle/README.md`](../test_bundle/README.md)参照
 - Android: JDK 21で`:app:assembleDemoDebug :app:assemblePeerDebug :bundle-core:test :mesh-android:testDebugUnitTest`成功
 
 ESP32のログでは空きヒープ約150 KiB、メインループの最小空きスタック約28 KiB。確認したテスト区間でpanic・brownout・再起動なし。
@@ -102,7 +102,7 @@ TTS done id=e24e017db2d12cb628b83b57e0003782d43d81e89e168733fab62c1b01a09c30 sam
 - 統合後のUbuntu WSL ASan/UBSan：Relay **4,326アサーション成功**、実`MeshSpeech.cpp`の変換中・合成中・PCM参照中・文分割間・最終出力待ちの割込み／重複／ミュート回帰成功、実`main.cpp` **85アサーション成功**。
 - 通常版`uv run pio run -e m5stack-basic`成功：アプリ **1,218,205 / 1,310,720 B（92.9%）**、静的RAM **48,392 B**。永続履歴の索引は別途最大約8 KiBのヒープを使う。
 - **この修正版の実機書込み・無線での再接続・実音声の割込みは未確認。** PCのUSBシリアル機器一覧が空のため実行できなかった。以前の実機成功記録をこの修正版の結果として流用しない。
-- 上限：退避履歴1,024 IDと16件キャッシュが満杯になると新規取得を停止する。履歴を自動消去しない。更新以前に既に失われたIDは復元できず初回のみ再取得される可能性がある。詳しくは[`RELAY-SEEN-HISTORY.md`](test_bundle/RELAY-SEEN-HISTORY.md)。
+- 上限：退避履歴1,024 IDと16件キャッシュが満杯になると新規取得を停止する。履歴を自動消去しない。更新以前に既に失われたIDは復元できず初回のみ再取得される可能性がある。詳しくは[`RELAY-SEEN-HISTORY.md`](../test_bundle/RELAY-SEEN-HISTORY.md)。
 
 ## 限界・未検証
 
