@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -128,9 +129,9 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     BackHandler(vm.picking) { endPick(false) }
 
     Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
-        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
+        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) else vm.expanded = null }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
         if (map != null) Box(Modifier.fillMaxSize()) {
-            Pins(handle, shown) { vm.selected = it }
+            Pins(handle, shown, vm.expanded, onExpand = { vm.expanded = it }) { vm.selected = it }
             if (vm.composing) point?.let { (lat, lng) ->
                 Text("この位置に投稿されます", Modifier.at(handle, lat, lng).padding(bottom = 14.dp).clip(RoundedCornerShape(8.dp))
                     .background(Mosimo.bgBase.copy(alpha = 0.85f)).border(1.dp, Mosimo.info, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -283,13 +284,17 @@ private fun icon(c: Category?): ImageVector = when (c) {
 
 /** Icon circle in the category colour over a dark label pill (Figma 5:233); the icon centre (16dp) is the anchor. */
 @Composable
-fun Pin(post: PostView, modifier: Modifier, onClick: () -> Unit) {
+fun Pin(post: PostView, modifier: Modifier, count: Int = 1, onClick: () -> Unit) {
     val c = post.category()
     val color = c?.color ?: Mosimo.info
     val label = post.body().lineSequence().first().trim().let { if (it.length > 10) it.take(10) + "…" else it }.ifEmpty { c?.label.orEmpty() }
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(32.dp).clip(CircleShape).background(color).border(2.dp, Mosimo.bgBase, CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon(c), c?.label ?: "投稿", Modifier.size(18.dp), tint = Mosimo.bgBase)
+        Box {
+            Box(Modifier.size(32.dp).clip(CircleShape).background(color).border(2.dp, Mosimo.bgBase, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(icon(c), c?.label ?: "投稿", Modifier.size(18.dp), tint = Mosimo.bgBase)
+            }
+            if (count > 1) Text("$count", Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-6).dp).clip(CircleShape).background(Mosimo.textPrimary)
+                .padding(horizontal = 5.dp), style = MaterialTheme.typography.labelSmall, color = Mosimo.bgBase, fontWeight = FontWeight.Bold)
         }
         if (label.isNotEmpty()) Text(label, Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).background(Mosimo.bgBase.copy(alpha = 0.88f))
             .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 2.dp),

@@ -1,7 +1,6 @@
 package org.mndt.app.ui.map
 
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,22 +31,9 @@ class GeoTest {
         assertEquals("±2.0km", accuracyLabel(2000f))
     }
 
-    @Test fun declutterKeepsSeparatePins() {
-        val rects = listOf(IntRect(0, 0, 40, 60), IntRect(100, 0, 140, 60), IntRect(0, 100, 40, 160))
-        assertEquals(List(3) { IntOffset.Zero }, declutter(rects, gap = 4))
-    }
-
-    @Test fun declutterSeparatesIdenticalAnchors() {
-        val r = IntRect(50, 50, 130, 110)
-        val shifts = declutter(listOf(r, r), gap = 4)
-        assertEquals(IntOffset.Zero, shifts[0])
-        assertTrue(!r.overlaps(r.translate(shifts[1])))
-    }
-
-    @Test fun declutterClusterIsDisjoint() {
-        val rects = (0 until 8).map { IntRect(200 + it * 3, 200 + it * 2, 280 + it * 3, 256 + it * 2) }
-        val placed = rects.zip(declutter(rects, gap = 4)) { r, o -> r.translate(o) }
-        placed.forEachIndexed { i, a -> placed.drop(i + 1).forEach { b -> assertTrue("$a overlaps $b", !a.overlaps(b)) } }
+    @Test fun stacksGroupOverlappingPinsUnderTheFirst() {
+        val points = listOf(IntOffset(100, 100), IntOffset(400, 100), IntOffset(110, 105), IntOffset(100, 400), IntOffset(405, 90))
+        assertEquals(listOf(0, 1, 0, 3, 1), stacks(points, w = 120, h = 60))
     }
 
     private fun haversine(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {

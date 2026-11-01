@@ -1,9 +1,9 @@
 package org.mndt.app.ui.map
 
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -60,23 +60,14 @@ fun pointFeature(lat: Double, lng: Double) = """{"type":"Feature","properties":{
 
 fun featureCollection(features: List<String>) = """{"type":"FeatureCollection","features":[${features.joinToString(",")}]}"""
 
-private val DIRS = listOf(0 to -1, 1 to 0, 0 to 1, -1 to 0, 1 to -1, 1 to 1, -1 to 1, -1 to -1)
-
 /**
- * Greedy screen-space declutter in list order (earlier rects win their true spot). Each rect keeps its place or takes the
- * first offset on rings of half its own size (8 directions, [rings] rings) that clears every placed rect by [gap].
- * Returns the shift per rect.
+ * Screen-space stacking in list order (put newest first): each point joins the first earlier stack whose top lies within
+ * [w]×[h] of it (the pin footprint), else starts a new one. Returns the stack's top index for every point.
  */
-// ponytail: O(n²·candidates), fine for a few hundred pins; switch to clustering if counts grow.
-fun declutter(rects: List<IntRect>, gap: Int, rings: Int = 4): List<IntOffset> {
-    val placed = ArrayList<IntRect>(rects.size)
-    return rects.map { r ->
-        val sx = (r.width + gap) / 2
-        val sy = (r.height + gap) / 2
-        val candidates = listOf(IntOffset.Zero) + (1..rings).flatMap { i -> DIRS.map { (dx, dy) -> IntOffset(dx * i * sx, dy * i * sy) } }
-        // ponytail: a cluster denser than the outer ring overlaps there; clustering is the fix if that shows up.
-        val shift = candidates.firstOrNull { o -> r.translate(o).inflate(gap).let { c -> placed.none { it.overlaps(c) } } } ?: candidates.last()
-        placed += r.translate(shift)
-        shift
+// ponytail: greedy O(n·stacks), fine for a few hundred pins; real clustering (supercluster) if counts grow.
+fun stacks(points: List<IntOffset>, w: Int, h: Int): List<Int> {
+    val tops = ArrayList<Int>()
+    return points.mapIndexed { i, p ->
+        tops.firstOrNull { t -> abs(points[t].x - p.x) < w && abs(points[t].y - p.y) < h } ?: i.also { tops += i }
     }
 }
