@@ -60,4 +60,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("io.insert-koin:koin-androidx-compose:4.1.1")
     implementation("org.maplibre.gl:android-sdk:13.6.1")
+    testImplementation("junit:junit:4.13.2")
 }
