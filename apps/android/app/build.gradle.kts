@@ -14,6 +14,8 @@ android {
         versionName = providers.gradleProperty("android.injected.version.name").orElse("0.1.0-experimental").get()
         manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
         manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
+        // Empty until the policy page is published; the settings row is hidden while empty.
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"\"")
         manifestPlaceholders["mndtTestNode"] = providers.gradleProperty("mndtTestNode").orElse("").get()
     }
     flavorDimensions += "demo"
@@ -33,7 +35,7 @@ android {
             versionNameSuffix = "-verification"
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -51,5 +53,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.navigation:navigation-compose:2.9.8")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("io.insert-koin:koin-androidx-compose:4.1.1")
+    implementation("org.maplibre.gl:android-sdk:13.6.1")
 }

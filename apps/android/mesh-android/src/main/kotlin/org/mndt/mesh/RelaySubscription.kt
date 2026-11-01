@@ -106,6 +106,7 @@ internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, rela
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
         // ponytail: re-derives the DID (signature check) per refresh; at most MAX_EVENTS, cache by id if it shows in profiles.
-        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = AtRepository.did(it))
+        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = AtRepository.did(it),
+            createdAt = it.createdAt, ext = Extensions.of(it))
     }
 }

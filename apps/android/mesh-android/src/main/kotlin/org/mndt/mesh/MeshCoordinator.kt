@@ -36,7 +36,9 @@ data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
     val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList(),
-    val publicAuthorization: String? = null, val did: String? = null)
+    val publicAuthorization: String? = null, val did: String? = null,
+    /** Nostr created_at (seconds) and decoded known extensions. */
+    val createdAt: Long = 0, val ext: PostExtensions = PostExtensions())
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -237,7 +239,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
-                    publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did)
+                    publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did,
+                    createdAt = it.event.createdAt, ext = Extensions.of(it.event))
             }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.map { post ->
                 if (post.volatile && publicEvents.any { it.id == post.id }) post.copy(sourceRelay = DiskState.PDS_RELAY) else post
             },
@@ -259,12 +262,14 @@ class MeshCoordinator private constructor(private val context: Context) {
             throw e
         }
     }
-    fun publish(text: String) = enqueue(critical = true) {
+    /** [extensions]: protocol/0011 maps (see [Extensions]); [deliveryExpiresAtSeconds] defaults to 24 h. */
+    fun publish(text: String, extensions: List<Map<String, Any?>> = emptyList(), deliveryExpiresAtSeconds: Long? = null) = enqueue(critical = true) {
         try {
             check(!fatal && author != null)
             require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 2_000)
             val current = checkNotNull(disk)
-            val post = checkNotNull(author).createPost(text, now(), current.repository)
+            val post = checkNotNull(author).createPost(text, now(), current.repository,
+                deliveryExpiresAtSeconds ?: (now() / 1000 + 86400), extensions)
             try { engine.originate(post.event, now(), elapsed()) }
             catch (_: IllegalArgumentException) {
                 issue("投稿の保存容量・配送条件・サイズ・発信頻度の制限に達しました。保存・発信はしていません")
