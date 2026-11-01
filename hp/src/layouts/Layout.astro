@@ -4,11 +4,14 @@ import '../styles/global.scss';
 interface Props {
   title: string;
   description?: string;
+  image?: string;
+  imageAlt?: string;
 }
 
-const { title, description = 'Mosimo Protocolのリファレンス実装「もしもの防災」について。' } = Astro.props;
+const { title, description = 'Mosimo Protocolのリファレンス実装「もしもの防災」について。', image = '/images/mosimo-protocol.png', imageAlt = 'Mosimo Protocol — いつものアプリが、もしもの通信網になる。' } = Astro.props;
 const pageTitle = title === 'Mosimo Protocol' ? title : `${title} | Mosimo Protocol`;
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const imageUrl = new URL(image, Astro.site);
 ---
 <!doctype html>
 <html lang="ja">
@@ -22,6 +25,11 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content="Mosimo Protocol" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:image" content={imageUrl} />
+    <meta property="og:image:alt" content={imageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <a class="skip-link" href="#content">本文へスキップ</a>
