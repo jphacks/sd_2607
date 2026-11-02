@@ -13,6 +13,8 @@ apps/android/fastlane/report.xml
 apps/android/fastlane/README.md
 apps/android/fastlane/Preview.html
 apps/android/fastlane/test_output/
+apps/android/fastlane/metadata/android/screenshots.html
+apps/android/fastlane/metadata/android/*/images/phoneScreenshots/
 apps/android/.bundle/
 apps/android/vendor/bundle/
 

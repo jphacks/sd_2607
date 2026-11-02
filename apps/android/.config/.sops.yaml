@@ -1,0 +1,12 @@
+keys:
+  - &github_actions_release age1xh249h67r9telhlhrhx49hmewjfq8s5h6khplw7x8wc0xdzlsgjqzlj75m
+  - &m_chiba age1fxnxrf0k8vd4rcfzc4e7nngcdkpmum6muwzlanzh5rzjeujcr97sv0p8wa
+
+creation_rules:
+  - path_regex: release\.sops\.yaml$
+    age:
+      - *github_actions_release
+      - *m_chiba
+  - path_regex: deploy\.sops\.yaml$
+    age:
+      - *github_actions_release

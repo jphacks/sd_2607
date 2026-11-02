@@ -42,7 +42,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 import org.koin.dsl.module
-import org.mndt.app.BuildConfig
+import dev.jisaku.mosimo.BuildConfig
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.Navigator
 import org.mndt.app.ui.SettingsKey

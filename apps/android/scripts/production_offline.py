@@ -16,7 +16,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent
 OUT = HERE / '.gradle' / 'production-20261019'
 STATE = OUT / 'state.json'
-PACKAGE = 'dev.oriom.mosimo'
+PACKAGE = 'dev.jisaku.mosimo'
 DEVICES = {'ASUS': 'T4AIOC732121JRB', 'OPPO': '4f4ebc6f'}
 
 
@@ -188,7 +188,7 @@ def prepare(state):
 
 
 def install(state):
-    apk = HERE / 'app/build/outputs/apk/demo/debug/app-demo-debug.apk'
+    apk = HERE / 'app/build/outputs/apk/debug/app-debug.apk'
     for label, info in state['devices'].items():
         assert not info['newPostRequested']
         adb(label, 'shell', 'am', 'force-stop', PACKAGE)
