@@ -57,7 +57,7 @@ GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnviro
 
 | Secret | 値 |
 | --- | --- |
-| `SOPS_AGE_KEY` | `.config/.sops.yaml`の`github_actions_release`に対応するage秘密鍵 |
+| `MISE_SOPS_AGE_KEY` | `.config/.sops.yaml`の`github_actions_release`に対応するage秘密鍵 |
 | `ANDROID_KEYSTORE_BASE64` | アップロードkeystoreのBase64文字列 |
 
 同じEnvironmentの**Deployment branches and tags**を`Selected branches and tags`にし、`main`だけを許可する。これで`main`以外のrefから実行した配布ジョブはSecretを読む前に拒否される。
