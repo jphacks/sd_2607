@@ -32,6 +32,9 @@ internal fun relayEventFrame(eventJson: String): String = "[\"EVENT\",$eventJson
     require(it.toByteArray(Charsets.UTF_8).size <= 262144) { "Relay event size limit" }
 }
 
+/** A relay's OK false is a policy decision; retrying that event sooner only churns sockets. */
+internal const val RELAY_REJECT_DEFER_MILLIS = 10 * 60_000L
+
 /** Rotate actual attempts so a disconnecting or rejecting first event cannot starve the queue. */
 internal fun nextRelayId(ids: List<String>, lastAttempt: String?, deferred: Map<String, Long>, now: Long): String? {
     val start = ids.indexOf(lastAttempt) + 1

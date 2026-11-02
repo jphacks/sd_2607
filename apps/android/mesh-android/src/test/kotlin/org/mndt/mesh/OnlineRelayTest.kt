@@ -67,6 +67,16 @@ class OnlineRelayTest {
         }
     }
 
+    @Test fun rejectedEventWaitsPolicyDeferralNotBackoff() {
+        val relays = listOf("wss://pds.oriom.dev", "wss://relay.damus.io")
+        val deferred = mapOf(relays[1] to mapOf("event" to 1_000 + RELAY_REJECT_DEFER_MILLIS))
+        val pending = { relay: String -> if (relay == relays[1]) listOf("event") else emptyList() }
+        // Longer than the 60 s maximum transport backoff, so a rejecting relay is not reopened every few seconds.
+        assertTrue(RELAY_REJECT_DEFER_MILLIS >= 10 * 60_000L)
+        assertNull(nextRelayIndex(relays, 0, pending, deferred, emptyMap(), 1_000 + 61_000))
+        assertEquals(1, nextRelayIndex(relays, 0, pending, deferred, emptyMap(), 1_000 + RELAY_REJECT_DEFER_MILLIS))
+    }
+
     @Test fun oldDefaultsGainPdsFirstOnlyOnce() {
         val old = listOf("wss://relay.damus.io", "wss://nos.lol")
         val expected = listOf("wss://pds.oriom.dev", "wss://relay.damus.io", "wss://nos.lol")

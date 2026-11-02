@@ -128,6 +128,20 @@ class RelaySubscriptionTest {
         assertNull(flood.receive(2, "[]", 60_000))
     }
 
+    @Test fun rotationKeepsCacheAndResentBacklogDoesNotSpendTheWindow() {
+        val session = opened()
+        val backlog = (0 until 8).map { event(it) }
+        backlog.forEach { assertNotNull(session.receive(1, frame(session, it), 0)) }
+        for (generation in 2L..60L) {
+            session.disconnect()
+            assertNotNull(session.open(generation))
+            backlog.forEach { assertNull(session.receive(generation, frame(session, it), 0, setOf(event(99).id))) }
+            assertEquals(RelayReply.Eose, session.receive(generation, "[\"EOSE\",\"mndt-$generation\"]", 0))
+        }
+        assertEquals(backlog, session.events())
+        assertNotNull(session.receive(60, frame(session, event(8)), 0))
+    }
+
     @Test fun backlogOksDoNotSpendTheReceiveWindow() {
         val session = opened()
         val ok = "[\"OK\",\"${"a".repeat(64)}\",true,\"\"]"

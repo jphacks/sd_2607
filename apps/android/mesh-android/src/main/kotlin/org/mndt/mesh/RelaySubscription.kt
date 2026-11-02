@@ -66,6 +66,9 @@ internal class RelaySubscription {
         // OKs answer our own one-at-a-time EVENTs, so a backlog flush must not spend the receive window.
         if (frame != null && frame.isArray && frame.size() == 4 && frame[0].textValue() == "OK" && frame[1].isTextual &&
             frame[2].isBoolean && frame[3].isTextual) return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue())
+        // A rotation's re-sent backlog is dropped unverified by id, so reconnects cannot spend the window either.
+        if (frame != null && frame.isArray && frame.size() == 3 && frame[0].textValue() == "EVENT" &&
+            frame[2].path("id").textValue()?.let { it in retained || it in meshIds } == true) return null
         while (frameTimes.isNotEmpty() && (elapsed - frameTimes.first() >= 60_000 || elapsed < frameTimes.first())) frameTimes.removeFirst()
         require(frameTimes.size < MAX_FRAMES_PER_MINUTE) { "Relay receive rate limit" }
         frameTimes.addLast(elapsed)

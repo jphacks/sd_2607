@@ -517,7 +517,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                 ?: relays.indices.map { (relayIndex + it) % relays.size }
                     .firstOrNull { elapsed() >= (relayRetryAt[relays[it]] ?: 0L) } ?: return
             activeRelay = relays[relayIndex]
-            relaySubscription.clear()
+            // Rotation keeps the display cache; only relay removal or going offline clears it.
+            relaySubscription.disconnect()
             val gen = ++socketGeneration
             relayDeadline = elapsed() + 20_000
             // Endpoint reachability, not public-Internet validation, decides local shelter relay access.
@@ -590,9 +591,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (reply.id != id) return
         relayPendingId = null; relayDeadline = 0
         if (!reply.accepted) {
-            val failures = (relayFailures[activeRelay] ?: 0) + 1
-            relayFailures[activeRelay] = failures
-            relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + backoff(failures)
+            // OK false is relay policy, not transport: onOpen resets failures, so a backoff here looped every ~2 s.
+            relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + RELAY_REJECT_DEFER_MILLIS
             note("リレー拒否 ${id.take(8)}（$activeRelay）。投稿は保持")
             closeRelay(); relayIndex++
             drainRelay()
