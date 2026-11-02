@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import com.fasterxml.jackson.databind.JsonNode
 import org.mndt.core.RepositoryState
 import org.mndt.core.PublicIngress
 import org.mndt.core.MeshPolicy
@@ -35,15 +36,24 @@ internal data class DiskState(
     val onlineEnabled: Boolean = true,
     val relayDefaultsMigrated: Boolean = true,
     val publicTrust: PublicIngress.Memory = PublicIngress.Memory(),
-    val publicAudit: Map<String, String> = emptyMap()
+    val publicAudit: Map<String, String> = emptyMap(),
+    /** Author DIDs whose events are never stored; never peers or links. */
+    val blockedDids: List<String> = emptyList()
 ) {
     companion object {
         const val PDS_RELAY = "wss://pds.oriom.dev"
         val LEGACY_DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
         val DEFAULT_RELAYS = listOf(PDS_RELAY) + LEGACY_DEFAULT_RELAYS
         const val MAX_RELAYS = 8
+        const val MAX_BLOCKED = 1024
     }
 }
+
+/** Optional field; state files written before blocking existed load as an empty list. */
+internal fun readBlockedDids(node: JsonNode?): List<String> = node?.let { list ->
+    require(list.isArray && list.size() <= DiskState.MAX_BLOCKED)
+    list.map { require(it.isTextual && it.textValue().matches(Regex("did:plc:[a-z2-7]{24}"))); it.textValue() }
+}.orEmpty()
 
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
 internal class EncryptedStore(context: Context) {
@@ -112,7 +122,7 @@ internal class EncryptedStore(context: Context) {
                         require(id.matches(Regex("[0-9a-f]{64}")) && value.isTextual && value.textValue().length <= 4096)
                         id to value.textValue()
                     }
-                }.orEmpty())
+                }.orEmpty(), blockedDids = readBlockedDids(node["blockedDids"]))
         } finally { plain.fill(0) }
     }
     fun save(state: DiskState, entries: List<StoredBundle>, bootCount: Int? = null) {
@@ -129,6 +139,7 @@ internal class EncryptedStore(context: Context) {
         trust.putObject("snapshots").also { s -> state.publicTrust.snapshots.forEach { (id, bytes) -> s.put(id, base64.encodeToString(bytes)) } }
         trust.putObject("serials").also { s -> state.publicTrust.serials.forEach { (id, hash) -> s.put(id, hash) } }
         node.putArray("relays").also { a -> state.relays.forEach(a::add) }
+        node.putArray("blockedDids").also { a -> state.blockedDids.forEach(a::add) }
         node.putObject("records").also { records -> state.repository.records.forEach { (k, v) -> records.put(k, v) } }
         node.putArray("bundles").also { a -> entries.forEach {
             a.addObject().put("bytes", base64.encodeToString(it.bytes)).put("received", it.receivedAtMillis)

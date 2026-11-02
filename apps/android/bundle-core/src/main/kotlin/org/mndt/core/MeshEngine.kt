@@ -22,7 +22,11 @@ data class StoredBundle(
     val hop: Int,
     val receivedAtMillis: Long,
     val receivedElapsedMillis: Long,
-)
+) {
+    val did: String? by lazy { AtRepository.did(event) }
+}
+
+class BlockedAuthor(val id: String) : IllegalArgumentException("blocked author")
 
 enum class ClockConfidence { UNKNOWN, TRUSTED }
 enum class DeliveryDeadline { UNKNOWN, WITHIN_DEADLINE, EXPIRED }
@@ -34,6 +38,8 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     var relayed: (String) -> Boolean = { false }
     /** Local retention policy, independent of mesh forwarding eligibility and relay priority. */
     var canEvict: (StoredBundle) -> Boolean = { true }
+    /** Author-DID block filter; refused events are never stored, so they are never advertised or forwarded either. */
+    var admit: (NostrEvent) -> Boolean = { true }
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
     private val sendRates = mutableMapOf<String, MutableList<Long>>()
@@ -78,6 +84,8 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     }
 
     fun entries(): List<StoredBundle> = stored.values.toList()
+
+    fun remove(predicate: (StoredBundle) -> Boolean): Boolean = stored.values.removeIf(predicate)
 
     fun deadline(event: NostrEvent, nowMillis: Long): DeliveryDeadline =
         if (clockConfidence != ClockConfidence.TRUSTED) DeliveryDeadline.UNKNOWN
@@ -148,6 +156,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         require(unknown.none { it.procV7flags and 0x04 != 0L }) { "unknown block requires bundle deletion" }
         bundle.canonicalBlocks.removeAll { it.blockType !in knownTypes && it.procV7flags and 0x10 != 0L }
         if (stored.containsKey(event.id)) return null
+        if (!admit(event)) throw BlockedAuthor(event.id)
         val victim = if (stored.size >= MeshPolicy.MAX_ENTRIES)
             requireNotNull(victim(nowMillis, elapsedMillis)) { "storage capacity reached: all entries protected" }
         else null
