@@ -1,0 +1,5 @@
+@import 'tailwindcss';
+@import '@digital-go-jp/tailwind-theme-plugin/v4';
+
+body { @apply bg-white font-sans text-solid-gray-800; }
+:focus-visible { @apply outline-4 outline-offset-2 outline-black ring-2 ring-focus-yellow; }
