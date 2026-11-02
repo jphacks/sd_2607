@@ -4,13 +4,13 @@ import android.Manifest
 import android.location.Location
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import org.mndt.app.ui.post.dateTime
 import org.mndt.app.ui.post.shortDid
@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.EntryProviderScope
@@ -140,7 +141,6 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         vm.picking = false; vm.composing = true
     }
     BackHandler(vm.picking) { endPick(false) }
-    BackHandler(!vm.picking && (selected != null || stacked.isNotEmpty())) { if (selected != null && stacked.size > 1) vm.selected = null else closePanel() }
 
     Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
         MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
@@ -187,23 +187,31 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
                 Button({ endPick(true) }, Modifier.weight(1f).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
                     Text("この位置にする")
                 }
-            } else if (selected != null || stacked.isNotEmpty()) PostPanel(selected, stacked, onSelect = { vm.selected = it }, onBack = { vm.selected = null }, onClose = ::closePanel)
-            else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS }, vm.hereCollapsed,
+            } else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS }, vm.hereCollapsed,
                 { vm.hereCollapsed = it }, vm::compose)
         }
     }
 
+    if (selected != null || stacked.isNotEmpty()) {
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val scope = rememberCoroutineScope()
+        MapSheet(::closePanel, sheet) {
+            PostPanel(selected, stacked, onSelect = { vm.selected = it }, onBack = { vm.selected = null },
+                onClose = { scope.launch { sheet.hide() }.invokeOnCompletion { closePanel() } })
+        }
+    }
     if (vm.composing) Composer(vm, fix, address, state.network && state.onlineActive, ::pick)
 }
 
 private val sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
 private fun Modifier.sheet() = fillMaxWidth().clip(sheetShape).background(Mosimo.bgSurface).border(1.dp, Mosimo.border, sheetShape)
 
-/** Non-modal panel for a tapped pin: the map stays pannable above it. A stack lists its posts; one post shows its detail. */
+/** Content of the modal sheet for a tapped pin: a stack lists its posts; one post shows its detail. Back returns to the list. */
 @Composable
 private fun PostPanel(selected: PostView?, stack: List<PostView>, onSelect: (String) -> Unit, onBack: () -> Unit, onClose: () -> Unit) {
-    Column(Modifier.sheet().heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.55f).dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    BackHandler(selected != null && stack.size > 1, onBack)
+    Column {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             if (selected != null && stack.size > 1) IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "一覧に戻る", tint = Mosimo.textPrimary) }
             Text(if (selected != null) "投稿" else "この地点の投稿 ${stack.size}件", Modifier.weight(1f).padding(start = 12.dp),
                 style = MaterialTheme.typography.titleMedium, color = Mosimo.textPrimary)
@@ -238,13 +246,13 @@ private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: 
     onCollapse: (Boolean) -> Unit, onCompose: (Category?) -> Unit) {
     val threshold = with(LocalDensity.current) { 24.dp.toPx() }
     var drag by remember { mutableFloatStateOf(0f) }
-    Column(Modifier.sheet().animateContentSize().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+    // Swipe anywhere on the card: down leaves only the title and location, up brings the chips and CTA back. The handle also toggles on tap.
+    Column(Modifier.sheet().draggable(rememberDraggableState { drag += it }, Orientation.Vertical, onDragStarted = { drag = 0f },
+        onDragStopped = { if (drag > threshold) onCollapse(true) else if (drag < -threshold) onCollapse(false) })
+        .animateContentSize().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Handle: tap or swipe down to leave only the title and location, swipe up to bring the chips and CTA back.
         Box(Modifier.fillMaxWidth().clickable(onClickLabel = if (collapsed) "広げる" else "たたむ") { onCollapse(!collapsed) }
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(onDragStart = { drag = 0f }, onDragEnd = { if (drag > threshold) onCollapse(true) else if (drag < -threshold) onCollapse(false) }) { _, dy -> drag += dy }
-            }.padding(top = 10.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
+            .padding(top = 10.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
             Box(Modifier.size(width = 36.dp, height = 4.dp).clip(CircleShape).background(Mosimo.borderStrong))
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
