@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import org.mndt.app.ui.post.dateTime
 import org.mndt.app.ui.post.shortDid
 import androidx.activity.compose.LocalActivity
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import org.maplibre.android.geometry.LatLng
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,6 +78,7 @@ private const val NEARBY_METERS = 1000f
 @Composable
 private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val activity = LocalActivity.current
     val state by vm.state.collectAsStateWithLifecycle()
     val fix by vm.location.location.collectAsStateWithLifecycle()
@@ -143,9 +147,14 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     BackHandler(vm.picking) { endPick(false) }
 
     Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
-        MapLibreView(handle, regions, me, onClick = { lat, lng -> if (vm.picking) handle.moveTo(lat, lng) }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
+        val groups = pinGroups(handle, shown)
+        fun open(ids: List<String>) { vm.stack = ids; vm.selected = ids.singleOrNull() }
+        MapLibreView(handle, regions, me, onClick = { lat, lng ->
+            if (vm.picking) handle.moveTo(lat, lng)
+            else handle.map?.projection?.toScreenLocation(LatLng(lat, lng))?.let { pt -> density.pinAt(groups, pt.x, pt.y) }?.let { open(it.ids) }
+        }, modifier = Modifier.fillMaxSize(), camera = vm.camera)
         if (map != null) Box(Modifier.fillMaxSize()) {
-            Pins(handle, shown) { ids -> vm.stack = ids; vm.selected = ids.singleOrNull() }
+            Pins(handle, groups, ::open)
             if (vm.composing) point?.let { (lat, lng) ->
                 Text("この位置に投稿されます", Modifier.at(handle, lat, lng).padding(bottom = 14.dp).clip(RoundedCornerShape(8.dp))
                     .background(Mosimo.bgBase.copy(alpha = 0.85f)).border(1.dp, Mosimo.info, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -352,7 +361,8 @@ fun Pin(post: PostView, modifier: Modifier, count: Int = 1, onClick: () -> Unit)
     val c = post.category()
     val color = c?.color ?: Mosimo.info
     val label = post.body().lineSequence().first().trim().let { if (it.length > 10) it.take(10) + "…" else it }.ifEmpty { c?.label.orEmpty() }
-    Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+    // Semantics only, no pointer input: touches fall through to the map (see pinAt).
+    Column(modifier.semantics { onClick(c?.label ?: "投稿") { onClick(); true } }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
             Box(Modifier.size(32.dp).clip(CircleShape).background(color).border(2.dp, Mosimo.bgBase, CircleShape), contentAlignment = Alignment.Center) {
                 Icon(icon(c), c?.label ?: "投稿", Modifier.size(18.dp), tint = Mosimo.bgBase)
