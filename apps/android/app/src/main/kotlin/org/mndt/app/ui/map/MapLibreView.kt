@@ -37,6 +37,8 @@ import kotlin.math.roundToInt
 fun Color.hex() = "#%06X".format(Locale.ROOT, toArgb() and 0xFFFFFF)
 
 private val EMPTY = featureCollection(emptyList())
+/** Zoomed out as far as this, a phone shows the whole of Japan (~23° of longitude); further out is just ocean. */
+private const val MIN_ZOOM = 3.3
 
 // GSI pale tiles turned dark in the shader: brightness min/max swapped inverts, saturation -1 drops the tint.
 // Tune raster-contrast / brightness here if roads read too faint on device.
@@ -120,6 +122,7 @@ fun MapLibreView(handle: MapHandle, regions: String, me: String, onClick: (Doubl
     LaunchedEffect(view) {
         view.getMapAsync { m ->
             m.uiSettings.apply { isLogoEnabled = false; isAttributionEnabled = false; isRotateGesturesEnabled = false; isTiltGesturesEnabled = false }
+            m.setMinZoomPreference(MIN_ZOOM)
             m.cameraPosition = camera ?: CameraPosition.Builder().target(LatLng(36.5, 138.0)).zoom(5.0).build()
             m.addOnCameraMoveListener { handle.tick.intValue++ }
             m.addOnCameraIdleListener { handle.tick.intValue++ }
