@@ -94,7 +94,7 @@ private fun SettingsScreen(nav: Navigator) {
                 if (!it) MeshService.stop(context) else radios.launch(MeshPermissions.required())
             }
             Line()
-            SwitchRow(Icons.Outlined.Schedule, Mosimo.info, "端末時計を信頼", "公的情報の検証に必要・再起動で解除", state.clockConfidence == ClockConfidence.TRUSTED) {
+            SwitchRow(Icons.Outlined.Schedule, Mosimo.info, "端末時計を信頼", "公的情報の検証に必要", state.clockConfidence == ClockConfidence.TRUSTED) {
                 mesh.setClockConfidence(if (it) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN)
             }
             Line()

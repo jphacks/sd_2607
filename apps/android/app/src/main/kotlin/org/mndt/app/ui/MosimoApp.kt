@@ -128,13 +128,16 @@ private fun RowScope.TabItem(label: String, icon: ImageVector, active: Boolean, 
     }
 }
 
-/** First launch only: nearby devices → notifications → location, then start relaying if nearby was granted. */
+/** First launch: nearby devices → notifications → location, then start relaying if nearby was granted. Later launches resume relaying unless switched off. */
 @Composable
 private fun FirstLaunchPermissions() {
     val context = LocalContext.current
     val location = koinInject<LocationRepository>()
     val prefs = remember { context.getSharedPreferences("app", Context.MODE_PRIVATE) }
-    if (prefs.getBoolean("permissionsAsked", false)) return
+    if (prefs.getBoolean("permissionsAsked", false)) {
+        LaunchedEffect(Unit) { if (MeshService.enabled(context) && MeshPermissions.granted(context)) startRelay(context) }
+        return
+    }
     val locate = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         prefs.edit { putBoolean("permissionsAsked", true) }
         location.refresh()

@@ -72,8 +72,8 @@ class MeshService : Service() {
         private const val CHANNEL = "mndt-mesh"
         private const val ACTION_STOP = "org.mndt.mesh.STOP"
         private const val PREFS = "mesh-service"
-        /** Plain flag (readable before the keystore-backed state) so BootReceiver restarts only what the user left on. */
-        internal fun enabled(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
+        /** Plain flag (readable before the keystore-backed state): on until the user switches relaying off; app launch and BootReceiver honour it. */
+        fun enabled(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", true)
         private fun setEnabled(context: Context, value: Boolean) =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", value).apply()
         fun start(context: Context) { setEnabled(context, true); ContextCompat.startForegroundService(context, Intent(context, MeshService::class.java)) }

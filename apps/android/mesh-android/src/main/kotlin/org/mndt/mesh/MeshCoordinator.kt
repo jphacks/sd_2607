@@ -134,6 +134,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
 
     init {
+        engine.clockConfidence = if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(CLOCK_TRUSTED, true)) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN
         engine.relayed = { id -> disk?.relayAccepted?.values?.any { id in it } == true }
         // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
         engine.admit = { AtRepository.did(it) !in blocked }
@@ -207,8 +208,9 @@ class MeshCoordinator private constructor(private val context: Context) {
     private fun issue(text: String) { mutableState.update { it.copy(error = text) }; note(text) }
     fun clearError() = enqueue(critical = true) { mutableState.update { it.copy(error = null) } }
     fun reportError(text: String) = enqueue(critical = true) { issue(text.take(160)) }
-    /** Local operator policy, not clock synchronization or network consensus. Defaults to UNKNOWN on restart. */
+    /** Local operator policy, not clock synchronization or network consensus. Trusted from install until the user says otherwise; persisted. */
     fun setClockConfidence(value: ClockConfidence) = enqueue(critical = true) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(CLOCK_TRUSTED, value == ClockConfidence.TRUSTED).apply()
         // A display-only download under the old clock must not throttle the authorized one.
         if (engine.clockConfidence != value) { cancelPublicDownload(); publicNext = 0 }
         engine.clockConfidence = value
@@ -697,6 +699,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (clock - lastSync >= 10_000) { lastSync = clock; exchange.broadcastInventory() }
     }
     companion object {
+        private const val PREFS = "mesh-coordinator"
+        private const val CLOCK_TRUSTED = "clockTrusted"
         @Volatile private var instance: MeshCoordinator? = null
         fun get(context: Context): MeshCoordinator = instance ?: synchronized(this) {
             instance ?: MeshCoordinator(context.applicationContext).also { instance = it }
