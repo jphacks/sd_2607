@@ -2,8 +2,16 @@ name: Android
 
 on:
   pull_request:
+    paths:
+      - 'apps/android/**'
+      - 'third_party/sd_2607-dtn7-kotlin/bpv7/**'
+      - '.github/workflows/android.yml'
   push:
     branches: [main]
+    paths:
+      - 'apps/android/**'
+      - 'third_party/sd_2607-dtn7-kotlin/bpv7/**'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
     inputs:
       app:
