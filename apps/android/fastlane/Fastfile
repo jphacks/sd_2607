@@ -3,68 +3,30 @@ default_platform(:android)
 ANDROID_APPS = {
   "mosimo" => { module: "app", package: "dev.jisaku.mosimo" }
 }.freeze
-ANDROID_PROJECT = File.expand_path("..", __dir__)
-SIGNING_ENV = %w[ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD].freeze
 
 def android_app!(options)
   ANDROID_APPS.fetch(options[:app].to_s) { UI.user_error!("Unknown app: #{options[:app]}. Choose: #{ANDROID_APPS.keys.join(', ')}") }
 end
 
-def release_options!(options)
-  app = android_app!(options)
-  if options.key?(:version_code) || options.key?(:version_name)
-    UI.user_error!("Set versionCode and versionName in app/build.gradle.kts, not lane options")
-  end
-  missing = SIGNING_ENV.select { |key| ENV[key].to_s.strip.empty? }
-  UI.user_error!("Missing signing configuration: #{missing.join(', ')}") unless missing.empty?
-  UI.user_error!("ANDROID_KEYSTORE_PATH must point to a file") unless File.file?(ENV.fetch("ANDROID_KEYSTORE_PATH"))
-  app
-end
-
 platform :android do
   desc "Run unit tests, lint, and build a debug APK for the selected app"
   lane :ci do |options|
-    app = android_app!(options)
-    gradle(
-      project_dir: ANDROID_PROJECT,
-      tasks: [":dtn7-bpv7:test", ":bundle-core:test", ":mesh-android:testDebugUnitTest",
-              ":#{app[:module]}:testDebugUnitTest",
-              ":#{app[:module]}:lintDebug", ":#{app[:module]}:assembleDebug"]
-    )
+    m = android_app!(options)[:module]
+    gradle(tasks: [":dtn7-bpv7:test", ":bundle-core:test", ":mesh-android:testDebugUnitTest",
+                   ":#{m}:testDebugUnitTest", ":#{m}:lintDebug", ":#{m}:assembleDebug"])
   end
 
   desc "Build a signed release AAB using the Gradle version"
   lane :build do |options|
-    app = release_options!(options)
-
-    gradle(
-      project_dir: ANDROID_PROJECT,
-      task: ":#{app[:module]}:bundleRelease",
-      print_command: false,
-      print_command_output: false
-    )
-    aab = lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
-    UI.user_error!("Gradle did not produce an AAB") unless aab
-    aab
+    gradle(task: ":#{android_app!(options)[:module]}:bundleRelease")
   end
 
-  desc "Test, build, and publish to Google Play internal testing"
+  desc "Test, build, and publish the AAB and committed screenshots to Google Play internal testing"
   lane :internal do |options|
-    app = release_options!(options)
-    UI.user_error!("SUPPLY_JSON_KEY_DATA is required") if ENV["SUPPLY_JSON_KEY_DATA"].to_s.strip.empty?
+    app = android_app!(options)
     ci(options)
-    aab = build(options)
-    upload_to_play_store(
-      package_name: app[:package],
-      json_key_data: ENV.fetch("SUPPLY_JSON_KEY_DATA"),
-      aab: aab,
-      track: "internal",
-      release_status: "completed",
-      skip_upload_apk: true,
-      skip_upload_metadata: true,
-      skip_upload_images: true,
-      skip_upload_screenshots: true,
-      skip_upload_changelogs: true
-    )
+    build(options)
+    # ci leaves the debug APK in lane_context; upload only the AAB.
+    upload_to_play_store(package_name: app[:package], track: "internal", skip_upload_apk: true)
   end
 end
