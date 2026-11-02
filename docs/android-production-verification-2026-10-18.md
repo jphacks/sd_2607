@@ -1,5 +1,7 @@
 # Android 実機→本番 Nostr／atproto 公開検証（2026-10-18）
 
+> この文書は過去の検証記録です。専用の `verification` flavor と実機ランナーは削除されており、記載の手順は現在のコードでは再実行できません。
+
 ## 結果
 
 **成功。** Android 実機上の実 `MeshCoordinator` でオフライン生成した初回・継続投稿2件が、オンライン復帰後に PDS・Damus・nos.lol の全3リレーへ配送された。外部の読み取り専用クライアントから両件の署名付きイベントを取得し、PDS のレコード・最新 commit・CAR／MST と照合した。実 atproto Relay `bsky.network` でも同一 head を確認した。

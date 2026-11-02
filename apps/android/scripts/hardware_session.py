@@ -43,8 +43,8 @@ def main():
     target = args.target
     if not re.fullmatch("[0-9a-f]{8,64}", target):
         parser.error("target must be 8-64 lowercase hex")
-    source = "org.mndt.demo.peer" if args.source == "peer" else "dev.oriom.mosimo"
-    receiver = "org.mndt.demo.peer" if args.source == "demo" else "dev.oriom.mosimo"
+    source = "org.mndt.demo.peer" if args.source == "peer" else "dev.jisaku.mosimo"
+    receiver = "org.mndt.demo.peer" if args.source == "demo" else "dev.jisaku.mosimo"
     output_path = OUTPUT.with_name(args.output)
     if output_path.exists():
         raise RuntimeError("Refusing to overwrite evidence")
@@ -110,7 +110,7 @@ def main():
         if not success:
             raise RuntimeError("No target Peer custody ACK within 100 seconds")
     finally:
-        adb("shell", "am", "force-stop", "dev.oriom.mosimo")
+        adb("shell", "am", "force-stop", "dev.jisaku.mosimo")
         adb("shell", "am", "force-stop", "org.mndt.demo.peer")
         if port.is_open:
             port.close()

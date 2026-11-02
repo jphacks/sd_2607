@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">MNDT メッシュ実験</string>
+    <string name="app_name">mosimo</string>
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
