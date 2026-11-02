@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("android.injected.version.code").orElse("1").get().toInt()
-        versionName = providers.gradleProperty("android.injected.version.name").orElse("0.1.0-experimental").get()
+        versionName = providers.gradleProperty("android.injected.version.name").orElse("0.2.0").get()
         manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
         manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
         // Empty until the policy page is published; the settings row is hidden while empty.
