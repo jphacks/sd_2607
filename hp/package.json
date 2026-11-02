@@ -1,0 +1,24 @@
+{
+  "name": "mosimo-hp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:pages": "astro build --config astro.pages.config.mjs",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.4.3",
+    "astro": "^7.4.4",
+    "astro-analytics": "^2.7.0",
+    "astro-seo": "^1.2.0",
+    "sass": "^1.89.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}
