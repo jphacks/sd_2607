@@ -10,9 +10,11 @@ import org.junit.Assert.*
 import org.junit.Test
 import com.fasterxml.jackson.databind.JsonNode
 import org.mndt.core.Author
+import org.mndt.core.ClockConfidence
 import org.mndt.core.NostrEvent
 import org.mndt.core.PublicIngress
 import org.mndt.core.SecretKeys
+import java.time.Instant
 import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -65,6 +67,16 @@ class PublicDownloadTest {
         assertFalse(batch.fallback)
         assertEquals(listOf(event), batch.events)
         assertEquals("MOSIMO-REQ", json.readTree(requests.first())[0].textValue())
+    }
+
+    @Test fun unknownClockStillDownloadsForDisplayButGivesIngressNoClock() {
+        // The coordinator always fetches; only verify/readyToInsert see the clock, and they fail closed on null.
+        val (batch, _) = fetch("priority")
+        assertEquals(listOf(event), batch.events)
+        assertNull(PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
+        assertEquals(Instant.ofEpochMilli(1792368000000), PublicDownload.ingressClock(ClockConfidence.TRUSTED, 1792368000000))
+        val decision = PublicIngress.verify(event, PublicIngress.Config(), PublicIngress.Memory(), PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
+        assertNull(decision.receipt)
     }
 
     @Test fun closedAndSilentNonSupportFallBackToStandardReqWithDifferentId() {

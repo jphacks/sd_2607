@@ -209,7 +209,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     fun reportError(text: String) = enqueue(critical = true) { issue(text.take(160)) }
     /** Local operator policy, not clock synchronization or network consensus. Defaults to UNKNOWN on restart. */
     fun setClockConfidence(value: ClockConfidence) = enqueue(critical = true) {
-        if (engine.clockConfidence != value) cancelPublicDownload()
+        // A display-only download under the old clock must not throttle the authorized one.
+        if (engine.clockConfidence != value) { cancelPublicDownload(); publicNext = 0 }
         engine.clockConfidence = value
         exchange.broadcastInventory()
         if (value == ClockConfidence.TRUSTED) requestPublic(manual = false)
@@ -351,20 +352,20 @@ class MeshCoordinator private constructor(private val context: Context) {
         publicGeneration++
         publicJob?.cancel(); publicJob = null; publicBusy = false
     }
-    /** Pull-to-refresh; also auto-run on network validation and clock trust. No AppView access and no client-side conversion/signing. */
+    /** Pull-to-refresh; also auto-run on foreground, network validation and clock trust. No AppView access and no client-side conversion/signing. */
     fun requestPublicInformation() = enqueue(critical = true) { requestPublic(manual = true) }
-    /** Auto triggers skip guard failures silently; only a manual request explains them. */
+    /** Auto triggers skip guard failures silently; only a manual request explains them. An untrusted clock only blocks ingress. */
     private fun requestPublic(manual: Boolean) {
         fun skip(status: String) { if (manual) mutableState.update { it.copy(publicStatus = status) } }
         if (fatal || disk == null || publicBusy) return
         if (!onlineAllowed() || !validatedInternet()) return skip("公的情報: オンライン接続が必要 / 保留")
-        if (engine.clockConfidence != ClockConfidence.TRUSTED) return skip("公的情報: 時計 unknown / 認可保留")
         if (elapsed() < publicNext) return skip("公的情報: 取得頻度制限（30秒）")
         publicNext = elapsed() + 30000
         publicBusy = true
         val generation = ++publicGeneration
         val config = publicConfig
         val startingMemory = checkNotNull(disk).publicTrust
+        val confidence = engine.clockConfidence
         mutableState.update { it.copy(publicStatus = "PDS relay から priority-v1 取得中…", publicResults = emptyList()) }
         publicJob = scope.launch {
             // Network IO is never run inside inbox's serialized actor. No redirects or unbounded body reads.
@@ -374,7 +375,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             }.toMap()
             val batch = runCatching { PublicDownload.fetch(http, generation) }
             ensureActive()
-            val clock = Instant.ofEpochMilli(now())
+            val clock = PublicDownload.ingressClock(confidence, now())
             var memory = startingMemory
             val failures = mutableListOf<String>()
             for (root in config.roots.filter { it.enabled }) {
@@ -391,7 +392,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                 event to decision
             }.sortedByDescending { it.second.receipt?.priority ?: minOf(PublicIngress.priority(it.first), 1) }
             var imported = 0
-            fun summary(fallback: Boolean) = "PDS ${if (fallback) "通常REQ fallback" else "priority-v1"}: ${publicEvents.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）"
+            fun summary(fallback: Boolean) = "PDS ${if (fallback) "通常REQ fallback" else "priority-v1"}: ${publicEvents.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）" +
+                if (clock == null) " / 時計 unknown・認可保留" else ""
             enqueue(critical = true) complete@{
                 if (generation != publicGeneration || fatal || !onlineAllowed()) return@complete
                 // A successful first batch stays busy while display-only older pages load.
@@ -441,7 +443,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     /** Activity visibility permits online IO even while the mesh service is stopped. */
     fun setOnlineForeground(visible: Boolean) = enqueue(critical = true) {
         activityVisible = visible
-        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else drainRelay()
+        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else { drainRelay(); requestPublic(manual = false) }
     }
     fun setOnlineEnabled(enabled: Boolean) = enqueue(critical = true) {
         check(!fatal)

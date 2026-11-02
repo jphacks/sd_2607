@@ -5,8 +5,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.*
 import okio.ByteString
+import org.mndt.core.ClockConfidence
 import org.mndt.core.NostrEvent
 import org.mndt.core.PublicIngress
+import java.time.Instant
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -35,6 +37,9 @@ internal object PublicDownload {
     // ponytail: fixed 8 MiB in-memory display cap; size it from device memory if 500 events ever stop fitting.
     const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
     const val WINDOW_SECONDS = 24 * 3600L
+    /** Display pages download on any clock; only authorized ingress gets one, and PublicIngress fails closed on null. */
+    fun ingressClock(confidence: ClockConfidence, nowMillis: Long): Instant? =
+        if (confidence == ClockConfidence.TRUSTED) Instant.ofEpochMilli(nowMillis) else null
     fun request(id: String, priority: Boolean, limit: Int = LIMIT, until: Long? = null): String {
         val filter = mapOf("kinds" to listOf(1), "#t" to listOf("mosimo.oriom.dev"), "limit" to limit) + (until?.let { mapOf("until" to it) } ?: emptyMap())
         return json.writeValueAsString(if (priority) listOf("MOSIMO-REQ", id, mapOf("order" to "priority-v1", "filter" to filter)) else listOf("REQ", id, filter))
