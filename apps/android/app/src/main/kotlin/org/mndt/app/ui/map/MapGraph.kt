@@ -3,10 +3,6 @@ package org.mndt.app.ui.map
 import android.Manifest
 import android.location.Location
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,7 +36,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import org.maplibre.android.geometry.LatLng
@@ -146,7 +146,39 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     }
     BackHandler(vm.picking) { endPick(false) }
 
-    Box(Modifier.fillMaxSize().background(Mosimo.bgBase)) {
+    val panel = selected != null || stacked.isNotEmpty()
+    // One non-modal sheet, as in Google Maps: the here-card, or a tapped pin's posts while open. Hidden only while picking or when a pin sheet is swiped away.
+    val hideable = rememberUpdatedState(panel || vm.picking)
+    val sheet = rememberBottomSheetScaffoldState(rememberStandardBottomSheetState(if (vm.hereCollapsed) SheetValue.PartiallyExpanded else SheetValue.Expanded,
+        { it != SheetValue.Hidden || hideable.value }, skipHiddenState = false))
+    val bottom = sheet.bottomSheetState
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(panel, vm.picking) {
+        when {
+            vm.picking -> bottom.hide()
+            panel || vm.hereCollapsed -> bottom.partialExpand()
+            else -> bottom.expand()
+        }
+    }
+    LaunchedEffect(bottom.currentValue) {
+        if (bottom.currentValue == SheetValue.Hidden) { if (panel) closePanel() }
+        else if (!panel && !vm.picking) vm.hereCollapsed = bottom.currentValue == SheetValue.PartiallyExpanded
+    }
+    fun toggle() { scope.launch { if (bottom.currentValue == SheetValue.Expanded) bottom.partialExpand() else bottom.expand() } }
+    BackHandler(panel) { if (selected != null && stacked.size > 1) vm.selected = null else closePanel() }
+    var herePeek by remember { mutableStateOf(120.dp) }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val fullPx = constraints.maxHeight.toFloat()
+    val full = maxHeight
+    BottomSheetScaffold({
+        if (panel) PostPanel(selected, stacked, onSelect = { vm.selected = it }, onBack = { vm.selected = null },
+            onClose = { scope.launch { bottom.hide(); closePanel() } }, Modifier.height(full * 0.9f))
+        else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS },
+            bottom.currentValue == SheetValue.PartiallyExpanded, ::toggle, { herePeek = it + SHEET_HANDLE }, vm::compose)
+    }, scaffoldState = sheet, sheetPeekHeight = if (panel) full * 0.45f else herePeek, sheetShape = sheetShape,
+        sheetContainerColor = Mosimo.bgSurface, sheetDragHandle = { SheetHandle(::toggle) }, containerColor = Mosimo.bgBase) {
+    Box(Modifier.fillMaxSize()) {
         val groups = pinGroups(handle, shown)
         fun open(ids: List<String>) { vm.stack = ids; vm.selected = ids.singleOrNull() }
         MapLibreView(handle, regions, me, onClick = { lat, lng ->
@@ -177,7 +209,9 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
             }
         }
 
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+        // Locate button and picking bar ride on the sheet's top edge, never above mid-screen (an expanded sheet covers them).
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .offset { IntOffset(0, (runCatching { bottom.requireOffset() }.getOrDefault(fullPx).coerceAtLeast(fullPx / 2) - fullPx).roundToInt()) }) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
                 Text("地理院タイル", Modifier.background(Mosimo.bgBase.copy(alpha = 0.6f)).padding(horizontal = 4.dp, vertical = 1.dp),
                     fontSize = 10.sp, color = Mosimo.textSecondary)
@@ -196,38 +230,37 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
                 Button({ endPick(true) }, Modifier.weight(1f).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
                     Text("この位置にする")
                 }
-            } else HereSheet(fix, address, granted, busy, all.count { (it.distanceFrom(fix) ?: Float.MAX_VALUE) <= NEARBY_METERS }, vm.hereCollapsed,
-                { vm.hereCollapsed = it }, vm::compose)
+            }
         }
+    }
+    }
     }
 
-    if (selected != null || stacked.isNotEmpty()) {
-        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val scope = rememberCoroutineScope()
-        MapSheet(::closePanel, sheet) {
-            PostPanel(selected, stacked, onSelect = { vm.selected = it }, onBack = { vm.selected = null },
-                onClose = { scope.launch { sheet.hide() }.invokeOnCompletion { closePanel() } })
-        }
-    }
     if (vm.composing) Composer(vm, fix, address, state.network && state.onlineActive, ::pick)
 }
 
 private val sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-private fun Modifier.sheet() = fillMaxWidth().clip(sheetShape).background(Mosimo.bgSurface).border(1.dp, Mosimo.border, sheetShape)
+private val SHEET_HANDLE = 20.dp
 
-/** Content of the modal sheet for a tapped pin: a stack lists its posts; one post shows its detail. Back returns to the list. */
+/** [SHEET_HANDLE] tall; tap toggles between peek and expanded. */
 @Composable
-private fun PostPanel(selected: PostView?, stack: List<PostView>, onSelect: (String) -> Unit, onBack: () -> Unit, onClose: () -> Unit) {
-    BackHandler(selected != null && stack.size > 1, onBack)
-    Column {
+private fun SheetHandle(onToggle: () -> Unit) = Box(Modifier.fillMaxWidth().clickable(onClickLabel = "広げる・たたむ", onClick = onToggle)
+    .padding(top = 10.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(width = 36.dp, height = 4.dp).clip(CircleShape).background(Mosimo.borderStrong))
+}
+
+/** Sheet content for a tapped pin: a stack lists its posts; one post shows its detail. */
+@Composable
+private fun PostPanel(selected: PostView?, stack: List<PostView>, onSelect: (String) -> Unit, onBack: () -> Unit, onClose: () -> Unit, modifier: Modifier) {
+    Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             if (selected != null && stack.size > 1) IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "一覧に戻る", tint = Mosimo.textPrimary) }
             Text(if (selected != null) "投稿" else "この地点の投稿 ${stack.size}件", Modifier.weight(1f).padding(start = 12.dp),
                 style = MaterialTheme.typography.titleMedium, color = Mosimo.textPrimary)
             IconButton(onClose) { Icon(Icons.Filled.Close, "閉じる", tint = Mosimo.textSecondary) }
         }
-        if (selected != null) PostDetail(selected, Modifier.weight(1f, fill = false).padding(horizontal = 16.dp), onShowOnMap = null)
-        else LazyColumn(Modifier.weight(1f, fill = false), contentPadding = PaddingValues(bottom = 8.dp)) {
+        if (selected != null) PostDetail(selected, Modifier.weight(1f).padding(horizontal = 16.dp), onShowOnMap = null)
+        else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
             items(stack, key = { it.id }) { p -> StackRow(p) { onSelect(p.id) } }
         }
     }
@@ -249,22 +282,14 @@ private fun StackRow(post: PostView, onClick: () -> Unit) {
     }
 }
 
-/** Persistent bottom card (Figma 5:233): where am I, how many posts nearby, quick-post chips. */
+/** Sheet content when no pin is open (Figma 5:233): where am I, how many posts nearby, quick-post chips. Peeks at the header ([onPeek]); tapping it there expands. */
 @Composable
 private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: Boolean, nearby: Int, collapsed: Boolean,
-    onCollapse: (Boolean) -> Unit, onCompose: (Category?) -> Unit) {
-    val threshold = with(LocalDensity.current) { 24.dp.toPx() }
-    var drag by remember { mutableFloatStateOf(0f) }
-    // Swipe anywhere on the card: down leaves only the title and location, up brings the chips and CTA back. The handle also toggles on tap.
-    Column(Modifier.sheet().draggable(rememberDraggableState { drag += it }, Orientation.Vertical, onDragStarted = { drag = 0f },
-        onDragStopped = { if (drag > threshold) onCollapse(true) else if (drag < -threshold) onCollapse(false) })
-        .animateContentSize().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+    onExpand: () -> Unit, onPeek: (Dp) -> Unit, onCompose: (Category?) -> Unit) {
+    val density = LocalDensity.current
+    Column(Modifier.fillMaxWidth().clickable(enabled = collapsed, onClickLabel = "広げる", onClick = onExpand).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.fillMaxWidth().clickable(onClickLabel = if (collapsed) "広げる" else "たたむ") { onCollapse(!collapsed) }
-            .padding(top = 10.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(width = 36.dp, height = 4.dp).clip(CircleShape).background(Mosimo.borderStrong))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.onSizeChanged { onPeek(with(density) { it.height.toDp() } + 16.dp) }, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("今、ここの状況は？", style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -284,10 +309,10 @@ private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: 
                 Text("周辺 ${nearby}件", Modifier.padding(start = 4.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
             }
         }
-        if (!collapsed) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(Category.SAFE, Category.CAUTION, Category.DANGER, Category.SHELTER, Category.BLOCKED).forEach { c -> MosimoChip(c.label, false) { onCompose(c) } }
         }
-        if (!collapsed) Button({ onCompose(null) }, Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
+        Button({ onCompose(null) }, Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) {
             Icon(Icons.Filled.Place, null)
             Text("この場所の状況を投稿する", Modifier.padding(start = 8.dp))
         }
