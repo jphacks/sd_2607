@@ -114,11 +114,15 @@ class RelaySubscriptionTest {
         assertNotNull(session.receive(1, text, 0))
     }
 
-    @Test fun perAuthorLimitAndGlobalFrameRateSurviveReconnect() {
+    @Test fun perAuthorLimitAppliesAfterEoseAndGlobalFrameRateSurvivesReconnect() {
         val session = opened()
+        // One prolific author's backlog is history, not a flood.
+        repeat(20) { assertNotNull(session.receive(1, frame(session, event(100 + it)), 0)) }
+        session.receive(1, "[\"EOSE\",\"mndt-1\"]", 0)
         repeat(12) { assertNotNull(session.receive(1, frame(session, event(it)), 0)) }
         assertNull(session.receive(1, frame(session, event(12)), 0))
         session.disconnect(); session.open(2)
+        session.receive(2, "[\"EOSE\",\"mndt-2\"]", 0)
         assertNull(session.receive(2, frame(session, event(12)), 0))
         assertNotNull(session.receive(2, frame(session, event(12)), 60_000))
         val flood = opened()
@@ -161,12 +165,12 @@ class RelaySubscriptionTest {
             val original = event(index)
             assertEquals(RelayReply.Event(original), session.receive(1, frame(session, original), index * 60_000L))
         }
-        assertEquals(64, session.events().size)
-        assertEquals(RelayReply.Full, session.receive(1, frame(session, event(64)), 64 * 60_000L))
+        assertEquals(RelaySubscription.MAX_EVENTS, session.events().size)
+        assertEquals(RelayReply.Full, session.receive(1, frame(session, event(RelaySubscription.MAX_EVENTS)), RelaySubscription.MAX_EVENTS * 60_000L))
         assertNotNull(session.close())
         session.disconnect()
         assertNull(session.open(2))
-        assertEquals(64, session.events().size)
+        assertEquals(RelaySubscription.MAX_EVENTS, session.events().size)
         session.clear()
         assertTrue(session.events().isEmpty())
         assertNotNull(session.open(3))

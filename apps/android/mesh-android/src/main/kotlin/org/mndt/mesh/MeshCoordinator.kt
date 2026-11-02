@@ -428,7 +428,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                 }.onFailure { failure -> mutableState.update { it.copy(publicStatus = "公的情報取得失敗: ${failure.message}", publicResults = failures) } }
             }
             val first = batch.getOrNull() ?: return@launch
-            val pages = PublicDownload.more(http, generation, first, now() / 1000)
+            val pages = PublicDownload.more(http, generation, first)
             ensureActive()
             enqueue(critical = true) pages@{
                 if (generation != publicGeneration || fatal || !onlineAllowed()) return@pages

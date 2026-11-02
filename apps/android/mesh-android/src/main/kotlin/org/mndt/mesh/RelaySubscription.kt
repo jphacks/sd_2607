@@ -17,7 +17,8 @@ internal class RelaySubscription {
         // TODO(undecided): demo retrieval filter and local limits, not a shared relay profile.
         const val TAG = AtRepository.NAMESPACE
         const val INITIAL_LIMIT = 32
-        const val MAX_EVENTS = 64
+        // The cache survives relay rotation, so it is sized like the public history rather than one backlog.
+        const val MAX_EVENTS = PublicDownload.MAX_EVENTS
         const val MAX_BYTES = 2 * 1024 * 1024
         const val MAX_FRAME_BYTES = 262144
         const val MAX_FRAMES_PER_MINUTE = 256
@@ -85,14 +86,15 @@ internal class RelaySubscription {
                 if (event.id in retained || event.id in meshIds) return null
                 authorTimes.values.forEach { times -> times.removeAll { elapsed - it >= 60_000 || elapsed < it } }
                 authorTimes.entries.removeAll { it.value.isEmpty() }
-                val times = authorTimes.getOrPut(event.pubkey) { mutableListOf() }
-                if (times.size >= PER_AUTHOR_PER_MINUTE) return null
+                // Per-author pacing is for live events; the bounded backlog before EOSE is history.
+                val times = if (eose) authorTimes.getOrPut(event.pubkey) { mutableListOf() } else null
+                if (times != null && times.size >= PER_AUTHOR_PER_MINUTE) return null
                 val size = event.toJson().toByteArray(Charsets.UTF_8).size
                 if (full || retained.size >= MAX_EVENTS || size > MAX_BYTES - retainedBytes) {
                     full = true
                     return RelayReply.Full
                 }
-                times.add(elapsed)
+                times?.add(elapsed)
                 retained[event.id] = event
                 retainedBytes += size
                 full = retained.size == MAX_EVENTS || retainedBytes == MAX_BYTES

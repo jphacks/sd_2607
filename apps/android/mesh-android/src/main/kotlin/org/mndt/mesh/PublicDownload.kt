@@ -36,7 +36,6 @@ internal object PublicDownload {
     const val MAX_EVENTS = 500
     // ponytail: fixed 8 MiB in-memory display cap; size it from device memory if 500 events ever stop fitting.
     const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
-    const val WINDOW_SECONDS = 24 * 3600L
     /** Display pages download on any clock; only authorized ingress gets one, and PublicIngress fails closed on null. */
     fun ingressClock(confidence: ClockConfidence, nowMillis: Long): Instant? =
         if (confidence == ClockConfidence.TRUSTED) Instant.ofEpochMilli(nowMillis) else null
@@ -74,16 +73,16 @@ internal object PublicDownload {
     }
 
     /**
-     * Older pages after a full [first] batch, until a short page, the 24 h window, [MAX_EVENTS] or [MAX_TOTAL_BYTES].
+     * Older pages after a full [first] batch, until a short page, [MAX_EVENTS] or [MAX_TOTAL_BYTES]; no age cutoff,
+     * since display history outlives the mesh delivery deadline. The relay caps each REQ, so pages walk back by `until`.
      * priority-v1 has no time order, so its batch never seeds the cursor; `until` is inclusive, hence the id dedupe.
      */
-    suspend fun more(http: OkHttpClient, token: Long, first: Batch, nowSeconds: Long, relay: String = DiskState.PDS_RELAY,
+    suspend fun more(http: OkHttpClient, token: Long, first: Batch, relay: String = DiskState.PDS_RELAY,
         timeoutMillis: Long = 15000): Pages {
         if (first.events.size < LIMIT) return Pages(emptyList())
         val seen = first.events.mapTo(hashSetOf()) { it.id }
         var bytes = first.events.sumOf { it.toJson().toByteArray(Charsets.UTF_8).size }
         val extra = mutableListOf<NostrEvent>()
-        val cutoff = nowSeconds - WINDOW_SECONDS
         var until = if (first.fallback) first.events.minOf { it.createdAt } else null
         var page = 0
         while (seen.size < MAX_EVENTS) {
@@ -92,14 +91,14 @@ internal object PublicDownload {
             if (ok.getOrNull() != true) return Pages(extra, ok.exceptionOrNull()?.message ?: "page $page failed/timed out")
             var added = 0
             for (event in budget.events.values) {
-                if (event.id in seen || event.createdAt < cutoff) continue
+                if (event.id in seen) continue
                 val size = event.toJson().toByteArray(Charsets.UTF_8).size
                 if (seen.size >= MAX_EVENTS || bytes + size > MAX_TOTAL_BYTES) return Pages(extra)
                 seen += event.id; extra += event; bytes += size; added++
             }
             val oldest = budget.events.values.minOfOrNull { it.createdAt } ?: break
             // No progress: a full page sharing one created_at cannot be walked past with an inclusive cursor.
-            if (budget.events.size < PAGE_LIMIT || oldest < cutoff || added == 0) break
+            if (budget.events.size < PAGE_LIMIT || added == 0) break
             until = oldest
         }
         return Pages(extra)

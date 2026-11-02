@@ -119,7 +119,7 @@ class PublicDownloadTest {
     private val history by lazy { Author(SecretKeys.generate(), "https://pds.invalid").let { a -> (0 until 700).map { a.createPost("p$it", (base - it) * 1000).event } } }
 
     /** Plain-REQ relay over [events] (created_at DESC, inclusive until); closes the socket on page [failOn]. */
-    private fun more(events: List<NostrEvent>, first: PublicDownload.Batch, now: Long = base, failOn: Int = 0): Pair<PublicDownload.Pages, List<JsonNode>> = runBlocking {
+    private fun more(events: List<NostrEvent>, first: PublicDownload.Batch, failOn: Int = 0): Pair<PublicDownload.Pages, List<JsonNode>> = runBlocking {
         val filters = LinkedBlockingQueue<JsonNode>()
         val server = MockWebServer()
         val listener = object : WebSocketListener() {
@@ -136,7 +136,7 @@ class PublicDownloadTest {
         }
         repeat(8) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
         val http = OkHttpClient()
-        try { PublicDownload.more(http, 3, first, now, server.url("/").toString(), 2000) to filters.toList() }
+        try { PublicDownload.more(http, 3, first, server.url("/").toString(), 2000) to filters.toList() }
         finally { server.close(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
     }
 
@@ -158,12 +158,15 @@ class PublicDownloadTest {
         assertEquals(PublicDownload.Pages(emptyList()) to emptyList<JsonNode>(), more(events, PublicDownload.Batch(events.take(31), fallback = true)))
     }
 
-    @Test fun stopsAtWindowAndAtTotalCap() {
-        // 24 h window: now is set so only the newest 200 fall inside it.
-        val (windowed, windowFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true), now = base - 199 + PublicDownload.WINDOW_SECONDS)
-        assertEquals(history.subList(32, 200), windowed.events)
-        assertEquals(2, windowFilters.size)
-        val (capped, cappedFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true), now = base)
+    @Test fun keepsHistoryOlderThanADayAndStopsAtTotalCap() {
+        // One post an hour for ~10 days: nothing is cut at 24 h, every page walks back by until.
+        val old = Author(SecretKeys.generate(), "https://pds.invalid").let { a -> (0 until 250).map { a.createPost("h$it", (base - it * 3600L) * 1000).event } }
+        val (aged, agedFilters) = more(old, PublicDownload.Batch(old.take(32), fallback = true))
+        assertNull(aged.failure)
+        assertEquals(old.drop(32), aged.events)
+        assertTrue(aged.events.last().createdAt < base - 9 * 24 * 3600)
+        assertEquals(listOf(base - 31 * 3600, base - 130 * 3600, base - 229 * 3600), agedFilters.map { it["until"].longValue() })
+        val (capped, cappedFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true))
         assertEquals(PublicDownload.MAX_EVENTS - 32, capped.events.size)
         assertEquals(history.subList(32, PublicDownload.MAX_EVENTS), capped.events)
         assertEquals(5, cappedFilters.size)
