@@ -68,6 +68,11 @@ jobs:
     environment: play-${{ inputs.app }}
     steps:
       - uses: actions/checkout@v7
+      # The emulator wants 1.2x its 6 GB userdata free after the APK build; drop toolchains this job never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY/CodeQL"
+          df -h /
       # No tool cache in release jobs: https://github.com/jdx/mise-action#release-workflows
       # env: false keeps the runner SDK as ANDROID_HOME for the emulator; mise run/exec still apply mise env.
       - uses: jdx/mise-action@v5
