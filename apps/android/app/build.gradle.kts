@@ -12,7 +12,8 @@ android {
         applicationId = "dev.jisaku.mosimo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
+        // CI passes the Actions run number; local builds fall back to the manual value.
+        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 2
         versionName = "0.2.0"
         manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()

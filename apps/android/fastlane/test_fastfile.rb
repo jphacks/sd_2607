@@ -49,11 +49,11 @@ class FastfileTest < Minitest::Test
     assert_empty @runner.calls
   end
 
-  def test_internal_tests_then_builds_the_bundle_then_uploads_only_the_aab
+  def test_internal_tests_then_builds_the_bundle_then_uploads_only_the_aab_to_alpha
     @runner.internal(app: "mosimo")
     assert_equal [:gradle, :gradle, :upload], @runner.calls.map(&:first)
     assert_equal ":app:bundleRelease", @runner.calls[1].last.fetch(:task)
-    assert_equal({ package_name: "dev.jisaku.mosimo", track: "internal", skip_upload_apk: true }, @runner.calls[2].last)
+    assert_equal({ package_name: "dev.jisaku.mosimo", track: "alpha", skip_upload_apk: true }, @runner.calls[2].last)
   end
 
   def test_gradle_failure_prevents_upload

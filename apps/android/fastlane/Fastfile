@@ -21,12 +21,13 @@ platform :android do
     gradle(task: ":#{android_app!(options)[:module]}:bundleRelease")
   end
 
-  desc "Test, build, and publish the AAB and committed screenshots to Google Play internal testing"
+  desc "Test, build, and publish the AAB and screenshots to the Google Play alpha track"
+  # Named internal because mise's deploy task calls it.
   lane :internal do |options|
     app = android_app!(options)
     ci(options)
     build(options)
     # ci leaves the debug APK in lane_context; upload only the AAB.
-    upload_to_play_store(package_name: app[:package], track: "internal", skip_upload_apk: true)
+    upload_to_play_store(package_name: app[:package], track: "alpha", skip_upload_apk: true)
   end
 end

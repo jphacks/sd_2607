@@ -62,7 +62,7 @@ jobs:
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
 
-  internal:
+  alpha:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     environment: play-${{ inputs.app }}
@@ -77,6 +77,11 @@ jobs:
           env: false
       - uses: gradle/actions/setup-gradle@v5
       - run: mise run fastlane-test
+      # Build before booting the emulator: a concurrent Gradle build starves it and the launcher ANRs.
+      - name: Build screenshot APKs
+        run: |
+          mise run sdk-setup
+          mise exec -- ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PmosimoPlcRegistration=false
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -91,15 +96,16 @@ jobs:
           arch: x86_64
           profile: pixel_2
           working-directory: apps/android
+          # Hide ANR dialogs so a slow-booting launcher can't cover the screenshots.
           script: |
-            mise run sdk-setup
-            mise run gem-setup
-            mise exec -- ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PmosimoPlcRegistration=false
+            "$ANDROID_HOME/platform-tools/adb" shell settings put global hide_error_dialogs 1
             mise exec -- bundle exec fastlane screengrab --android_home "$ANDROID_HOME"
-      - name: Test, sign, and distribute to Play internal testing
+      - name: Test, sign, and distribute to the Play alpha track
         env:
           SOPS_AGE_KEY: ${{ secrets.MISE_SOPS_AGE_KEY }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          # ponytail: versionCode = run number; resets if this workflow file is renamed, then add an offset.
+          ORG_GRADLE_PROJECT_mosimoVersionCode: ${{ github.run_number }}
         run: |
           set -euo pipefail
           umask 077
@@ -111,7 +117,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ inputs.app }}-internal-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.app }}-alpha-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             apps/android/**/build/outputs/bundle/release/*.aab
             apps/android/**/build/outputs/apk/debug/*.apk

@@ -34,16 +34,16 @@ mise run apk                # debug APK
 mise run fastlane-test      # Fastfileのテスト
 mise run ci                 # fastlaneで単体テスト・lint・debug APKビルド
 mise run aab
-mise run deploy             # Google Play内部テストへ配布
+mise run deploy             # Google Playのalphaトラック（クローズドテスト）へ配布
 ```
 
-`aab`は署名付きrelease AABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。Google Playへのアップロードは行わない。Playに配布するときは、versionCodeをアップロード済みの全バージョンより大きくする。環境変数と出力先は次節を参照。APKの出力先は上記「ビルド・テスト」を参照。
+`aab`は署名付きrelease AABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。Google Playへのアップロードは行わない。ローカルからPlayに配布するときは、`-PmosimoVersionCode=<値>`（または`ORG_GRADLE_PROJECT_mosimoVersionCode`）でアップロード済みの全バージョンより大きいversionCodeを指定する。環境変数と出力先は次節を参照。APKの出力先は上記「ビルド・テスト」を参照。
 
-`deploy`は`secrets/release.sops.yaml`（署名パスワード・alias）と`secrets/deploy.sops.yaml`（`SUPPLY_JSON_KEY_DATA`）を復号して読み込み、テスト・lint・AAB生成後にGoogle Playの`internal`トラックへ配布する。両ファイルを復号できる鍵が必要。秘密値はmiseのログでマスクする。APK・AABのビルドだけでは`deploy.sops.yaml`は読み込まない。
+`deploy`は`secrets/release.sops.yaml`（署名パスワード・alias）と`secrets/deploy.sops.yaml`（`SUPPLY_JSON_KEY_DATA`）を復号して読み込み、テスト・lint・AAB生成後にGoogle Playの`alpha`トラック（クローズドテスト）へ配布する。両ファイルを復号できる鍵が必要。秘密値はmiseのログでマスクする。APK・AABのビルドだけでは`deploy.sops.yaml`は読み込まない。
 
 GitHub Actionsなどでは、復号鍵ファイルのパスを`SOPS_AGE_KEY_FILE`、別途用意したアップロードkeystoreの絶対パスを`ANDROID_KEYSTORE_PATH`で指定して`mise run deploy`を実行する。未指定時はそれぞれ`.config/mise/age.txt`と`release_key.jks`を使う。復号鍵とkeystoreはGitに含めない。Actions workflowもこの方法で`mise run fastlane-test`・`mise run ci`・`mise run deploy`を実行する。
 
-## Fastlane CI/CD・Google Play内部テスト
+## Fastlane CI/CD・Google Playクローズドテスト
 
 Rubyは`.ruby-version`（4.0.7）をmiseが読み込む。CIも`jdx/mise-action`で同じmise設定を使い、上記のmiseタスクを実行する。
 
@@ -64,9 +64,9 @@ GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnviro
 
 認証ファイルをローカルに置く場合は、Git管理対象外の`fastlane/credentials/`を使う。秘密情報をコマンド引数や追跡対象ファイルに書かない。keystoreファイルもGit管理対象外とする。
 
-GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`を指定する。バージョンは`app/build.gradle.kts`の`versionCode`と`versionName`を使う。配布前に`versionCode`を1〜2100000000の範囲で、既にPlayにアップロードした全トラックの値より大きくする。新たな配布には新しいコードが必要。
+GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`を指定する。`versionCode`はこのworkflowの実行番号（`github.run_number`）で自動採番し、`versionName`は`app/build.gradle.kts`の値を使う。同じ実行のRe-runは同じコードになりPlayに拒否されるため、再配布はRun workflowから新しく実行する。ローカル配布でversionCodeを指定する場合は、CIの実行番号と衝突しない値にする。
 
-手動配布はテスト成功後に署名済みAABを生成し、`internal`トラックへ`completed`として送信する。配布前にエミュレータでスクリーンショットを撮影し、ストア掲載のスクリーンショットを置き換える（掲載文のテキストファイルは置かないため変更されない）。撮影結果もArtifactsに保存する。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
+手動配布はテスト成功後に署名済みAABを生成し、`alpha`トラックへ`completed`として送信する。配布前にAPKをビルドしてからエミュレータを起動し（同時に動かすとエミュレータが重くなりランチャーのANRダイアログが写り込む）、エラーダイアログを非表示にしてスクリーンショットを撮影し、ストア掲載のスクリーンショットを置き換える（掲載文のテキストファイルは置かないため変更されない）。撮影結果もArtifactsに保存する。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
 
 ### Play Store用スクリーンショット
 
@@ -89,11 +89,11 @@ SUPPLY_JSON_KEY_DATA       サービスアカウントJSON鍵（配布時のみ�
 
 ```sh
 bundle exec fastlane android build app:mosimo
-# テストからPlay内部配布まで実行する場合
+# テストからPlayのalpha配布まで実行する場合（lane名はinternalのまま）
 bundle exec fastlane android internal app:mosimo
 ```
 
-生成先は`app/build/outputs/bundle/release/app-release.aab`。初回導入時はAABのpackage ID・バージョン・署名証明書を登録済みの値と照合し、Play Consoleの内部テストへの反映を確認する。CI成功は実機のBLE通信・アプリ間相互運用の確認を意味しない。
+生成先は`app/build/outputs/bundle/release/app-release.aab`。初回導入時はAABのpackage ID・バージョン・署名証明書を登録済みの値と照合し、Play Consoleのクローズドテスト（Alpha）への反映を確認する。CI成功は実機のBLE通信・アプリ間相互運用の確認を意味しない。
 
 ### 別アプリを追加する場合
 
