@@ -37,7 +37,7 @@ mise run aab
 mise run deploy             # Google Playのalphaトラック（クローズドテスト）へ配布
 ```
 
-`aab`は署名付きrelease AABを生成する。`mise exec -- ./gradlew :app:bundleRelease`を直接実行した場合、署名用環境変数がなければ未署名のAABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。Google Playへのアップロードは行わない。ローカルからPlayに配布するときは、`-PmosimoVersionCode=<値>`（または`ORG_GRADLE_PROJECT_mosimoVersionCode`）でアップロード済みの全バージョンより大きいversionCodeを指定する。環境変数と出力先は次節を参照。APKの出力先は上記「ビルド・テスト」を参照。
+`aab`は署名付きrelease AABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。
 
 `deploy`は`secrets/release.sops.yaml`（署名パスワード・alias）と`secrets/deploy.sops.yaml`（`SUPPLY_JSON_KEY_DATA`）を復号して読み込み、テスト・lint・AAB生成後にGoogle Playの`alpha`トラック（クローズドテスト）へ配布する。両ファイルを復号できる鍵が必要。秘密値はmiseのログでマスクする。APK・AABのビルドだけでは`deploy.sops.yaml`は読み込まない。
 

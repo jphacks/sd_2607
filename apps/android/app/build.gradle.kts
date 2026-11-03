@@ -36,12 +36,7 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            val signing = signingConfigs.getByName("release")
-            val credentials = listOf(signing.storeFile, signing.storePassword, signing.keyAlias, signing.keyPassword)
-            require(credentials.all { it == null } || credentials.all { it != null && it.toString().isNotBlank() }) {
-                "Set all ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD variables, or use mise run aab."
-            }
-            signingConfig = if (credentials.all { it != null }) signing else null
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     buildFeatures { compose = true; buildConfig = true }
