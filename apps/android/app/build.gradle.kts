@@ -13,8 +13,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // CI passes the Actions run number; local builds fall back to the manual value.
-        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 2
-        versionName = "0.2.0"
+        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 3
+        versionName = "0.2.1"
         manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
@@ -34,6 +34,8 @@ android {
     }
     buildTypes {
         getByName("release") {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("release")
         }
     }
