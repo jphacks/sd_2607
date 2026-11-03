@@ -1,0 +1,4 @@
+age.txt
+*.age.txt
+config.local.toml
+config.*.local.toml

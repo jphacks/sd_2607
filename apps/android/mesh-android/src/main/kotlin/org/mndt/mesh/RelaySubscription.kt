@@ -17,7 +17,8 @@ internal class RelaySubscription {
         // TODO(undecided): demo retrieval filter and local limits, not a shared relay profile.
         const val TAG = AtRepository.NAMESPACE
         const val INITIAL_LIMIT = 32
-        const val MAX_EVENTS = 64
+        // The cache survives relay rotation, so it is sized like the public history rather than one backlog.
+        const val MAX_EVENTS = PublicDownload.MAX_EVENTS
         const val MAX_BYTES = 2 * 1024 * 1024
         const val MAX_FRAME_BYTES = 262144
         const val MAX_FRAMES_PER_MINUTE = 256
@@ -66,6 +67,9 @@ internal class RelaySubscription {
         // OKs answer our own one-at-a-time EVENTs, so a backlog flush must not spend the receive window.
         if (frame != null && frame.isArray && frame.size() == 4 && frame[0].textValue() == "OK" && frame[1].isTextual &&
             frame[2].isBoolean && frame[3].isTextual) return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue())
+        // A rotation's re-sent backlog is dropped unverified by id, so reconnects cannot spend the window either.
+        if (frame != null && frame.isArray && frame.size() == 3 && frame[0].textValue() == "EVENT" &&
+            frame[2].path("id").textValue()?.let { it in retained || it in meshIds } == true) return null
         while (frameTimes.isNotEmpty() && (elapsed - frameTimes.first() >= 60_000 || elapsed < frameTimes.first())) frameTimes.removeFirst()
         require(frameTimes.size < MAX_FRAMES_PER_MINUTE) { "Relay receive rate limit" }
         frameTimes.addLast(elapsed)
@@ -82,14 +86,15 @@ internal class RelaySubscription {
                 if (event.id in retained || event.id in meshIds) return null
                 authorTimes.values.forEach { times -> times.removeAll { elapsed - it >= 60_000 || elapsed < it } }
                 authorTimes.entries.removeAll { it.value.isEmpty() }
-                val times = authorTimes.getOrPut(event.pubkey) { mutableListOf() }
-                if (times.size >= PER_AUTHOR_PER_MINUTE) return null
+                // Per-author pacing is for live events; the bounded backlog before EOSE is history.
+                val times = if (eose) authorTimes.getOrPut(event.pubkey) { mutableListOf() } else null
+                if (times != null && times.size >= PER_AUTHOR_PER_MINUTE) return null
                 val size = event.toJson().toByteArray(Charsets.UTF_8).size
                 if (full || retained.size >= MAX_EVENTS || size > MAX_BYTES - retainedBytes) {
                     full = true
                     return RelayReply.Full
                 }
-                times.add(elapsed)
+                times?.add(elapsed)
                 retained[event.id] = event
                 retainedBytes += size
                 full = retained.size == MAX_EVENTS || retainedBytes == MAX_BYTES
@@ -102,10 +107,18 @@ internal class RelaySubscription {
     val atCapacity: Boolean get() = full
 }
 
+private val dids = object : LinkedHashMap<String, String?>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>) = size > 1024
+}
+/** Memoized by event ID (null DIDs too): refresh() rebuilds up to PublicDownload.MAX_EVENTS display posts every second. */
+internal fun didOf(event: NostrEvent): String? = synchronized(dids) {
+    if (event.id in dids) dids[event.id] else AtRepository.did(event).also { dids[event.id] = it }
+}
+
 internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String): List<PostView> {
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
-        // ponytail: re-derives the DID (signature check) per refresh; at most MAX_EVENTS, cache by id if it shows in profiles.
-        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = AtRepository.did(it))
+        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = didOf(it),
+            createdAt = it.createdAt, ext = Extensions.of(it))
     }
 }

@@ -2,38 +2,42 @@ plugins {
     id("com.android.application")
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
+
 android {
-    namespace = "org.mndt.app"
+    namespace = "dev.jisaku.mosimo"
     compileSdk = 36
     defaultConfig {
-        applicationId = "org.mndt.demo"
+        applicationId = "dev.jisaku.mosimo"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("android.injected.version.code").orElse("1").get().toInt()
-        versionName = providers.gradleProperty("android.injected.version.name").orElse("0.1.0-experimental").get()
-        manifestPlaceholders["mndtTestPeerNode"] = providers.gradleProperty("mndtTestPeerNode").orElse("").get()
-        manifestPlaceholders["mndtTestAuthor"] = providers.gradleProperty("mndtTestAuthor").orElse("").get()
-        manifestPlaceholders["mndtTestNode"] = providers.gradleProperty("mndtTestNode").orElse("").get()
+        // CI passes the Actions run number; local builds fall back to the manual value.
+        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 2
+        versionName = "0.2.0"
+        manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
+        manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
+        manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
+        manifestPlaceholders["mosimoPlcRegistration"] = providers.gradleProperty("mosimoPlcRegistration").orElse("true").get()
+        // Empty until the policy page is published; the settings row is hidden while empty.
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"\"")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    flavorDimensions += "demo"
-    productFlavors {
-        create("demo") {
-            dimension = "demo"
-            applicationId = "dev.oriom.mosimo"
-        }
-        create("peer") {
-            dimension = "demo"
-            applicationIdSuffix = ".peer"
-            versionNameSuffix = "-peer"
-        }
-        create("verification") {
-            dimension = "demo"
-            applicationId = "org.mndt.demo.verification"
-            versionNameSuffix = "-verification"
+
+    signingConfigs {
+        create("release") {
+            storeFile = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull?.let { file(it) }
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
         }
     }
-    buildFeatures { compose = true }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -43,7 +47,9 @@ android {
         resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
     }
 }
+
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+
 dependencies {
     implementation(project(":mesh-android"))
     implementation(platform("androidx.compose:compose-bom:2025.11.01"))
@@ -51,5 +57,20 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.navigation3:navigation3-runtime:1.1.7")
+    implementation("androidx.navigation3:navigation3-ui:1.1.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-navigation3:2.10.0")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("io.insert-koin:koin-androidx-compose:4.1.1")
+    implementation("org.maplibre.gl:android-sdk:13.6.1")
+    testImplementation("junit:junit:4.13.2")
+
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.11.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("tools.fastlane:screengrab:2.1.1")
 }

@@ -36,7 +36,9 @@ data class Neighbor(val endpoint: String, val name: String, val status: String)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
     val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList(),
-    val publicAuthorization: String? = null, val did: String? = null)
+    val publicAuthorization: String? = null, val did: String? = null,
+    /** Nostr created_at (seconds) and decoded known extensions. */
+    val createdAt: Long = 0, val ext: PostExtensions = PostExtensions())
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -48,7 +50,9 @@ data class MeshState(
     val network: Boolean = false, val sendingRelay: String? = null, val queued: Map<String, Int> = emptyMap(),
     val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true,
     val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList(),
-    val blockedDids: List<String> = emptyList()
+    val blockedDids: List<String> = emptyList(),
+    /** Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh. */
+    val lastReceivedAtMillis: Long? = null, val lastReceivedOnline: Boolean = false,
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -79,19 +83,19 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var lastSync = 0L
     private val random = SecureRandom()
     private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
-    private val node = meshNode(metadata?.getString("mndt.test.node")) {
+    private val node = meshNode(metadata?.getString("mosimo.test.node")) {
         ByteArray(8).also(random::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
     }
     // Optional test isolation only: node IDs are ephemeral and are NOT peer authentication.
-    private val allowedPeerNode = metadata?.getString("mndt.test.peer.node")?.takeIf { it.isNotEmpty() }?.also {
+    private val allowedPeerNode = metadata?.getString("mosimo.test.peer.node")?.takeIf { it.isNotEmpty() }?.also {
         require(it.matches(Regex("[0-9a-f]{16}"))) { "Invalid test peer node" }
     }
-    private val allowedAuthor = metadata?.getString("mndt.test.author.pubkey")?.takeIf { it.isNotEmpty() }?.also {
+    private val allowedAuthor = metadata?.getString("mosimo.test.author.pubkey")?.takeIf { it.isNotEmpty() }?.also {
         require(it.matches(Regex("[0-9a-f]{64}"))) { "Invalid test author" }
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
     private val blocked get() = disk?.blockedDids.orEmpty()
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay() }
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay(); received(online = false) }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -130,6 +134,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
 
     init {
+        engine.clockConfidence = if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(CLOCK_TRUSTED, true)) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN
         engine.relayed = { id -> disk?.relayAccepted?.values?.any { id in it } == true }
         // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
         engine.admit = { AtRepository.did(it) !in blocked }
@@ -176,7 +181,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 if (network == validated || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
                 validated = network
-                enqueue(critical = true) { networkChanged(fresh = false) }
+                enqueue(critical = true) { networkChanged(fresh = false); requestPublic(manual = false) }
             }
             override fun onLost(network: Network) = enqueue(critical = true) { refresh() }
         })
@@ -198,15 +203,19 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private fun now() = System.currentTimeMillis()
     private fun elapsed() = SystemClock.elapsedRealtime()
+    private fun received(online: Boolean) = mutableState.update { it.copy(lastReceivedAtMillis = now(), lastReceivedOnline = online) }
     private fun note(text: String) = mutableState.update { it.copy(diagnostics = (it.diagnostics + text).takeLast(16)) }
     private fun issue(text: String) { mutableState.update { it.copy(error = text) }; note(text) }
     fun clearError() = enqueue(critical = true) { mutableState.update { it.copy(error = null) } }
     fun reportError(text: String) = enqueue(critical = true) { issue(text.take(160)) }
-    /** Local operator policy, not clock synchronization or network consensus. Defaults to UNKNOWN on restart. */
+    /** Local operator policy, not clock synchronization or network consensus. Trusted from install until the user says otherwise; persisted. */
     fun setClockConfidence(value: ClockConfidence) = enqueue(critical = true) {
-        if (engine.clockConfidence != value) cancelPublicDownload()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(CLOCK_TRUSTED, value == ClockConfidence.TRUSTED).apply()
+        // A display-only download under the old clock must not throttle the authorized one.
+        if (engine.clockConfidence != value) { cancelPublicDownload(); publicNext = 0 }
         engine.clockConfidence = value
         exchange.broadcastInventory()
+        if (value == ClockConfidence.TRUSTED) requestPublic(manual = false)
     }
     private fun acceptedAnywhere(id: String) = disk?.relayAccepted?.values?.any { id in it } == true
     private fun refresh() {
@@ -237,9 +246,11 @@ class MeshCoordinator private constructor(private val context: Context) {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
-                    publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did)
-            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.map { post ->
-                if (post.volatile && publicEvents.any { it.id == post.id }) post.copy(sourceRelay = DiskState.PDS_RELAY) else post
+                    publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did,
+                    createdAt = it.event.createdAt, ext = Extensions.of(it.event))
+            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.let { posts ->
+                val publicIds = publicEvents.mapTo(hashSetOf()) { it.id }
+                posts.map { post -> if (post.volatile && post.id in publicIds) post.copy(sourceRelay = DiskState.PDS_RELAY) else post }
             },
             publicBusy = publicBusy, blockedDids = blocked
         ) }
@@ -259,12 +270,14 @@ class MeshCoordinator private constructor(private val context: Context) {
             throw e
         }
     }
-    fun publish(text: String) = enqueue(critical = true) {
+    /** [extensions]: protocol/0011 maps (see [Extensions]); [deliveryExpiresAtSeconds] defaults to 24 h. */
+    fun publish(text: String, extensions: List<Map<String, Any?>> = emptyList(), deliveryExpiresAtSeconds: Long? = null) = enqueue(critical = true) {
         try {
             check(!fatal && author != null)
             require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 2_000)
             val current = checkNotNull(disk)
-            val post = checkNotNull(author).createPost(text, now(), current.repository)
+            val post = checkNotNull(author).createPost(text, now(), current.repository,
+                deliveryExpiresAtSeconds ?: (now() / 1000 + 86400), extensions)
             try { engine.originate(post.event, now(), elapsed()) }
             catch (_: IllegalArgumentException) {
                 issue("投稿の保存容量・配送条件・サイズ・発信頻度の制限に達しました。保存・発信はしていません")
@@ -341,23 +354,20 @@ class MeshCoordinator private constructor(private val context: Context) {
         publicGeneration++
         publicJob?.cancel(); publicJob = null; publicBusy = false
     }
-    /** Manual user request only; no AppView access and no client-side conversion/signing. */
-    fun requestPublicInformation() = enqueue(critical = true) {
-        if (fatal || disk == null || publicBusy) return@enqueue
-        if (!onlineAllowed() || !validatedInternet()) {
-            mutableState.update { it.copy(publicStatus = "公的情報: オンライン接続が必要 / 保留") }; return@enqueue
-        }
-        if (engine.clockConfidence != ClockConfidence.TRUSTED) {
-            mutableState.update { it.copy(publicStatus = "公的情報: 時計 unknown / 認可保留") }; return@enqueue
-        }
-        if (elapsed() < publicNext) {
-            mutableState.update { it.copy(publicStatus = "公的情報: 取得頻度制限（30秒）") }; return@enqueue
-        }
+    /** Pull-to-refresh; also auto-run on foreground, network validation and clock trust. No AppView access and no client-side conversion/signing. */
+    fun requestPublicInformation() = enqueue(critical = true) { requestPublic(manual = true) }
+    /** Auto triggers skip guard failures silently; only a manual request explains them. An untrusted clock only blocks ingress. */
+    private fun requestPublic(manual: Boolean) {
+        fun skip(status: String) { if (manual) mutableState.update { it.copy(publicStatus = status) } }
+        if (fatal || disk == null || publicBusy) return
+        if (!onlineAllowed() || !validatedInternet()) return skip("公的情報: オンライン接続が必要 / 保留")
+        if (elapsed() < publicNext) return skip("公的情報: 取得頻度制限（30秒）")
         publicNext = elapsed() + 30000
         publicBusy = true
         val generation = ++publicGeneration
         val config = publicConfig
         val startingMemory = checkNotNull(disk).publicTrust
+        val confidence = engine.clockConfidence
         mutableState.update { it.copy(publicStatus = "PDS relay から priority-v1 取得中…", publicResults = emptyList()) }
         publicJob = scope.launch {
             // Network IO is never run inside inbox's serialized actor. No redirects or unbounded body reads.
@@ -367,7 +377,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             }.toMap()
             val batch = runCatching { PublicDownload.fetch(http, generation) }
             ensureActive()
-            val clock = Instant.ofEpochMilli(now())
+            val clock = PublicDownload.ingressClock(confidence, now())
             var memory = startingMemory
             val failures = mutableListOf<String>()
             for (root in config.roots.filter { it.enabled }) {
@@ -383,15 +393,20 @@ class MeshCoordinator private constructor(private val context: Context) {
                 memory = decision.memory
                 event to decision
             }.sortedByDescending { it.second.receipt?.priority ?: minOf(PublicIngress.priority(it.first), 1) }
+            var imported = 0
+            fun summary(fallback: Boolean) = "PDS ${if (fallback) "通常REQ fallback" else "priority-v1"}: ${publicEvents.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）" +
+                if (clock == null) " / 時計 unknown・認可保留" else ""
             enqueue(critical = true) complete@{
                 if (generation != publicGeneration || fatal || !onlineAllowed()) return@complete
-                publicBusy = false; publicJob = null
+                // A successful first batch stays busy while display-only older pages load.
+                if (batch.isFailure) { publicBusy = false; publicJob = null }
                 // Generation fences reload/clock changes/cancellation. History has one writer (this request).
                 // Atomically write high-water, sticky CRL and serial history BEFORE considering any ingress.
                 persist(checkNotNull(disk).copy(publicTrust = memory))
                 batch.onSuccess { result ->
+                    val known = publicEvents.mapTo(hashSetOf()) { it.id } + engine.entries().map { it.event.id }
+                    if (result.events.any { it.id !in known }) received(online = true)
                     publicEvents = result.events
-                    var imported = 0
                     val reports = mutableListOf<String>()
                     for ((event, decision) in decisions) {
                         if (fatal) break
@@ -409,17 +424,28 @@ class MeshCoordinator private constructor(private val context: Context) {
                         }
                         reports += "${event.id.take(8)} $outcome\n${decision.status}"
                     }
-                    mutableState.update { it.copy(publicStatus = "PDS ${if (result.fallback) "通常REQ fallback" else "priority-v1"}: ${result.events.size} 件取得 / $imported 件投入（原Bot署名・現在PLC認証ではない）",
+                    mutableState.update { it.copy(publicStatus = summary(result.fallback) + if (result.events.size >= PublicDownload.LIMIT) " / 続きを取得中…" else "",
                         publicResults = (failures + reports).take(40)) }
                     if (imported > 0) { exchange.broadcastInventory(); drainRelay() }
                 }.onFailure { failure -> mutableState.update { it.copy(publicStatus = "公的情報取得失敗: ${failure.message}", publicResults = failures) } }
+            }
+            val first = batch.getOrNull() ?: return@launch
+            val pages = PublicDownload.more(http, generation, first)
+            ensureActive()
+            enqueue(critical = true) pages@{
+                if (generation != publicGeneration || fatal || !onlineAllowed()) return@pages
+                publicBusy = false; publicJob = null
+                val known = publicEvents.mapTo(hashSetOf()) { it.id } + engine.entries().map { it.event.id }
+                if (pages.events.any { it.id !in known }) received(online = true)
+                publicEvents = (first.events + pages.events).distinctBy { it.id }.take(PublicDownload.MAX_EVENTS)
+                mutableState.update { it.copy(publicStatus = summary(first.fallback) + (pages.failure?.let { f -> " / 続き取得中断: $f" } ?: "")) }
             }
         }
     }
     /** Activity visibility permits online IO even while the mesh service is stopped. */
     fun setOnlineForeground(visible: Boolean) = enqueue(critical = true) {
         activityVisible = visible
-        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else drainRelay()
+        if (!onlineAllowed()) { cancelPublicDownload(); closeRelay(); relaySubscription.clear() } else { drainRelay(); requestPublic(manual = false) }
     }
     fun setOnlineEnabled(enabled: Boolean) = enqueue(critical = true) {
         check(!fatal)
@@ -495,7 +521,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                 ?: relays.indices.map { (relayIndex + it) % relays.size }
                     .firstOrNull { elapsed() >= (relayRetryAt[relays[it]] ?: 0L) } ?: return
             activeRelay = relays[relayIndex]
-            relaySubscription.clear()
+            // Rotation keeps the display cache; only relay removal or going offline clears it.
+            relaySubscription.disconnect()
             val gen = ++socketGeneration
             relayDeadline = elapsed() + 20_000
             // Endpoint reachability, not public-Internet validation, decides local shelter relay access.
@@ -556,7 +583,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         } catch (_: Exception) { relayFailure(); return }
         when (reply) {
             // General subscription remains display-only; authorized ingress uses the explicit public request.
-            is RelayReply.Event -> if (relaySubscription.atCapacity) closeRelayRead()
+            is RelayReply.Event -> { received(online = true); if (relaySubscription.atCapacity) closeRelayRead() }
             RelayReply.Full -> closeRelayRead()
             RelayReply.Eose, RelayReply.Closed -> relayReadDeadline = 0
             is RelayReply.Ok -> relayOk(reply)
@@ -568,9 +595,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (reply.id != id) return
         relayPendingId = null; relayDeadline = 0
         if (!reply.accepted) {
-            val failures = (relayFailures[activeRelay] ?: 0) + 1
-            relayFailures[activeRelay] = failures
-            relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + backoff(failures)
+            // OK false is relay policy, not transport: onOpen resets failures, so a backoff here looped every ~2 s.
+            relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + RELAY_REJECT_DEFER_MILLIS
             note("リレー拒否 ${id.take(8)}（$activeRelay）。投稿は保持")
             closeRelay(); relayIndex++
             drainRelay()
@@ -673,6 +699,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (clock - lastSync >= 10_000) { lastSync = clock; exchange.broadcastInventory() }
     }
     companion object {
+        private const val PREFS = "mesh-coordinator"
+        private const val CLOCK_TRUSTED = "clockTrusted"
         @Volatile private var instance: MeshCoordinator? = null
         fun get(context: Context): MeshCoordinator = instance ?: synchronized(this) {
             instance ?: MeshCoordinator(context.applicationContext).also { instance = it }

@@ -20,14 +20,7 @@ on:
         options: [mosimo]
         default: mosimo
         required: true
-      version_code:
-        description: Version code greater than all existing Play builds
-        type: string
-        required: true
-      version_name:
-        description: User-visible version (for example 0.1.0)
-        type: string
-        required: true
+
 
 permissions:
   contents: read
@@ -42,10 +35,9 @@ defaults:
     shell: bash
 
 env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
   FASTLANE_OPT_OUT_USAGE: "true"
   FASTLANE_SKIP_UPDATE_CHECK: "true"
-  FASTLANE_HIDE_CHANGELOG: "true"
-  FASTLANE_SKIP_DOCS: "true"
 
 jobs:
   ci:
@@ -53,79 +45,88 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: jdx/mise-action@v5
         with:
-          distribution: temurin
-          java-version: "21"
-      - uses: android-actions/setup-android@v4
-      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+          working_directory: apps/android
       - uses: gradle/actions/setup-gradle@v5
-      - uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true
-          working-directory: apps/android
-      - run: bundle exec ruby fastlane/test_fastfile.rb
-      - run: bundle exec fastlane android ci app:mosimo
+      - run: mise run fastlane-test
+      - run: mise run ci
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mosimo-ci-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            apps/android/app/build/outputs/apk/demo/debug/*.apk
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
 
-  internal:
+  alpha:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     environment: play-${{ inputs.app }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      # The emulator wants 1.2x its 6 GB userdata free after the APK build; drop toolchains this job never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY/CodeQL"
+          df -h /
+      # No tool cache in release jobs: https://github.com/jdx/mise-action#release-workflows
+      # env: false keeps the runner SDK as ANDROID_HOME for the emulator; mise run/exec still apply mise env.
+      - uses: jdx/mise-action@v5
         with:
-          distribution: temurin
-          java-version: "21"
-      - uses: android-actions/setup-android@v4
-      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+          working_directory: apps/android
+          cache: false
+          env: false
       - uses: gradle/actions/setup-gradle@v5
-      - uses: ruby/setup-ruby@v1
+      - run: mise run fastlane-test
+      # Build before booting the emulator: a concurrent Gradle build starves it and the launcher ANRs.
+      - name: Build screenshot APKs
+        run: |
+          mise run sdk-setup
+          mise exec -- ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PmosimoPlcRegistration=false
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # pixel_2 (1080x1920) satisfies Play's 2:1 aspect limit; registration off keeps the emulator out of the production PLC.
+      - name: Capture Play Store screenshots
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          bundler-cache: true
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
           working-directory: apps/android
-      - run: bundle exec ruby fastlane/test_fastfile.rb
-      - name: Test, sign, and distribute to Play internal testing
+          # Hide ANR dialogs so a slow-booting launcher can't cover the screenshots.
+          script: |
+            "$ANDROID_HOME/platform-tools/adb" shell settings put global hide_error_dialogs 1
+            mise exec -- bundle exec fastlane screengrab --android_home "$ANDROID_HOME"
+      - name: Test, sign, and distribute to the Play alpha track
         env:
-          RELEASE_APP: ${{ inputs.app }}
-          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
-          RELEASE_VERSION_NAME: ${{ inputs.version_name }}
+          SOPS_AGE_KEY: ${{ secrets.MISE_SOPS_AGE_KEY }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          SUPPLY_JSON_KEY_DATA: ${{ secrets.SUPPLY_JSON_KEY_DATA }}
+          # ponytail: versionCode = run number; resets if this workflow file is renamed, then add an offset.
+          ORG_GRADLE_PROJECT_mosimoVersionCode: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          for key in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD SUPPLY_JSON_KEY_DATA; do
-            if [[ -z "${!key}" ]]; then
-              echo "::error::Missing secret: $key"
-              exit 1
-            fi
-          done
           umask 077
-          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/upload.keystore"
-          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          export SOPS_AGE_KEY_FILE="$RUNNER_TEMP/age.txt" ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/upload.keystore"
+          trap 'rm -f "$SOPS_AGE_KEY_FILE" "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$SOPS_AGE_KEY" > "$SOPS_AGE_KEY_FILE"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          bundle exec fastlane android internal \
-            "app:$RELEASE_APP" "version_code:$RELEASE_VERSION_CODE" "version_name:$RELEASE_VERSION_NAME"
+          mise run deploy
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ inputs.app }}-internal-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.app }}-alpha-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            apps/android/**/build/outputs/bundle/*Release/*.aab
-            apps/android/**/build/outputs/apk/*/debug/*.apk
+            apps/android/**/build/outputs/bundle/release/*.aab
+            apps/android/**/build/outputs/apk/debug/*.apk
+            apps/android/fastlane/metadata/android/
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/

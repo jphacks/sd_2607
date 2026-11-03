@@ -8,9 +8,13 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
+import com.fasterxml.jackson.databind.JsonNode
 import org.mndt.core.Author
+import org.mndt.core.ClockConfidence
+import org.mndt.core.NostrEvent
 import org.mndt.core.PublicIngress
 import org.mndt.core.SecretKeys
+import java.time.Instant
 import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -65,6 +69,16 @@ class PublicDownloadTest {
         assertEquals("MOSIMO-REQ", json.readTree(requests.first())[0].textValue())
     }
 
+    @Test fun unknownClockStillDownloadsForDisplayButGivesIngressNoClock() {
+        // The coordinator always fetches; only verify/readyToInsert see the clock, and they fail closed on null.
+        val (batch, _) = fetch("priority")
+        assertEquals(listOf(event), batch.events)
+        assertNull(PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
+        assertEquals(Instant.ofEpochMilli(1792368000000), PublicDownload.ingressClock(ClockConfidence.TRUSTED, 1792368000000))
+        val decision = PublicIngress.verify(event, PublicIngress.Config(), PublicIngress.Memory(), PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
+        assertNull(decision.receipt)
+    }
+
     @Test fun closedAndSilentNonSupportFallBackToStandardReqWithDifferentId() {
         for (mode in listOf("closed", "timeout", "disconnect")) {
             val (batch, requests) = fetch(mode)
@@ -98,6 +112,70 @@ class PublicDownloadTest {
         try {
             assertTrue(runCatching { PublicDownload.fetch(http, 9, server.url("/").toString(), 500) }.isFailure)
         } finally { server.close(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+    }
+
+    private val base = 1792368000L
+    /** Newest first, one second apart; signing is the slow part so the 700 are built once. */
+    private val history by lazy { Author(SecretKeys.generate(), "https://pds.invalid").let { a -> (0 until 700).map { a.createPost("p$it", (base - it) * 1000).event } } }
+
+    /** Plain-REQ relay over [events] (created_at DESC, inclusive until); closes the socket on page [failOn]. */
+    private fun more(events: List<NostrEvent>, first: PublicDownload.Batch, failOn: Int = 0): Pair<PublicDownload.Pages, List<JsonNode>> = runBlocking {
+        val filters = LinkedBlockingQueue<JsonNode>()
+        val server = MockWebServer()
+        val listener = object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val frame = json.readTree(text)
+                if (frame[0].textValue() != "REQ") return
+                val id = frame[1].textValue(); val f = frame[2]
+                filters.add(f)
+                if (filters.size == failOn) { webSocket.close(1000, "gone"); return }
+                events.sortedByDescending { it.createdAt }.filter { f["until"] == null || it.createdAt <= f["until"].longValue() }
+                    .take(f["limit"].intValue()).forEach { webSocket.send("[\"EVENT\",\"$id\",${it.toJson()}]") }
+                webSocket.send("[\"EOSE\",\"$id\"]")
+            }
+        }
+        repeat(8) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+        val http = OkHttpClient()
+        try { PublicDownload.more(http, 3, first, server.url("/").toString(), 2000) to filters.toList() }
+        finally { server.close(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+    }
+
+    @Test fun inclusiveUntilWalkDedupesAndStopsOnShortPage() {
+        val events = history.take(150)
+        val (pages, filters) = more(events, PublicDownload.Batch(events.take(32), fallback = true))
+        assertNull(pages.failure)
+        assertEquals(events.drop(32), pages.events)
+        assertEquals(listOf(base - 31, base - 130), filters.map { it["until"].longValue() })
+        assertTrue(filters.all { it["limit"].intValue() == 100 && it["#t"][0].textValue() == "mosimo.oriom.dev" })
+    }
+
+    @Test fun priorityBatchDoesNotSeedCursorAndShortFirstBatchStops() {
+        val events = history.take(150)
+        val (pages, filters) = more(events, PublicDownload.Batch(events.takeLast(32), fallback = false))
+        assertNull(filters.first()["until"])
+        assertEquals(118, pages.events.size)
+        assertTrue(pages.events.none { it in events.takeLast(32) })
+        assertEquals(PublicDownload.Pages(emptyList()) to emptyList<JsonNode>(), more(events, PublicDownload.Batch(events.take(31), fallback = true)))
+    }
+
+    @Test fun keepsHistoryOlderThanADayAndStopsAtTotalCap() {
+        // One post an hour for ~10 days: nothing is cut at 24 h, every page walks back by until.
+        val old = Author(SecretKeys.generate(), "https://pds.invalid").let { a -> (0 until 250).map { a.createPost("h$it", (base - it * 3600L) * 1000).event } }
+        val (aged, agedFilters) = more(old, PublicDownload.Batch(old.take(32), fallback = true))
+        assertNull(aged.failure)
+        assertEquals(old.drop(32), aged.events)
+        assertTrue(aged.events.last().createdAt < base - 9 * 24 * 3600)
+        assertEquals(listOf(base - 31 * 3600, base - 130 * 3600, base - 229 * 3600), agedFilters.map { it["until"].longValue() })
+        val (capped, cappedFilters) = more(history, PublicDownload.Batch(history.take(32), fallback = true))
+        assertEquals(PublicDownload.MAX_EVENTS - 32, capped.events.size)
+        assertEquals(history.subList(32, PublicDownload.MAX_EVENTS), capped.events)
+        assertEquals(5, cappedFilters.size)
+    }
+
+    @Test fun failedPageKeepsEarlierPages() {
+        val (pages, _) = more(history, PublicDownload.Batch(history.take(32), fallback = true), failOn = 2)
+        assertNotNull(pages.failure)
+        assertEquals(history.subList(32, 131), pages.events)
     }
 
     @Test fun snapshotTransportRequiresCborSuccessHttpsAndBoundedBody() {
