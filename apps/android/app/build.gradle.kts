@@ -13,8 +13,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // CI passes the Actions run number; local builds fall back to the manual value.
-        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 2
-        versionName = "0.2.0"
+        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 3
+        versionName = "0.2.1"
         manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
@@ -34,7 +34,14 @@ android {
     }
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            val signing = signingConfigs.getByName("release")
+            val credentials = listOf(signing.storeFile, signing.storePassword, signing.keyAlias, signing.keyPassword)
+            require(credentials.all { it == null } || credentials.all { it != null && it.toString().isNotBlank() }) {
+                "Set all ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD variables, or use mise run aab."
+            }
+            signingConfig = if (credentials.all { it != null }) signing else null
         }
     }
     buildFeatures { compose = true; buildConfig = true }
