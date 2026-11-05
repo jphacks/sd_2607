@@ -1,0 +1,16 @@
+[tools]
+xcodegen = "2.45.4"
+
+[tasks.generate]
+description = "Generate Mosimo.xcodeproj from project.yml"
+run = "xcodegen generate"
+
+[tasks.test]
+description = "Run MosimoCore unit tests on the Mac host"
+dir = "MosimoCore"
+run = "swift test"
+
+[tasks.build]
+description = "Build the app for a connected device"
+depends = ["generate"]
+run = "xcodebuild -project Mosimo.xcodeproj -scheme Mosimo -destination 'generic/platform=iOS' -derivedDataPath build -allowProvisioningUpdates build"
