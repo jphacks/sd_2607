@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import MosimoCore
 
@@ -128,5 +129,52 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Instant(epochMillis: 1_792_195_200_120).description, "2026-10-17T00:00:00.120Z")
         XCTAssertEqual(Instant.parse("2026-10-17T09:00:00+09:00"), Instant(epochSecond: 1_792_195_200))
         XCTAssertNil(Instant.parse("2026-02-30T00:00:00Z"))
+    }
+}
+
+final class StoreTests: XCTestCase {
+    func testEncryptedStoreRoundTripsStateAndBundles() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("mosimo-\(UUID().uuidString).aesgcm")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let secret = SymmetricKey(size: .bits256)
+        let store = EncryptedStore(file: file) { secret }
+        let a = try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid")
+        var state = DiskState(keys: a.keys, pdsEndpoint: "https://pds.oriom.dev")
+        let post = try a.createPost("保存", nowMillis: 1_792_195_200_000)
+        state.repository = post.repository
+        state.blockedDids = ["did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"]
+        state.relayAccepted = [DiskState.pdsRelay: [post.event.id]]
+        let engine = MeshEngine()
+        let entry = try engine.originate(post.event, nowMillis: 1_792_195_200_000, elapsedMillis: 5)
+        try store.save(state, [entry], bootTime: 42)
+        let loaded = try XCTUnwrap(try store.load())
+        XCTAssertEqual(loaded.keys.nostr, a.keys.nostr)
+        XCTAssertEqual(loaded.repository, post.repository)
+        XCTAssertEqual(loaded.blockedDids, state.blockedDids)
+        XCTAssertEqual(loaded.relayAccepted, state.relayAccepted)
+        XCTAssertEqual(loaded.bundles.first?.bytes, entry.bytes)
+        XCTAssertEqual(loaded.bundles.first?.downtime(currentBoot: 42, elapsed: 105), 100)
+        XCTAssertNotNil(try MeshEngine().restore(loaded.bundles[0].bytes, receivedAtMillis: 0, nowMillis: 0, elapsedMillis: 0))
+        XCTAssertThrowsError(try EncryptedStore(file: file) { SymmetricKey(size: .bits256) }.load())
+    }
+
+    func testShippedTrustAssetParses() throws {
+        let config = try PublicIngress.config(try fixture("apps/android/mesh-android/src/main/assets/mosimo-public-trust.json").serialized)
+        XCTAssertEqual(config.roots.filter(\.enabled).count, 1)
+        XCTAssertEqual(config.selected.count, 28)
+    }
+
+    func testRelaySubscriptionKeepsOnlyVerifiedTaggedEvents() throws {
+        let a = try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid")
+        let event = try a.createPost("relay", nowMillis: 1_792_195_200_000).event
+        let json = try event.toJson()
+        let sub = RelaySubscription()
+        let req = try XCTUnwrap(sub.open(7))
+        XCTAssertTrue(req.hasPrefix(##"["REQ","mndt-7",{"kinds":[1],"#t":["mosimo.oriom.dev"],"limit":32}"##))
+        XCTAssertEqual(try sub.receive(7, #"["EVENT","mndt-7",\#(json)]"#, 0), .event(event))
+        XCTAssertNil(try sub.receive(7, #"["EVENT","mndt-7",\#(json)]"#, 1))
+        XCTAssertEqual(try sub.receive(7, #"["OK","\#(event.id)",true,""]"#, 2), .ok(id: event.id, accepted: true))
+        XCTAssertEqual(try sub.receive(7, #"["EOSE","mndt-7"]"#, 3), .eose)
+        XCTAssertEqual(sub.events(), [event])
     }
 }

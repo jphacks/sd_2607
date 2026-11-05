@@ -1,9 +1,9 @@
 import CryptoKit
 import Foundation
 
-struct CoreError: Error, CustomStringConvertible {
-    let description: String
-    init(_ description: String) { self.description = description }
+public struct CoreError: Error, CustomStringConvertible {
+    public let description: String
+    public init(_ description: String) { self.description = description }
 }
 
 /// Throws [message] unless [condition]; the Swift counterpart of Kotlin `require`.

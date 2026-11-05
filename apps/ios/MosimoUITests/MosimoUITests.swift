@@ -1,0 +1,59 @@
+import XCTest
+
+/// Drives the real app on a device or simulator: compose a located post and find it on the timeline.
+final class MosimoUITests: XCTestCase {
+    override func setUp() { continueAfterFailure = false }
+
+    private func launch() -> XCUIApplication {
+        let app = XCUIApplication()
+        // Keeps test posts off public relays on a fresh install (DEBUG-only hook).
+        app.launchArguments += ["-mosimo.test.relays", "wss://pds.oriom.dev"]
+        app.launch()
+        // System prompts (Bluetooth, location, local network) on first run.
+        addUIInterruptionMonitor(withDescription: "permissions") { alert in
+            for label in ["許可", "Allow", "Appを使用中は許可", "Allow While Using App", "OK"] where alert.buttons[label].exists {
+                alert.buttons[label].tap(); return true
+            }
+            return false
+        }
+        return app
+    }
+
+    private func shot(_ app: XCUIApplication, _ name: String) {
+        let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a)
+    }
+
+    func testTabsRender() {
+        let app = launch()
+        XCTAssertTrue(app.buttons["tab.map"].waitForExistence(timeout: 10))
+        shot(app, "map")
+        app.buttons["tab.timeline"].tap(); shot(app, "timeline")
+        app.buttons["tab.settings"].tap(); shot(app, "settings")
+    }
+
+    func testComposeAndPublishShowsOnTimeline() {
+        let app = launch()
+        XCTAssertTrue(app.buttons["tab.map"].waitForExistence(timeout: 10))
+        app.tap() // lets the interruption monitor answer pending permission alerts
+        let open = app.buttons["compose.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        open.tap()
+        app.buttons["category.危険"].tap()
+        let detail = app.textViews["compose.detail"].exists ? app.textViews["compose.detail"] : app.textFields["compose.detail"]
+        detail.tap()
+        let text = "UIテスト \(Int(Date().timeIntervalSince1970) % 100000)"
+        detail.typeText(text)
+        shot(app, "composer")
+        let send = app.buttons["compose.send"]
+        if !send.isEnabled {
+            // No GPS fix (e.g. simulator): pick the map centre as the post location.
+            app.buttons["地図で指定"].tap()
+            app.buttons["この位置にする"].tap()
+        }
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        send.tap()
+        app.buttons["tab.timeline"].tap()
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 15))
+        shot(app, "timeline-after-post")
+    }
+}

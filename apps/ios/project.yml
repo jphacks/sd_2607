@@ -18,7 +18,11 @@ targets:
   Mosimo:
     type: application
     platform: iOS
-    sources: [Mosimo]
+    sources:
+      - Mosimo
+      # Single source of truth for the shipped trust roots, shared with Android (read-only reference, not a copy).
+      - path: ../android/mesh-android/src/main/assets/mosimo-public-trust.json
+        buildPhase: resources
     dependencies:
       - package: MosimoCore
     settings:
@@ -50,3 +54,22 @@ targets:
         # Local shelter relays may be plain ws:// (parity with Android usesCleartextTraffic).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+  MosimoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [MosimoUITests]
+    dependencies:
+      - target: Mosimo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jisaku.mosimo.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Mosimo
+schemes:
+  Mosimo:
+    build:
+      targets:
+        Mosimo: all
+        MosimoUITests: [test]
+    test:
+      targets: [MosimoUITests]
