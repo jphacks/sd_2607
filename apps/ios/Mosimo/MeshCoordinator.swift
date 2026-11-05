@@ -35,10 +35,18 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var foreground = false
     private let engine = MeshEngine()
     private var author: Author?
-    private let node = Secp.randomBytes(8).map { String(format: "%02x", $0) }.joined()
-    private let gatt = GattLink()
+    /// Per-process random node id; DEBUG `-mosimo.test.node` pins it and `-mosimo.test.peer.node` isolates a lab pair (as Android's metadata).
+    private let node = MeshCoordinator.testValue("mosimo.test.node") ?? Secp.randomBytes(8).map { String(format: "%02x", $0) }.joined()
+    private let allowedPeerNode = MeshCoordinator.testValue("mosimo.test.peer.node")
+    private lazy var gatt = GattLink(allowedPeerNode: allowedPeerNode)
     private let lan = LanLink()
-    private var links: [Link] { [gatt, lan] }
+    private var links: [Link] {
+        #if DEBUG
+        // Lab-only: `-mosimo.test.links ble` or `lan` runs one transport, to test each in isolation.
+        switch defaults.string(forKey: "mosimo.test.links") { case "ble": return [gatt]; case "lan": return [lan]; default: break }
+        #endif
+        return [gatt, lan]
+    }
     private lazy var exchange = Exchange(engine: engine, node: node, now: { Self.now() }, elapsed: { Self.elapsed() },
         note: { [weak self] in self?.note($0) }, log: { [weak self] text in
             self?.log.info("\(text, privacy: .public)")
@@ -118,16 +126,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
 
     private func load() {
         do {
-            let saved: DiskState
+            var saved: DiskState
             if let loaded = try store.load() { saved = loaded } else {
-                var fresh = DiskState(keys: SecretKeys.generate(), pdsEndpoint: pds)
-                #if DEBUG
-                // Lab-only: `-mosimo.test.relays wss://a,wss://b` seeds the first state so test posts reach only those relays.
-                if let relays = defaults.string(forKey: "mosimo.test.relays") { fresh.relays = relays.split(separator: ",").map(String.init) }
-                #endif
-                try store.save(fresh, [], bootTime: bootTime)
-                saved = fresh
+                saved = DiskState(keys: SecretKeys.generate(), pdsEndpoint: pds)
+                try store.save(saved, [], bootTime: bootTime)
             }
+            #if DEBUG
+            // Lab-only: `-mosimo.test.relays wss://a,wss://b` replaces the relay list so test posts reach only those relays.
+            if let relays = defaults.string(forKey: "mosimo.test.relays") { saved.relays = relays.split(separator: ",").map(String.init) }
+            #endif
             disk = saved
             author = try Author(keys: saved.keys, pdsEndpoint: saved.pdsEndpoint)
             let wall = Self.now(), monotonic = Self.elapsed()
@@ -147,6 +154,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             issue("暗号化状態を開けません。鍵は再生成せず停止しました")
         }
         refresh()
+    }
+
+    private nonisolated static func testValue(_ key: String) -> String? {
+        #if DEBUG
+        guard let v = UserDefaults.standard.string(forKey: key), v.count == 16, v.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+        return v
+        #else
+        return nil
+        #endif
     }
 
     // MARK: clocks

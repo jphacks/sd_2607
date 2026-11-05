@@ -15,7 +15,7 @@ SwiftUI port of the Android app (`apps/android`, 0.2.2 feature set) for iOS 17+,
 ```sh
 mise run test      # MosimoCore unit tests on the Mac (Android/ESP32 fixtures read in place)
 mise run generate  # Mosimo.xcodeproj from project.yml (XcodeGen; the project is not committed)
-mise run build     # device build (automatic signing, team 356F93V4HL)
+mise run build     # device build (automatic signing, team 9GCZ395FHV)
 mise run install   # build + install on every paired iPhone/iPad
 ```
 

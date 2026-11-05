@@ -47,6 +47,8 @@ public final class Exchange {
     private let log: (String) -> Void
     // Author-DID predicate; only skips wants. MeshEngine.admit is the authoritative check after signature verification.
     private let blocked: (String) -> Bool
+    // Optional test isolation only: node IDs are ephemeral and are NOT peer authentication.
+    private let allowedPeerNode: String?
     // Must durably save before returning.
     private let accepted: (StoredBundle) throws -> Void
     public private(set) var sessions = [Session]()
@@ -54,10 +56,10 @@ public final class Exchange {
     private var refused = [String]()
 
     public init(engine: MeshEngine, node: String, now: @escaping () -> Int64, elapsed: @escaping () -> Int64, note: @escaping (String) -> Void = { _ in },
-                log: @escaping (String) -> Void = { _ in }, blocked: @escaping (String) -> Bool = { _ in false },
+                log: @escaping (String) -> Void = { _ in }, allowedPeerNode: String? = nil, blocked: @escaping (String) -> Bool = { _ in false },
                 accepted: @escaping (StoredBundle) throws -> Void = { _ in }) {
         self.engine = engine; self.node = node; self.now = now; self.elapsed = elapsed; self.note = note; self.log = log
-        self.blocked = blocked; self.accepted = accepted
+        self.allowedPeerNode = allowedPeerNode; self.blocked = blocked; self.accepted = accepted
     }
 
     private func session(_ link: Link, _ handle: String) -> Session? { sessions.first { $0.link === link && $0.handle == handle } }
@@ -103,7 +105,7 @@ public final class Exchange {
     private func control(_ s: Session, _ c: Control) throws {
         if c.type == "hello" {
             try require(s.peerNode == nil, "Duplicate HELLO")
-            if c.node == node { drop(s); return }
+            if c.node == node || allowedPeerNode.map({ c.node != $0 }) == true { drop(s); return }
             s.peerNode = c.node; s.peerMax = c.max; s.peerDids = c.didCap
             s.link.identified(s.handle, node: c.node)
             log("hello from \(c.node) on \(s.link.name):\(s.handle)")

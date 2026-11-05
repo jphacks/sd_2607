@@ -49,6 +49,7 @@ final class GattLink: NSObject, Link {
         var offset = 0
         var inFlight = 0
         var rx: CBCharacteristic?
+        var tx: CBMutableCharacteristic?
         init(handle: String, peripheral: CBPeripheral?, central: CBCentral?, node: String?) {
             self.handle = handle; self.peripheral = peripheral; self.central = central; self.node = node
         }
@@ -66,6 +67,7 @@ final class GattLink: NSObject, Link {
     private var peripheralManager: CBPeripheralManager?
     private var txCharacteristic: CBMutableCharacteristic?
     private var serviceAdded = false
+    private var advertisedNode: String?
     private var running = false
     private var node = ""
     private weak var listener: LinkListener?
@@ -74,6 +76,8 @@ final class GattLink: NSObject, Link {
     private var backoff = [UUID: (Int, Date)]()
     /// First time each peer was seen; lets the tie-break loser (or a node-less background peer) dial after a wait.
     private var firstSeen = [String: Date]()
+    private let allowedPeerNode: String?
+    init(allowedPeerNode: String? = nil) { self.allowedPeerNode = allowedPeerNode }
     /// Called on the main queue whenever radio availability changes.
     var onState: ((Bool) -> Void)?
 
@@ -88,6 +92,11 @@ final class GattLink: NSObject, Link {
             if central == nil {
                 central = CBCentralManager(delegate: self, queue: queue, options: [CBCentralManagerOptionRestoreIdentifierKey: "mosimo.central"])
                 peripheralManager = CBPeripheralManager(delegate: self, queue: queue, options: [CBPeripheralManagerOptionRestoreIdentifierKey: "mosimo.peripheral"])
+                // Calls made inside the managers' (restoring) init can be dropped; set up again once both exist.
+                queue.async { [self] in
+                    if let c = central { scan(c) }
+                    if let pm = peripheralManager { advertise(pm) }
+                }
             } else {
                 centralManagerDidUpdateState(central!)
                 peripheralManagerDidUpdateState(peripheralManager!)
@@ -101,6 +110,7 @@ final class GattLink: NSObject, Link {
             running = false
             central?.stopScan()
             peripheralManager?.stopAdvertising()
+            advertisedNode = nil
             for p in Array(peers.values) { drop(p) }
             firstSeen.removeAll()
             listener = nil
@@ -134,14 +144,16 @@ final class GattLink: NSObject, Link {
         DispatchQueue.main.async { [onState] in onState?(ok) }
     }
 
-    private func scan() {
-        guard running, let c = central, c.state == .poweredOn, !c.isScanning else { return }
+    // Managers come from the callback: with state restoration, delegate calls can arrive before init assigned them.
+    private func scan(_ c: CBCentralManager) {
+        guard running, c.state == .poweredOn else { return }
         c.scanForPeripherals(withServices: [Self.service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         trace("scanning")
     }
 
-    private func advertise() {
-        guard running, let pm = peripheralManager, pm.state == .poweredOn else { return }
+    private func advertise(_ pm: CBPeripheralManager) {
+        guard running, pm.state == .poweredOn else { return }
+        trace("advertise (service added: \(serviceAdded), advertising: \(pm.isAdvertising))")
         if !serviceAdded {
             let rx = CBMutableCharacteristic(type: Self.rx, properties: [.write, .writeWithoutResponse], value: nil, permissions: [.writeable])
             let tx = CBMutableCharacteristic(type: Self.tx, properties: [.notify], value: nil, permissions: [])
@@ -152,13 +164,17 @@ final class GattLink: NSObject, Link {
             pm.add(s) // advertising starts in didAdd, once peers can find the service
             return
         }
-        if !pm.isAdvertising {
+        // A restored or earlier advertisement may name another process's node: replace it once per start.
+        if advertisedNode != node {
+            pm.stopAdvertising()
             pm.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.service], CBAdvertisementDataLocalNameKey: node])
+            advertisedNode = node
         }
     }
 
     private func connect(_ peripheral: CBPeripheral, _ ad: GattAdvert) {
-        guard running, let c = central, ad.node != node, peers.count < Self.maxLinks else { return }
+        guard running, ad.node != node, peers.count < Self.maxLinks else { return }
+        if let allowed = allowedPeerNode, ad.node != allowed { return }
         let key = ad.node ?? peripheral.identifier.uuidString
         let now = Date()
         let waited = now.timeIntervalSince(firstSeen[key] ?? { firstSeen[key] = now; return now }()) >= Self.asymmetricFallback
@@ -172,7 +188,7 @@ final class GattLink: NSObject, Link {
         let p = Peer(handle: h, peripheral: peripheral, central: nil, node: ad.node)
         peers[h] = p
         peripheral.delegate = self
-        c.connect(peripheral)
+        central?.connect(peripheral)
         queue.asyncAfter(deadline: .now() + Self.connectTimeout) { [weak self, weak p] in
             guard let self, let p, self.peers[p.handle] === p, !p.connected else { return }
             self.drop(p)
@@ -214,7 +230,7 @@ final class GattLink: NSObject, Link {
             peripheral.writeValue(chunk, for: rx, type: rx.properties.contains(.write) ? .withResponse : .withoutResponse)
             // Without-response writes get no callback; flow control is canSendWriteWithoutResponse.
             if !rx.properties.contains(.write) { sent(p) }
-        } else if let central = p.central, let pm = peripheralManager, let tx = txCharacteristic {
+        } else if let central = p.central, let pm = peripheralManager, let tx = p.tx ?? txCharacteristic {
             // Notifications have no per-chunk callback: false means the queue is full, retried in isReady.
             if pm.updateValue(chunk, for: tx, onSubscribedCentrals: [central]) { p.inFlight = chunk.count; sent(p) }
         }
@@ -242,12 +258,14 @@ extension GattLink: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
         trace("central state \(c.state.rawValue)")
         publishState()
-        if c.state == .poweredOn { scan() } else { for p in peers.values where p.peripheral != nil { drop(p) } }
+        if c.state == .poweredOn { scan(c) } else { for p in peers.values where p.peripheral != nil { drop(p) } }
     }
 
     func centralManager(_ c: CBCentralManager, willRestoreState dict: [String: Any]) {
         // Restored links lost their sessions; rediscover them instead of resuming half a frame stream.
         for p in dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? [] { c.cancelPeripheralConnection(p) }
+        // A restored scan keeps running without us; restart it so discoveries follow this process's settings.
+        c.stopScan()
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
@@ -312,20 +330,32 @@ extension GattLink: CBPeripheralDelegate {
 extension GattLink: CBPeripheralManagerDelegate {
     func peripheralManagerDidUpdateState(_ pm: CBPeripheralManager) {
         trace("peripheral state \(pm.state.rawValue)")
-        if pm.state == .poweredOn { advertise() } else {
+        if pm.state == .poweredOn { advertise(pm) } else {
             serviceAdded = false
+            advertisedNode = nil
             for p in peers.values where p.central != nil { drop(p) }
         }
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, willRestoreState dict: [String: Any]) {
-        // Our service is re-added on power-on; restored ones are dropped to keep one copy.
-        pm.removeAllServices()
+        trace("peripheral restore \(dict.keys.sorted())")
+        // Keep the restored service: replacing it changes the GATT database under centrals that cached its handles.
+        let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] ?? []
+        if let tx = services.first(where: { $0.uuid == Self.service })?.characteristics?.first(where: { $0.uuid == Self.tx }) as? CBMutableCharacteristic {
+            txCharacteristic = tx
+            serviceAdded = true
+        } else {
+            pm.removeAllServices()
+            serviceAdded = false
+        }
+        // The restored advertisement still names the previous process's node.
+        pm.stopAdvertising()
+        advertisedNode = nil
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error { trace("addService failed: \(error.localizedDescription)"); serviceAdded = false; return }
-        advertise()
+        advertise(pm)
     }
 
     func peripheralManagerDidStartAdvertising(_ pm: CBPeripheralManager, error: Error?) {
@@ -338,6 +368,7 @@ extension GattLink: CBPeripheralManagerDelegate {
         guard peers.count < Self.maxLinks else { return }
         let p = Peer(handle: h, peripheral: nil, central: central, node: nil)
         p.chunk = central.maximumUpdateValueLength
+        p.tx = characteristic as? CBMutableCharacteristic
         peers[h] = p
         connected(p)
     }

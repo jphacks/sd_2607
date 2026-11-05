@@ -9,7 +9,7 @@ packages:
     path: MosimoCore
 settings:
   base:
-    DEVELOPMENT_TEAM: 356F93V4HL
+    DEVELOPMENT_TEAM: 9GCZ395FHV
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: 0.1.0
