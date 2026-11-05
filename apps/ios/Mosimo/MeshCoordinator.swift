@@ -10,7 +10,14 @@ import Security
 @MainActor
 final class MeshCoordinator: ObservableObject, LinkListener {
     static let shared = MeshCoordinator()
-    @Published private(set) var state = MeshState()
+    @Published private(set) var state = MeshState() {
+        didSet {
+            #if DEBUG
+            if state.publicStatus != oldValue.publicStatus { print("[public] \(state.publicStatus)") }
+            if state.publicResults != oldValue.publicResults { for r in state.publicResults { print("[public] \(r.replacingOccurrences(of: "\n", with: " | "))") } }
+            #endif
+        }
+    }
 
     /// User switch 「オフライン中継を有効にする」; persisted, resumes on launch.
     var relayEnabled: Bool {
@@ -43,7 +50,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var links: [Link] {
         #if DEBUG
         // Lab-only: `-mosimo.test.links ble` or `lan` runs one transport, to test each in isolation.
-        switch defaults.string(forKey: "mosimo.test.links") { case "ble": return [gatt]; case "lan": return [lan]; default: break }
+        switch Self.lab("mosimo.test.links") { case "ble": return [gatt]; case "lan": return [lan]; default: break }
         #endif
         return [gatt, lan]
     }
@@ -54,7 +61,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             print("[exchange] \(text)")
             #endif
         },
-        blocked: { [weak self] in self?.blocked.contains($0) ?? false },
+        allowedPeerNode: allowedPeerNode, blocked: { [weak self] in self?.blocked.contains($0) ?? false },
         accepted: { [weak self] _ in try self?.persist(); self?.drainRelay(); self?.received(online: false) })
     private var lastSync: Int64 = 0
     private var blocked: [String] { disk?.blockedDids ?? [] }
@@ -96,6 +103,9 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var proxyBusy = false
 
     private init() {
+        #if DEBUG
+        setvbuf(stdout, nil, _IOLBF, 0) // a piped console (devicectl --console) is otherwise block-buffered
+        #endif
         engine.clockConfidence = defaults.object(forKey: "clockTrusted") as? Bool ?? true ? .trusted : .unknown
         engine.relayed = { [unowned self] id in disk?.relayAccepted.values.contains { $0.contains(id) } == true }
         // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
@@ -133,7 +143,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             }
             #if DEBUG
             // Lab-only: `-mosimo.test.relays wss://a,wss://b` replaces the relay list so test posts reach only those relays.
-            if let relays = defaults.string(forKey: "mosimo.test.relays") { saved.relays = relays.split(separator: ",").map(String.init) }
+            if let relays = Self.lab("mosimo.test.relays") { saved.relays = relays.split(separator: ",").map(String.init) }
             #endif
             disk = saved
             author = try Author(keys: saved.keys, pdsEndpoint: saved.pdsEndpoint)
@@ -156,13 +166,25 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         refresh()
     }
 
-    private nonisolated static func testValue(_ key: String) -> String? {
+    /// DEBUG lab settings: a launch argument wins and is remembered, so Core Bluetooth background relaunches
+    /// (which get no arguments) keep the same isolation. `-mosimo.test.reset 1` forgets them.
+    nonisolated static func lab(_ key: String) -> String? {
         #if DEBUG
-        guard let v = UserDefaults.standard.string(forKey: key), v.count == 16, v.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
-        return v
+        let d = UserDefaults.standard
+        if d.string(forKey: "mosimo.test.reset") == "1" { for k in ["node", "peer.node", "links", "relays"] { d.removeObject(forKey: "lab.mosimo.test." + k) } }
+        if let launch = d.volatileDomain(forName: UserDefaults.argumentDomain)[key] as? String {
+            d.set(launch, forKey: "lab." + key)
+            return launch
+        }
+        return d.string(forKey: "lab." + key)
         #else
         return nil
         #endif
+    }
+
+    private nonisolated static func testValue(_ key: String) -> String? {
+        guard let v = lab(key), v.count == 16, v.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+        return v
     }
 
     // MARK: clocks

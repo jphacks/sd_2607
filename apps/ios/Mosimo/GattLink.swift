@@ -174,7 +174,8 @@ final class GattLink: NSObject, Link {
 
     private func connect(_ peripheral: CBPeripheral, _ ad: GattAdvert) {
         guard running, ad.node != node, peers.count < Self.maxLinks else { return }
-        if let allowed = allowedPeerNode, ad.node != allowed { return }
+        // Node-less (backgrounded iOS) peers are dialed too; Exchange enforces the lab peer at HELLO.
+        if let allowed = allowedPeerNode, let n = ad.node, n != allowed { return }
         let key = ad.node ?? peripheral.identifier.uuidString
         let now = Date()
         let waited = now.timeIntervalSince(firstSeen[key] ?? { firstSeen[key] = now; return now }()) >= Self.asymmetricFallback
