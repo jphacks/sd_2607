@@ -54,6 +54,9 @@ internal fun migrateDefaultRelays(relays: List<String>, migrated: Boolean,
     if (!migrated && relays == DiskState.LEGACY_DEFAULT_RELAYS && relays.size < maxRelays)
         listOf(DiskState.PDS_RELAY) + relays else relays
 
+/** The PDS accepts kinds 1 and 5 only; other kinds (DMs, profiles) still go to general relays. */
+internal fun relayWants(relay: String, kind: Int) = relay != DiskState.PDS_RELAY || kind == 1 || kind == 5
+
 internal fun onlineRelayAllowed(enabled: Boolean, foreground: Boolean, fatal: Boolean, hasRelay: Boolean,
     serviceRunning: Boolean = false): Boolean = enabled && (foreground || serviceRunning) && !fatal && hasRelay
 
