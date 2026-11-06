@@ -22,6 +22,14 @@ class OnlineRelayTest {
         assertFalse(onlineRelayAllowed(true, true, false, false, serviceRunning = true))
     }
 
+    @Test fun pdsGetsOnlyPostsAndDeletions() {
+        assertTrue(relayWants(DiskState.PDS_RELAY, 1))
+        assertTrue(relayWants(DiskState.PDS_RELAY, 5))
+        assertFalse(relayWants(DiskState.PDS_RELAY, 4))
+        assertFalse(relayWants(DiskState.PDS_RELAY, 0))
+        assertTrue(relayWants("wss://nos.lol", 4))
+    }
+
     @Test fun rejectingRelayDoesNotStarvePdsOrAnotherRelay() {
         val relays = listOf("wss://general.invalid", "wss://pds.oriom.dev", "wss://other.invalid")
         val client = OkHttpClient()

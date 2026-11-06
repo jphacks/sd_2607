@@ -139,8 +139,10 @@ class MeshCoordinator private constructor(private val context: Context) {
         // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
         engine.admit = { AtRepository.did(it) !in blocked }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
+        // Kinds the PDS never accepts would otherwise be pinned forever and fill the store.
         engine.canEvict = { entry ->
             entry.event.pubkey != author?.nostrPubkey ||
+                (!relayWants(DiskState.PDS_RELAY, entry.event.kind) && !entry.event.isPlcGenesis()) ||
                 disk?.relayAccepted?.get(DiskState.PDS_RELAY)?.contains(entry.event.id) == true
         }
         scope.launch {
@@ -242,7 +244,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                 Neighbor(key, named?.peerNode ?: "?", if (named == null) "HELLO 待ち"
                     else "同期中（${list.filter { it.peerNode != null }.joinToString("・") { it.link.name }}）")
             },
-            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { !it.event.isPlcGenesis() }.map {
+            // Other apps' kinds (DMs, profiles) are relayed but are not posts.
+            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
@@ -509,7 +512,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     // Genesis control events stay in the mesh: relays (including the PDS) accept only kinds 1 and 5, and the online
     // node submits them to the PLC Directory itself.
-    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && (allowedAuthor == null || it.event.pubkey == allowedAuthor) && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
+    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { !it.event.isPlcGenesis() && relayWants(relay, it.event.kind) && (allowedAuthor == null || it.event.pubkey == allowedAuthor) && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mndt §6). */
     private fun drainRelay() {
         val current = disk ?: return
