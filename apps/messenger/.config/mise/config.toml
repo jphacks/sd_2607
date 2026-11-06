@@ -1,0 +1,26 @@
+[tools]
+android-sdk = "23"
+java = "openjdk-21"
+
+[tasks.sdk-setup]
+hide = true
+interactive = true
+run = 'android sdk install platforms/android-36 build-tools/36.0.0'
+
+[tasks.test]
+depends = ["sdk-setup"]
+description = "Run the DM SDK and app unit tests"
+run = "./gradlew :mosimo-dm:test :app:testDebugUnitTest"
+run_windows = "gradlew.bat :mosimo-dm:test :app:testDebugUnitTest"
+
+[tasks.lint]
+depends = ["sdk-setup"]
+description = "Run Android lint"
+run = "./gradlew :app:lintDebug"
+run_windows = "gradlew.bat :app:lintDebug"
+
+[tasks.apk]
+depends = ["sdk-setup"]
+description = "Build the debug APK"
+run = "./gradlew :app:assembleDebug"
+run_windows = "gradlew.bat :app:assembleDebug"
