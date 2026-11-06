@@ -23,6 +23,7 @@
 | [0019: BSAF v1互換拡張](0019-bsaf.md) | BSAFとの相互運用 | タグ・言語・原投稿参照、AppView収集、取り込みと別途BSAF公開の境界 |
 | [0020: Experimental wire-v1](0020-wire-v1.md) | BSAF importer実装契約 | 証明/binding/署名preimage、bounded delegation、CRL snapshot、Android/ESP32認可、priority |
 | [0021: 気象庁気象防災情報](0021-jma-weather.md) | 気象XML拡張の具体的ドラフト | 警報・注意報、土砂・竜巻・記録雨・洪水・台風・線状降水帯・大雪・一般情報の部分集合、地域別状態・時刻・限界 |
+| [0022: 個別通信（DM）プロファイル](0022-direct-messages.md) | 提案・未採用。他アプリ間の相互運用デモ用 | NIP-04 kind 4 の DM・配達通知・kind 0 表示名、メッシュ上の扱い、未決定事項 |
 
 ```mermaid
 flowchart TD
