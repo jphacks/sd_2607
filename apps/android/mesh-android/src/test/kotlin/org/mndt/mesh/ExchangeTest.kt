@@ -209,4 +209,15 @@ class ExchangeTest {
         connect(a, twin)
         assertTrue("a node must not sync with itself", a.sessions.isEmpty() && twin.sessions.isEmpty())
     }
+
+    @Test fun ackReportsForwardedOnlyForBundlesWeSent() {
+        val seen = mutableListOf<Pair<String, String>>()
+        val ea = MeshEngine()
+        val a = Exchange(ea, "a".repeat(16), { now }, { clock }, forwarded = { id, peer -> seen += id to peer })
+        val (_, b) = node('b')
+        val event = author().createPost("届いた", now).event
+        ea.originate(event, now, clock)
+        connect(a, b)
+        assertEquals(listOf(event.id to "b".repeat(16)), seen)
+    }
 }

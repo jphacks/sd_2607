@@ -53,6 +53,8 @@ data class MeshState(
     val blockedDids: List<String> = emptyList(),
     /** Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh. */
     val lastReceivedAtMillis: Long? = null, val lastReceivedOnline: Boolean = false,
+    /** Every stored mesh event of any kind (for apps built on other kinds), and how many peers took each one from us this run. */
+    val events: List<NostrEvent> = emptyList(), val forwardedTo: Map<String, Int> = emptyMap(),
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -75,7 +77,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val engine = MeshEngine()
     private val bootCount = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }
         .getOrNull()?.takeIf { it >= 0 }
-    private var author: Author? = null
+    @Volatile private var author: Author? = null
     /** Only unrecoverable storage failures; a full queue drops link traffic instead (peers re-offer it). */
     private var fatal = false
     private var running = false
@@ -95,7 +97,10 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
     private val blocked get() = disk?.blockedDids.orEmpty()
-    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay(); received(online = false) }
+    // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
+    private val forwarded = mutableMapOf<String, MutableSet<String>>()
+    private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked },
+        forwarded = { id, peer -> forwarded.getOrPut(id) { mutableSetOf() } += peer }) { persist(); drainRelay(); received(online = false) }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -255,7 +260,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                 val publicIds = publicEvents.mapTo(hashSetOf()) { it.id }
                 posts.map { post -> if (post.volatile && post.id in publicIds) post.copy(sourceRelay = DiskState.PDS_RELAY) else post }
             },
-            publicBusy = publicBusy, blockedDids = blocked
+            publicBusy = publicBusy, blockedDids = blocked,
+            events = if (fatal) emptyList() else engine.entries().map { it.event },
+            forwardedTo = forwarded.apply { keys.retainAll(engine.entries().mapTo(hashSetOf()) { it.event.id }) }.mapValues { it.value.size },
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
@@ -294,6 +301,24 @@ class MeshCoordinator private constructor(private val context: Context) {
             drainRelay()
         } finally { mutableState.update { it.copy(publishAttempt = it.publishAttempt + 1) } }
     }
+    /** Signs and originates any non-post kind; null when a mesh limit (size, rate, capacity) refused it. */
+    suspend fun publishEvent(kind: Int, tags: List<List<String>>, content: String): NostrEvent? {
+        val result = CompletableDeferred<NostrEvent?>()
+        enqueue(critical = true) {
+            try {
+                check(!fatal)
+                val event = checkNotNull(author).signEvent(kind, tags, content, now())
+                try { engine.originate(event, now(), elapsed()) } catch (_: IllegalArgumentException) { return@enqueue }
+                persist()
+                exchange.broadcastInventory()
+                drainRelay()
+                result.complete(event)
+            } finally { result.complete(null) }
+        }
+        return result.await()
+    }
+    /** NIP-04/44 ECDH with our Nostr key; the key itself never leaves the coordinator. */
+    fun sharedSecret(peerPubkey: String): ByteArray = checkNotNull(author) { "Author not ready" }.sharedSecret(peerPubkey)
     fun addRelay(endpoint: String) = enqueue(critical = true) {
         check(!fatal)
         val value = endpoint.trim()

@@ -138,6 +138,19 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
         return sign(AtRepository.PLC_GENESIS_KIND, tags, initialOperationJson, nowMillis)
     }
 
+    /** Any non-post kind (e.g. another app's DM). Only the signed delivery deadline the mesh requires is appended. */
+    fun signEvent(kind: Int, tags: List<List<String>>, content: String, nowMillis: Long,
+        deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400)): NostrEvent {
+        require(kind != 1 && kind != AtRepository.PLC_GENESIS_KIND) { "Use createPost/createPlcGenesisEvent" }
+        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L)
+        val deadline = listOf(AtRepository.TAG_PREFIX + "delivery-expires-at", java.time.Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString())
+        return sign(kind, tags + listOf(deadline), content, nowMillis)
+    }
+
+    /** NIP-04/NIP-44 ECDH: x coordinate of our Nostr key times the peer's x-only pubkey (even y). */
+    fun sharedSecret(peerPubkey: String): ByteArray =
+        secp.pubKeyTweakMul(secp.pubkeyParse(byteArrayOf(2) + unhex(peerPubkey, 32)), keys.nostr).copyOfRange(1, 33)
+
     private fun sign(kind: Int, tags: List<List<String>>, content: String, nowMillis: Long): NostrEvent {
         val frozen = frozenTags(tags)
         val digest = sha256(nostrSigningBytes(nostrPubkey, nowMillis / 1000, kind, frozen, content))

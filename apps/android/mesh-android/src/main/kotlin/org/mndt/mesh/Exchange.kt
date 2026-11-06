@@ -32,6 +32,8 @@ internal class Exchange(
     private val allowedAuthor: String? = null,
     // Author-DID predicate; only skips wants. MeshEngine.admit is the authoritative check after signature verification.
     private val blocked: (String) -> Boolean = { false },
+    // (event id, peer node): a peer acked or already holds a bundle we sent it.
+    private val forwarded: (String, String) -> Unit = { _, _ -> },
     // Must durably save before returning; failures must stop the coordinator's links.
     private val accepted: (StoredBundle) -> Unit = {},
 ) {
@@ -95,7 +97,7 @@ internal class Exchange(
                 }
                 log("inventory ${c.ids.size} from ${s.peerNode}, want ${missing.size}")
                 if (missing.isNotEmpty()) send(s, Wire.encode(Control("want", missing)))
-                s.sent.keys.removeAll(c.ids.toSet())
+                c.ids.forEach { if (s.sent.remove(it) != null) forwarded(it, s.peerNode!!) }
             }
             "want" -> {
                 val wanted = c.ids.toSet()
@@ -112,7 +114,8 @@ internal class Exchange(
                         if (ok) s.sent[id] = elapsed()
                     }
             }
-            "ack" -> s.sent.remove(c.ids.single())
+            // Only acks for bundles we actually sent count; a forged ack is ignored.
+            "ack" -> c.ids.single().let { if (s.sent.remove(it) != null) forwarded(it, s.peerNode!!) }
         }
     }
 

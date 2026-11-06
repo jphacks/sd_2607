@@ -25,6 +25,15 @@ class SignatureTest {
         return replaceTag(e, p + "commit", listOf(p + "commit", B64.encode(CanonicalCbor.encode(commit))))
     }
 
+    @Test fun otherKindsCarryTheDeadlineAndShareAnEcdhSecret() {
+        val a = author(); val b = Author(SecretKeys(key(6), key(7), key(8)), "https://pds.invalid")
+        val dm = a.signEvent(4, listOf(listOf("p", b.nostrPubkey)), "x", now)
+        assertEquals(listOf("p", b.nostrPubkey), dm.tags.first())
+        assertEquals(1, dm.tags.count { it[0] == p + "delivery-expires-at" })
+        MeshEngine().originate(dm, now, 0)
+        assertArrayEquals(a.sharedSecret(b.nostrPubkey), b.sharedSecret(a.nostrPubkey))
+    }
+
     @Test fun postUsesExactly0012BaseTags() {
         val a = author()
         val created = a.createPost("本文", now)
