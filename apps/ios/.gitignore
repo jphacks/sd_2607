@@ -1,0 +1,7 @@
+*.xcodeproj/
+build/
+DerivedData/
+.build/
+.swiftpm/
+xcuserdata/
+build-ui/
