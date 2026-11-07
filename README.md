@@ -19,7 +19,7 @@
 
   <br/>
 
-  [![Used Skills](https://skillicons.dev/icons?i=kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
+  [![Used Skills](https://skillicons.dev/icons?i=swift,kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
 
 </div>
 
