@@ -47,6 +47,8 @@ struct MeshState: Equatable {
     var publicStatus = "公的情報: trust config 未読込"
     var publicResults: [String] = []
     var blockedDids: [String] = []
+    /// Display-only filter for posts past their signed delivery deadline; on by default.
+    var hideExpired = true
     /// Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh.
     var lastReceivedAtMillis: Int64? = nil
     var lastReceivedOnline = false

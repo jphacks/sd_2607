@@ -65,6 +65,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         accepted: { [weak self] _ in try self?.persist(); self?.drainRelay(); self?.received(online: false) })
     private var lastSync: Int64 = 0
     private var blocked: [String] { disk?.blockedDids ?? [] }
+    private var hideExpired: Bool { defaults.object(forKey: "hideExpired") as? Bool ?? true }
     private let bootTime = MeshCoordinator.kernelBootTime()
     private var timer: Timer?
     private let pathMonitor = NWPathMonitor()
@@ -237,6 +238,12 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     }
 
     // MARK: user actions
+
+    /// Hides expired posts from the UI only; they stay stored and exported. Persisted.
+    func setHideExpired(_ value: Bool) {
+        defaults.set(value, forKey: "hideExpired")
+        refresh()
+    }
 
     /// Local operator policy, not clock synchronization or network consensus. Trusted from install until the user says otherwise.
     func setClockConfidence(_ value: ClockConfidence) {
@@ -462,12 +469,14 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             posts += online.reversed().filter { !meshIds.contains($0.id) }.map {
                 PostView(id: $0.id, pubkey: $0.pubkey, content: $0.content, hop: nil, relayAccepted: false,
                          sourceRelay: publicIds.contains($0.id) ? DiskState.pdsRelay : activeRelay, volatile: true,
-                         did: didOf($0), createdAt: $0.createdAt, ext: Extensions.of($0))
+                         deliveryDeadline: engine.deadline($0, nowMillis: now), did: didOf($0), createdAt: $0.createdAt, ext: Extensions.of($0))
             }
-            s.posts = posts.filter { !blocked.contains($0.did ?? "") }
+            let hide = hideExpired
+            s.posts = posts.filter { !blocked.contains($0.did ?? "") && !(hide && $0.deliveryDeadline == .expired) }
         }
         s.publicBusy = publicBusy
         s.blockedDids = blocked
+        s.hideExpired = hideExpired
         if s != state { state = s }
     }
 

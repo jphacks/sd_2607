@@ -274,6 +274,12 @@ struct AdvancedScreen: View {
                 SwitchRow(icon: "icloud.and.arrow.up", tint: Mosimo.info, title: "オンライン搬出", subtitle: exportStatus(state),
                           isOn: Binding(get: { mesh.state.onlineEnabled }, set: { mesh.setOnlineEnabled($0) }), enabled: state.ready)
             }
+            Header(text: "表示")
+            Group_ {
+                SwitchRow(icon: "eye.slash", tint: Mosimo.info, title: "失効した Nostr イベントを非表示",
+                          subtitle: "配信期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
+                          isOn: Binding(get: { mesh.state.hideExpired }, set: { mesh.setHideExpired($0) }))
+            }
             Header(text: "近隣端末 \(state.neighbors.count)")
             Group_ {
                 ForEach(Array(state.neighbors.enumerated()), id: \.element.id) { i, peer in
