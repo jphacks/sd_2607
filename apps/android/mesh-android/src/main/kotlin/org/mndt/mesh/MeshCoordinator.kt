@@ -246,12 +246,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                     PlcCurrentState.TOMBSTONED -> "Directory 無効化操作あり（確認時刻 ${plcObservation.checkedAtMillis}）"
                     PlcCurrentState.UNKNOWN -> if (registrationBusy) "現在状態確認中" else "現在状態不明（オフライン・未設定・未確認）"
                 } + " / PDS 受入・公開未確認",
-            // One entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
-            neighbors = exchange.sessions.values.groupBy { it.peerNode ?: "${it.link.name}:${it.handle}" }.map { (key, list) ->
-                val named = list.firstOrNull { it.peerNode != null }
-                Neighbor(key, named?.peerNode ?: "?", if (named == null) "HELLO 待ち"
-                    else "同期中（${list.filter { it.peerNode != null }.joinToString("・") { it.link.name }}）")
-            },
+            // HELLO-completed peers only, one entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
+            neighbors = exchange.sessions.values.mapNotNull { s -> s.peerNode?.let { it to s.link.name } }
+                .groupBy({ it.first }, { it.second }).map { (node, links) -> Neighbor(node, node, "同期中（${links.joinToString("・")}）") },
             // Other apps' kinds (DMs, profiles) are relayed but are not posts.
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
