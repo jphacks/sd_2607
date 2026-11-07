@@ -7,5 +7,9 @@ export default defineConfig({
       destination: '/reference/mobile/policy',
       status: 301,
     },
+    '/reference/mobile/ios/policy': {
+      destination: '/reference/mobile/policy',
+      status: 301,
+    },
   },
 });
