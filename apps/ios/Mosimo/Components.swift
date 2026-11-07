@@ -99,11 +99,7 @@ func openAppSettings() {
     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
 }
 
-/// Bottom bar order, which also decides the slide direction between tabs.
-enum Tab: Int, Comparable {
-    case timeline, map, settings
-    static func < (a: Tab, b: Tab) -> Bool { a.rawValue < b.rawValue }
-}
+enum Tab { case timeline, map, settings }
 enum Route: Hashable { case post(String), trust, advanced, identity, blocked }
 
 /// One stack per tab. The map is the start tab; posts opened from the map live in its sheet.
@@ -123,7 +119,7 @@ final class Navigator: ObservableObject {
         case .map: return true
         }
     }
-    func select(_ t: Tab) { withAnimation(.easeInOut(duration: 0.25)) { tab = t } }
+    func select(_ t: Tab) { tab = t }
     func push(_ r: Route) {
         switch tab {
         case .timeline: timelinePath.append(r)

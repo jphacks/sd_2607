@@ -6,6 +6,7 @@ private let nearbyMeters = 1000.0
 /// Visible height of a pin sheet at its lowest stop: handle, header and about one row, leaving most of the map free.
 private let pinLow: CGFloat = 128
 private let sheetHandle: CGFloat = 20
+private let sheetSpring = Animation.spring(response: 0.35, dampingFraction: 0.85)
 
 /// Map screen state that survives tab switches (the view stays alive in RootView).
 @MainActor
@@ -71,7 +72,8 @@ struct MapScreen: View {
     @StateObject private var vm = MapModel()
     @StateObject private var map = MapController()
     @State private var sheetTop: CGFloat?
-    @GestureState private var drag: CGFloat = 0
+    /// Springs back with the same curve as [sheetTop]: an unanimated reset would snap the sheet to its pre-drag position on release.
+    @GestureState(resetTransaction: Transaction(animation: sheetSpring)) private var drag: CGFloat = 0
     @State private var hereHeight: CGFloat = 0
     @State private var herePeek: CGFloat = 0
     @State private var shownMode: SheetMode?
@@ -88,7 +90,9 @@ struct MapScreen: View {
         let point = vm.picked ?? fix?.coordinate
 
         GeometryReader { geo in
+            // h ends above the floating tab bar; the map and the sheet's surface run on under it.
             let h = geo.size.height
+            let inset = geo.safeAreaInsets.bottom
             let top = clamp((sheetTop ?? h) + drag, mode, h)
             ZStack(alignment: .top) {
                 GsiMapView(posts: shown, controller: map, composePoint: vm.composing ? point : nil, picking: vm.picking,
@@ -106,13 +110,14 @@ struct MapScreen: View {
                     bottomControls(fix: fix)
                 }
                 .frame(height: max(top, h / 2))
-                sheet(mode: mode, h: h, top: top, all: all, fix: fix, selected: selected, stacked: stacked)
+                sheet(mode: mode, h: h, inset: inset, top: top, all: all, fix: fix, selected: selected, stacked: stacked)
             }
+            .clipped()
+            .ignoresSafeArea(.container, edges: .bottom)
             .onChange(of: modeKey(mode, h)) { _, _ in settle(mode, h) }
             .onAppear { settle(mode, h) }
         }
         .background(Mosimo.bgBase)
-        .clipped()
         .sheet(isPresented: $vm.composing) { Composer(vm: vm, onPick: pick) }
         .onChange(of: mesh.state.publishAttempt) { _, _ in vm.published(mesh.state) }
         .onChange(of: location.location) { _, f in
@@ -207,7 +212,7 @@ struct MapScreen: View {
 
     // MARK: - Sheet
 
-    @ViewBuilder private func sheet(mode: SheetMode, h: CGFloat, top: CGFloat, all: [PostView], fix: CLLocation?, selected: PostView?, stacked: [PostView]) -> some View {
+    @ViewBuilder private func sheet(mode: SheetMode, h: CGFloat, inset: CGFloat, top: CGFloat, all: [PostView], fix: CLLocation?, selected: PostView?, stacked: [PostView]) -> some View {
         let handleDrag = DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .updating($drag) { v, s, _ in s = v.translation.height }
             .onEnded { v in fling(mode, h, from: (sheetTop ?? h) + v.translation.height, predicted: (sheetTop ?? h) + v.predictedEndTranslation.height) }
@@ -229,6 +234,7 @@ struct MapScreen: View {
         }
         .background(GeometryReader { g in Color.clear.onAppear { if mode == .here { hereHeight = g.size.height } }
             .onChange(of: g.size.height) { _, v in if mode == .here { hereHeight = v; settle(mode, h) } } })
+        .padding(.bottom, inset)
         .background(Mosimo.bgSurface, in: UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
         .shadow(color: .black.opacity(0.4), radius: 8)
         .gesture(handleDrag, including: mode == .here ? .all : .subviews)
@@ -260,7 +266,7 @@ struct MapScreen: View {
         shownMode = mode
         animate(to: target)
     }
-    private func animate(to y: CGFloat) { withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { sheetTop = y } }
+    private func animate(to y: CGFloat) { withAnimation(sheetSpring) { sheetTop = y } }
 
     /// A fast fling goes to the stop it is heading for, a slow release to the nearest; pin sheets close below their lowest stop.
     private func fling(_ mode: SheetMode, _ h: CGFloat, from y: CGFloat, predicted: CGFloat) {

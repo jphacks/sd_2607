@@ -25,15 +25,15 @@ final class MosimoUITests: XCTestCase {
 
     func testTabsRender() {
         let app = launch()
-        XCTAssertTrue(app.buttons["tab.map"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.tabBars.buttons["状況マップ"].waitForExistence(timeout: 10))
         shot(app, "map")
-        app.buttons["tab.timeline"].tap(); shot(app, "timeline")
-        app.buttons["tab.settings"].tap(); shot(app, "settings")
+        app.tabBars.buttons["タイムライン"].tap(); shot(app, "timeline")
+        app.tabBars.buttons["設定"].tap(); shot(app, "settings")
     }
 
     func testComposeAndPublishShowsOnTimeline() {
         let app = launch()
-        XCTAssertTrue(app.buttons["tab.map"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.tabBars.buttons["状況マップ"].waitForExistence(timeout: 10))
         app.tap() // lets the interruption monitor answer pending permission alerts
         let open = app.buttons["compose.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10))
@@ -52,7 +52,7 @@ final class MosimoUITests: XCTestCase {
         }
         XCTAssertTrue(send.waitForExistence(timeout: 5))
         send.tap()
-        app.buttons["tab.timeline"].tap()
+        app.tabBars.buttons["タイムライン"].tap()
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 15))
         shot(app, "timeline-after-post")
     }
