@@ -15,19 +15,10 @@ struct SettingsScreen: View {
                 LocationCard()
                 Header(text: "通信（もしもプロトコル）")
                 Group_ {
-                    SwitchRow(icon: "arrow.left.arrow.right", tint: Mosimo.info, title: "オフライン中継を有効にする", subtitle: "圏外時に近くの端末と情報を交換",
-                              isOn: Binding(get: { mesh.state.running }, set: { on in
-                                  mesh.relayEnabled = on
-                                  if on { mesh.start() } else { mesh.stop() }
-                              }), enabled: state.ready || state.running, id: "settings.relay")
-                    Line()
-                    SwitchRow(icon: "clock", tint: Mosimo.info, title: "端末時計を信頼", subtitle: "公的情報の検証に必要",
-                              isOn: Binding(get: { mesh.state.clockConfidence == .trusted }, set: { mesh.setClockConfidence($0 ? .trusted : .unknown) }))
-                    Line()
                     SettingRow(icon: "checkmark.shield", tint: Mosimo.safe, title: "公式情報とみなす発信元",
                                subtitle: unique(sources.map(\.org)).joined(separator: " / ").nilIfEmpty, value: "\(sources.count)件", action: { nav.push(.trust) })
                     Line()
-                    SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "リレー・オンライン搬出・診断", action: { nav.push(.advanced) })
+                    SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "オフライン中継・端末時計・リレー・診断", action: { nav.push(.advanced) })
                 }
                 Header(text: "あなたの情報")
                 Group_ {
@@ -253,6 +244,17 @@ struct AdvancedScreen: View {
     var body: some View {
         let state = mesh.state
         SubScreen(title: "詳細設定") {
+            Header(text: "通信")
+            Group_ {
+                SwitchRow(icon: "arrow.left.arrow.right", tint: Mosimo.info, title: "オフライン中継を有効にする", subtitle: "圏外時に近くの端末と情報を交換",
+                          isOn: Binding(get: { mesh.state.running }, set: { on in
+                              mesh.relayEnabled = on
+                              if on { mesh.start() } else { mesh.stop() }
+                          }), enabled: state.ready || state.running, id: "settings.relay")
+                Line()
+                SwitchRow(icon: "clock", tint: Mosimo.info, title: "端末時計を信頼", subtitle: "公的情報の検証に必要",
+                          isOn: Binding(get: { mesh.state.clockConfidence == .trusted }, set: { mesh.setClockConfidence($0 ? .trusted : .unknown) }))
+            }
             Header(text: "オンライン搬出先リレー")
             Group_ {
                 ForEach(Array(state.relays.enumerated()), id: \.element) { i, url in

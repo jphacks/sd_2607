@@ -356,7 +356,9 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         if running { return }
         running = true
         for link in links { link.start(node: node, listener: self) }
-        note("BLE・LAN の探索と中継を開始（node \(node)）")
+        // DEBUG lab isolation persists across launches; name it, or a later interop test silently finds no peers.
+        let lab = [allowedPeerNode.map { "peer \($0) のみ" }, Self.lab("mosimo.test.links").map { "\($0) のみ" }].compactMap { $0 }
+        note("BLE・LAN の探索と中継を開始（node \(node)\(lab.isEmpty ? "" : "／ラボ隔離 " + lab.joined(separator: "・"))）")
         drainRelay()
     }
 
@@ -444,19 +446,14 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             case .unknown: return registrationBusy ? "現在状態確認中" : "現在状態不明（オフライン・未設定・未確認）"
             }
         }() + " / PDS 受入・公開未確認"
-        // One entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
-        var groups = [String: [Session]](), keys = [String]()
+        // HELLO-completed peers only, one entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
+        var links = [String: [String]](), nodes = [String]()
         for session in exchange.sessions {
-            let key = session.peerNode ?? "\(session.link.name):\(session.handle)"
-            if groups[key] == nil { keys.append(key) }
-            groups[key, default: []].append(session)
+            guard let node = session.peerNode else { continue }
+            if links[node] == nil { nodes.append(node) }
+            links[node, default: []].append(session.link.name)
         }
-        s.neighbors = keys.map { key in
-            let list = groups[key]!
-            let named = list.first { $0.peerNode != nil }
-            return Neighbor(endpoint: key, name: named?.peerNode ?? "?", status: named == nil ? "HELLO 待ち"
-                : "同期中（\(list.filter { $0.peerNode != nil }.map(\.link.name).joined(separator: "・"))）")
-        }
+        s.neighbors = nodes.map { Neighbor(endpoint: $0, name: $0, status: "同期中（\(links[$0]!.joined(separator: "・"))）") }
         if fatal { s.posts = [] } else {
             let now = Self.now()
             let accepted = disk?.relayAccepted ?? [:]
