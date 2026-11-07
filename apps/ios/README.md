@@ -24,11 +24,13 @@ The trust roots ship from `apps/android/mesh-android/src/main/assets/mosimo-publ
 ### Device test loop (DEBUG builds only)
 
 ```sh
-xcrun devicectl device process launch --console --terminate-existing --device <udid> dev.jisaku.mosimo \
+xcrun devicectl device process launch --console --terminate-existing --device <udid> dev.jisaku.mosimo -- \
   -mosimo.test.relays wss://pds.oriom.dev -mosimo.test.post "テスト"
 ```
 
 - `--console` streams `[mosimo]`/`[exchange]`/`[ble]`/`[lan]` diagnostics.
+- Lab settings (`-mosimo.test.node`/`peer.node`/`links`/`relays`) persist across launches, so a later Android interop test
+  sees no peers; the start note shows `ラボ隔離` while they apply. `-- -mosimo.test.reset 1` clears them.
 - `-mosimo.test.relays` seeds the relay list of a *fresh* install (keeps test posts off public relays).
 - `-mosimo.test.post` publishes one located post at launch.
 

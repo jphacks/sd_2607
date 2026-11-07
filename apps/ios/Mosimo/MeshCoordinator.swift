@@ -356,7 +356,9 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         if running { return }
         running = true
         for link in links { link.start(node: node, listener: self) }
-        note("BLE・LAN の探索と中継を開始（node \(node)）")
+        // DEBUG lab isolation persists across launches; name it, or a later interop test silently finds no peers.
+        let lab = [allowedPeerNode.map { "peer \($0) のみ" }, Self.lab("mosimo.test.links").map { "\($0) のみ" }].compactMap { $0 }
+        note("BLE・LAN の探索と中継を開始（node \(node)\(lab.isEmpty ? "" : "／ラボ隔離 " + lab.joined(separator: "・"))）")
         drainRelay()
     }
 
