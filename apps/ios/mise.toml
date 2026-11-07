@@ -1,0 +1,26 @@
+[tools]
+xcodegen = "2.45.4"
+
+[tasks.generate]
+description = "Generate Mosimo.xcodeproj from project.yml"
+run = "xcodegen generate"
+
+[tasks.test]
+description = "Run MosimoCore unit tests on the Mac host"
+dir = "MosimoCore"
+run = "swift test"
+
+[tasks.build]
+description = "Build the app for a connected device"
+depends = ["generate"]
+run = "xcodebuild -project Mosimo.xcodeproj -scheme Mosimo -destination 'generic/platform=iOS' -derivedDataPath build -allowProvisioningUpdates build"
+
+[tasks.install]
+description = "Install the device build on every paired physical iPhone/iPad"
+depends = ["build"]
+run = """
+xcrun devicectl list devices --json-output build/devices.json >/dev/null
+for id in $(python3 -c 'import json; print(*[d["hardwareProperties"]["udid"] for d in json.load(open("build/devices.json"))["result"]["devices"] if d["hardwareProperties"].get("reality") == "physical" and d["connectionProperties"].get("pairingState") == "paired"])'); do
+  xcrun devicectl device install app --device "$id" build/Build/Products/Debug-iphoneos/Mosimo.app
+done
+"""

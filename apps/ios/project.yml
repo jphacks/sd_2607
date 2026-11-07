@@ -1,0 +1,75 @@
+name: Mosimo
+options:
+  bundleIdPrefix: dev.jisaku
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: ja
+packages:
+  MosimoCore:
+    path: MosimoCore
+settings:
+  base:
+    DEVELOPMENT_TEAM: 9GCZ395FHV
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  Mosimo:
+    type: application
+    platform: iOS
+    sources:
+      - Mosimo
+      # Single source of truth for the shipped trust roots, shared with Android (read-only reference, not a copy).
+      - path: ../android/mesh-android/src/main/assets/mosimo-public-trust.json
+        buildPhase: resources
+    dependencies:
+      - package: MosimoCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jisaku.mosimo
+        PRODUCT_NAME: Mosimo
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: もしもの防災
+    info:
+      path: Mosimo/Info.plist
+      properties:
+        CFBundleDisplayName: もしもの防災
+        CFBundleDevelopmentRegion: ja
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIBackgroundModes: [bluetooth-central, bluetooth-peripheral]
+        NSBluetoothAlwaysUsageDescription: 圏外でも近くの端末と災害情報を交換・中継するために Bluetooth を使います。
+        NSLocationWhenInUseUsageDescription: 投稿に現在地を付け、周辺の情報を地図に表示するために使います。
+        NSLocalNetworkUsageDescription: 同じ Wi-Fi に接続した近くの端末と災害情報を交換・中継するために使います。
+        NSBonjourServices: [_mosimo._tcp]
+        # Local shelter relays may be plain ws:// (parity with Android usesCleartextTraffic).
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+  MosimoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [MosimoUITests]
+    dependencies:
+      - target: Mosimo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jisaku.mosimo.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Mosimo
+schemes:
+  Mosimo:
+    build:
+      targets:
+        Mosimo: all
+        MosimoUITests: [test]
+    test:
+      targets: [MosimoUITests]
