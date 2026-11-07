@@ -113,7 +113,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         engine.admit = { [unowned self] e in !blocked.contains(AtRepository.did(e) ?? "") }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
         engine.canEvict = { [unowned self] entry in
-            entry.event.pubkey != author?.nostrPubkey || disk?.relayAccepted[DiskState.pdsRelay]?.contains(entry.event.id) == true
+            // Kinds the PDS never accepts would otherwise be pinned forever and fill the store.
+            entry.event.pubkey != author?.nostrPubkey
+                || (!DiskState.relayWants(DiskState.pdsRelay, kind: entry.event.kind) && entry.event.kind != AtRepository.plcGenesisKind)
+                || disk?.relayAccepted[DiskState.pdsRelay]?.contains(entry.event.id) == true
         }
         gatt.onState = { [weak self] on in self?.bluetooth(on) }
         state.bluetoothAllowed = !GattLink.denied
@@ -457,7 +460,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         if fatal { s.posts = [] } else {
             let now = Self.now()
             let accepted = disk?.relayAccepted ?? [:]
-            var posts = engine.entries().reversed().filter { $0.event.kind != AtRepository.plcGenesisKind }.map { e in
+            // Other apps' kinds (DMs, profiles) are relayed but are not posts.
+            var posts = engine.entries().reversed().filter { $0.event.kind == 1 }.map { e in
                 PostView(id: e.event.id, pubkey: e.event.pubkey, content: e.event.content, hop: e.hop, relayAccepted: acceptedAnywhere(e.event.id),
                          deliveryDeadline: engine.deadline(e.event, nowMillis: now), acceptedBy: accepted.filter { $0.value.contains(e.event.id) }.map(\.key),
                          publicAuthorization: disk?.publicAudit[e.event.id], did: e.did, createdAt: e.event.createdAt, ext: Extensions.of(e.event))
@@ -645,7 +649,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private func pendingFor(_ relay: String) -> [StoredBundle] {
         guard let d = disk else { return [] }
         let done = d.relayAccepted[relay] ?? []
-        return engine.entries().filter { $0.event.kind != AtRepository.plcGenesisKind && !done.contains($0.event.id) }
+        return engine.entries().filter { $0.event.kind != AtRepository.plcGenesisKind && DiskState.relayWants(relay, kind: $0.event.kind) && !done.contains($0.event.id) }
     }
 
     /// Rotate actual attempts so a disconnecting or rejecting first event cannot starve the queue.

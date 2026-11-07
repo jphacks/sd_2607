@@ -130,6 +130,14 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Instant.parse("2026-10-17T09:00:00+09:00"), Instant(epochSecond: 1_792_195_200))
         XCTAssertNil(Instant.parse("2026-02-30T00:00:00Z"))
     }
+
+    func testPdsGetsOnlyPostsAndDeletions() {
+        XCTAssertTrue(DiskState.relayWants(DiskState.pdsRelay, kind: 1))
+        XCTAssertTrue(DiskState.relayWants(DiskState.pdsRelay, kind: 5))
+        XCTAssertFalse(DiskState.relayWants(DiskState.pdsRelay, kind: 4))
+        XCTAssertFalse(DiskState.relayWants(DiskState.pdsRelay, kind: 0))
+        XCTAssertTrue(DiskState.relayWants("wss://nos.lol", kind: 4))
+    }
 }
 
 final class StoreTests: XCTestCase {

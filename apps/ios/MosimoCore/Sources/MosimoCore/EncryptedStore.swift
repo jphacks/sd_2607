@@ -18,6 +18,8 @@ public struct DiskState: Sendable {
     public static let defaultRelays = [pdsRelay, "wss://relay.damus.io", "wss://nos.lol"]
     public static let maxRelays = 8
     public static let maxBlocked = 1024
+    /// The PDS accepts kinds 1 and 5 only; other kinds (DMs, profiles) still go to general relays.
+    public static func relayWants(_ relay: String, kind: Int) -> Bool { relay != pdsRelay || kind == 1 || kind == 5 }
 
     public var keys: SecretKeys
     public var repository = RepositoryState()
