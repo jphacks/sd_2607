@@ -326,6 +326,14 @@ extension GattLink: CBPeripheralDelegate {
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { if let p = peer(peripheral) { pump(p) } }
+
+    // A killed Android app loses its GATT service but the OS keeps our link up, and the restarted app
+    // (new address) refuses a second link from us: drop the dead one so the new advertisement can be dialed.
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard let p = peer(peripheral), invalidatedServices.contains(where: { $0.uuid == Self.service }) else { return }
+        trace("service invalidated on \(p.handle)")
+        drop(p)
+    }
 }
 
 extension GattLink: CBPeripheralManagerDelegate {
