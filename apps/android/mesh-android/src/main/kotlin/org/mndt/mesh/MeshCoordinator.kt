@@ -51,6 +51,8 @@ data class MeshState(
     val retryInSeconds: Long = 0, val pdsConfigured: Boolean = true,
     val publicBusy: Boolean = false, val publicStatus: String = "公的情報: trust config 未読込", val publicResults: List<String> = emptyList(),
     val blockedDids: List<String> = emptyList(),
+    /** Display-only filter for posts past their signed delivery deadline; on by default. */
+    val hideExpired: Boolean = true,
     /** Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh. */
     val lastReceivedAtMillis: Long? = null, val lastReceivedOnline: Boolean = false,
 )
@@ -95,6 +97,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private val links: List<Link> = listOf(GattLink(context, allowedPeerNode), LanLink(context))
     private val blocked get() = disk?.blockedDids.orEmpty()
+    private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked }) { persist(); drainRelay(); received(online = false) }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
@@ -219,6 +222,11 @@ class MeshCoordinator private constructor(private val context: Context) {
         exchange.broadcastInventory()
         if (value == ClockConfidence.TRUSTED) requestPublic(manual = false)
     }
+    /** Hides expired posts from the UI only; they stay stored and exported. Persisted. */
+    fun setHideExpired(value: Boolean) = enqueue(critical = true) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(HIDE_EXPIRED, value).apply()
+        hideExpired = value
+    }
     private fun acceptedAnywhere(id: String) = disk?.relayAccepted?.values?.any { id in it } == true
     private fun refresh() {
         val data = disk
@@ -238,12 +246,9 @@ class MeshCoordinator private constructor(private val context: Context) {
                     PlcCurrentState.TOMBSTONED -> "Directory 無効化操作あり（確認時刻 ${plcObservation.checkedAtMillis}）"
                     PlcCurrentState.UNKNOWN -> if (registrationBusy) "現在状態確認中" else "現在状態不明（オフライン・未設定・未確認）"
                 } + " / PDS 受入・公開未確認",
-            // One entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
-            neighbors = exchange.sessions.values.groupBy { it.peerNode ?: "${it.link.name}:${it.handle}" }.map { (key, list) ->
-                val named = list.firstOrNull { it.peerNode != null }
-                Neighbor(key, named?.peerNode ?: "?", if (named == null) "HELLO 待ち"
-                    else "同期中（${list.filter { it.peerNode != null }.joinToString("・") { it.link.name }}）")
-            },
+            // HELLO-completed peers only, one entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
+            neighbors = exchange.sessions.values.mapNotNull { s -> s.peerNode?.let { it to s.link.name } }
+                .groupBy({ it.first }, { it.second }).map { (node, links) -> Neighbor(node, node, "同期中（${links.joinToString("・")}）") },
             // Other apps' kinds (DMs, profiles) are relayed but are not posts.
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
@@ -251,11 +256,12 @@ class MeshCoordinator private constructor(private val context: Context) {
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
                     publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did,
                     createdAt = it.event.createdAt, ext = Extensions.of(it.event))
-            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay).filterNot { it.did in blocked }.let { posts ->
+            }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay) { engine.deadline(it, now()) }
+                .filterNot { it.did in blocked || hideExpired && it.deliveryDeadline == DeliveryDeadline.EXPIRED }.let { posts ->
                 val publicIds = publicEvents.mapTo(hashSetOf()) { it.id }
                 posts.map { post -> if (post.volatile && post.id in publicIds) post.copy(sourceRelay = DiskState.PDS_RELAY) else post }
             },
-            publicBusy = publicBusy, blockedDids = blocked
+            publicBusy = publicBusy, blockedDids = blocked, hideExpired = hideExpired
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
@@ -704,6 +710,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     companion object {
         private const val PREFS = "mesh-coordinator"
         private const val CLOCK_TRUSTED = "clockTrusted"
+        private const val HIDE_EXPIRED = "hideExpired"
         @Volatile private var instance: MeshCoordinator? = null
         fun get(context: Context): MeshCoordinator = instance ?: synchronized(this) {
             instance ?: MeshCoordinator(context.applicationContext).also { instance = it }

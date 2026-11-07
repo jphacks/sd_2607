@@ -1,8 +1,6 @@
 package org.mndt.app.ui.settings
 
 import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +31,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.EntryProviderScope
@@ -49,12 +46,8 @@ import org.mndt.app.ui.SettingsKey
 import org.mndt.app.ui.Tab
 import org.mndt.app.ui.openAppSettings
 import org.mndt.app.ui.post.shortDid
-import org.mndt.app.ui.startRelay
 import org.mndt.app.ui.theme.Mosimo
-import org.mndt.core.ClockConfidence
 import org.mndt.mesh.MeshCoordinator
-import org.mndt.mesh.MeshPermissions
-import org.mndt.mesh.MeshService
 import kotlin.math.roundToInt
 
 @Serializable private data object TrustKey : NavKey
@@ -78,30 +71,15 @@ private fun SettingsScreen(nav: Navigator) {
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
     val sources = remember { trustSources(context) }
-    val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { startRelay(context) }
-    val radios = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if (!MeshPermissions.granted(context)) mesh.reportError("近くのデバイスへの権限が必要です")
-        else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            notify.launch(Manifest.permission.POST_NOTIFICATIONS)
-        else startRelay(context)
-    }
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)
         Header("通信（もしもプロトコル）")
         Group {
-            SwitchRow(Icons.Outlined.SyncAlt, Mosimo.info, "オフライン中継を有効にする", "圏外時に近くの端末と情報を交換", state.running, state.ready || state.running) {
-                if (!it) MeshService.stop(context) else radios.launch(MeshPermissions.required())
-            }
-            Line()
-            SwitchRow(Icons.Outlined.Schedule, Mosimo.info, "端末時計を信頼", "公的情報の検証に必要", state.clockConfidence == ClockConfidence.TRUSTED) {
-                mesh.setClockConfidence(if (it) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN)
-            }
-            Line()
             SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元", sources.map { it.org }.distinct().joinToString(" / ").ifEmpty { null },
                 "${sources.size}件") { nav.push(TrustKey) }
             Line()
-            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "リレー・オンライン搬出・診断") { nav.push(AdvancedKey) }
+            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "オフライン中継・端末時計・リレー・診断") { nav.push(AdvancedKey) }
         }
         Header("あなたの情報")
         Group {

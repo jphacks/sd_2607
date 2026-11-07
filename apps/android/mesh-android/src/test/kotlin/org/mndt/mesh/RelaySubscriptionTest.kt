@@ -6,6 +6,8 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 import org.mndt.core.Author
+import org.mndt.core.ClockConfidence
+import org.mndt.core.DeliveryDeadline
 import org.mndt.core.MeshEngine
 import org.mndt.core.NostrEvent
 import org.mndt.core.SecretKeys
@@ -102,6 +104,10 @@ class RelaySubscriptionTest {
         assertEquals("ws://relay", online.sourceRelay)
         assertNull(online.hop)
         assertFalse(online.relayAccepted)
+        // Hide-expired filter input: online events get the same signed-deadline verdict; tagless ones stay UNKNOWN.
+        val clock = MeshEngine(ClockConfidence.TRUSTED)
+        assertEquals(DeliveryDeadline.EXPIRED, mergePostViews(emptyList(), session.events(), "ws://relay") { clock.deadline(it, Long.MAX_VALUE) }.single().deliveryDeadline)
+        assertEquals(DeliveryDeadline.UNKNOWN, clock.deadline(a.copy(tags = emptyList()), Long.MAX_VALUE))
     }
 
     @Test fun sizeLimitsIncludeUtf8AndEscapedEventCanExceedNearbyCap() {

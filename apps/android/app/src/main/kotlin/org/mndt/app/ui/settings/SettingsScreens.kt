@@ -1,7 +1,12 @@
 package org.mndt.app.ui.settings
 
+import android.Manifest
 import android.content.ClipData
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -15,6 +20,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.mndt.app.ui.Navigator
 import kotlinx.coroutines.launch
@@ -22,8 +28,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.koin.compose.koinInject
 import org.mndt.app.ui.post.bsafLabel
+import org.mndt.app.ui.startRelay
 import org.mndt.app.ui.theme.Mosimo
+import org.mndt.core.ClockConfidence
 import org.mndt.mesh.MeshCoordinator
+import org.mndt.mesh.MeshPermissions
+import org.mndt.mesh.MeshService
 
 /** One trusted Bot DID under an enabled root, with the BSAF types selected for it. */
 internal class TrustSource(val org: String, val botDid: String, val types: List<String>)
@@ -61,9 +71,27 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
 
 @Composable
 internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
+    val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
     var relay by rememberSaveable { mutableStateOf("") }
+    val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { startRelay(context) }
+    val radios = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (!MeshPermissions.granted(context)) mesh.reportError("近くのデバイスへの権限が必要です")
+        else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else startRelay(context)
+    }
+    Header("通信")
+    Group {
+        SwitchRow(Icons.Outlined.SyncAlt, Mosimo.info, "オフライン中継を有効にする", "圏外時に近くの端末と情報を交換", state.running, state.ready || state.running) {
+            if (!it) MeshService.stop(context) else radios.launch(MeshPermissions.required())
+        }
+        Line()
+        SwitchRow(Icons.Outlined.Schedule, Mosimo.info, "端末時計を信頼", "公的情報の検証に必要", state.clockConfidence == ClockConfidence.TRUSTED) {
+            mesh.setClockConfidence(if (it) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN)
+        }
+    }
     Header("オンライン搬出先リレー")
     Group {
         state.relays.forEachIndexed { i, url ->
@@ -87,6 +115,11 @@ internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
             state.retryInSeconds > 0 -> "接続失敗・${state.retryInSeconds}秒後に再試行"
             else -> "接続待ち"
         }, state.onlineEnabled, state.ready) { mesh.setOnlineEnabled(it) }
+    }
+    Header("表示")
+    Group {
+        SwitchRow(Icons.Outlined.VisibilityOff, Mosimo.info, "失効した Nostr イベントを非表示", "配信期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
+            state.hideExpired) { mesh.setHideExpired(it) }
     }
     Header("近隣端末 ${state.neighbors.size}")
     Group {

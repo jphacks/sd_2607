@@ -1,6 +1,7 @@
 package org.mndt.mesh
 
 import org.mndt.core.AtRepository
+import org.mndt.core.DeliveryDeadline
 import org.mndt.core.NostrEvent
 
 internal sealed interface RelayReply {
@@ -115,10 +116,11 @@ internal fun didOf(event: NostrEvent): String? = synchronized(dids) {
     if (event.id in dids) dids[event.id] else AtRepository.did(event).also { dids[event.id] = it }
 }
 
-internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String): List<PostView> {
+internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String,
+    deadline: (NostrEvent) -> DeliveryDeadline = { DeliveryDeadline.UNKNOWN }): List<PostView> {
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
-        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, did = didOf(it),
+        PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, deliveryDeadline = deadline(it), did = didOf(it),
             createdAt = it.createdAt, ext = Extensions.of(it))
     }
 }
