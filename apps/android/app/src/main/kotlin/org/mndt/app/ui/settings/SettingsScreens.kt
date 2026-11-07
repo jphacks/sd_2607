@@ -88,6 +88,11 @@ internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
             else -> "接続待ち"
         }, state.onlineEnabled, state.ready) { mesh.setOnlineEnabled(it) }
     }
+    Header("表示")
+    Group {
+        SwitchRow(Icons.Outlined.VisibilityOff, Mosimo.info, "失効した Nostr イベントを非表示", "配信期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
+            state.hideExpired) { mesh.setHideExpired(it) }
+    }
     Header("近隣端末 ${state.neighbors.size}")
     Group {
         state.neighbors.forEachIndexed { i, peer ->

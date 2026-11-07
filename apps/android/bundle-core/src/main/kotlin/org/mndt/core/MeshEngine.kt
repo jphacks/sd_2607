@@ -87,9 +87,12 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
 
     fun remove(predicate: (StoredBundle) -> Boolean): Boolean = stored.values.removeIf(predicate)
 
-    fun deadline(event: NostrEvent, nowMillis: Long): DeliveryDeadline =
-        if (clockConfidence != ClockConfidence.TRUSTED) DeliveryDeadline.UNKNOWN
-        else if (expiry(event).toEpochMilli() > nowMillis) DeliveryDeadline.WITHIN_DEADLINE else DeliveryDeadline.EXPIRED
+    /** UNKNOWN without a trusted clock or a signed deadline (online-only events may lack one). */
+    fun deadline(event: NostrEvent, nowMillis: Long): DeliveryDeadline {
+        val expiry = AtRepository.deliveryExpiresAt(event)
+        return if (clockConfidence != ClockConfidence.TRUSTED || expiry == null) DeliveryDeadline.UNKNOWN
+        else if (expiry.toEpochMilli() > nowMillis) DeliveryDeadline.WITHIN_DEADLINE else DeliveryDeadline.EXPIRED
+    }
 
     /** Snapshot accumulated monotonic age without modifying the stored original or signed event. */
     fun checkpoint(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): StoredBundle {
