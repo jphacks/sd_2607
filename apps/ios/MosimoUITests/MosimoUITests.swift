@@ -31,6 +31,18 @@ final class MosimoUITests: XCTestCase {
         app.tabBars.buttons["設定"].tap(); shot(app, "settings")
     }
 
+    func testRelayAndClockLiveInAdvanced() {
+        let app = launch()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["設定"].tap(); shot(app, "settings")
+        XCTAssertFalse(app.switches["settings.relay"].exists)
+        XCTAssertFalse(app.switches["端末時計を信頼"].exists)
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "詳細設定")).firstMatch.tap()
+        XCTAssertTrue(app.switches["settings.relay"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["端末時計を信頼"].exists)
+        shot(app, "advanced")
+    }
+
     func testComposeAndPublishShowsOnTimeline() {
         let app = launch()
         XCTAssertTrue(app.tabBars.buttons["状況マップ"].waitForExistence(timeout: 10))
