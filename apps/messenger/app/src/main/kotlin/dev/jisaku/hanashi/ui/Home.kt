@@ -90,8 +90,9 @@ private fun Onboarding(onDone: (String) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding().padding(32.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Hanashi", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Hanashi.green)
-        Spacer(Modifier.height(8.dp))
+        Text("もしもトーク", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Hanashi.green)
+        Text("Mosimo Talk · Mosimo プロトコル デモアプリ", fontSize = 13.sp, color = Hanashi.muted)
+        Spacer(Modifier.height(16.dp))
         Text("電波がなくても、近くの端末を経由して届くメッセージアプリ", textAlign = TextAlign.Center, color = Hanashi.muted)
         Spacer(Modifier.height(40.dp))
         OutlinedTextField(name, { name = it.take(40) }, label = { Text("表示名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -184,7 +185,7 @@ private fun ChatList(chats: Chats, open: (String) -> Unit) {
 @Composable
 private fun Nearby(chats: Chats, open: (String) -> Unit) {
     val people = chats.contacts.values.sortedByDescending { it.seenAt }
-    if (people.isEmpty()) return Empty("近くで Hanashi を使っている人が見つかると、ここに表示されます")
+    if (people.isEmpty()) return Empty("近くでもしもトークを使っている人が見つかると、ここに表示されます")
     LazyColumn {
         items(people, key = { it.pubkey }) { c ->
             Row(Modifier.fillMaxWidth().clickable { open(c.pubkey) }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
