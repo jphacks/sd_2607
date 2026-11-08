@@ -12,11 +12,22 @@ android {
         applicationId = "dev.jisaku.hanashi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // CI passes the Actions run number; local builds fall back to the manual value.
+        versionCode = providers.gradleProperty("hanashiVersionCode").orNull?.toInt() ?: 1
         versionName = "0.1.0"
         // Debug knob: -PhanashiSuffix=b installs a second identity beside the first (they meet over LAN on one phone).
         providers.gradleProperty("hanashiSuffix").orNull?.let { applicationIdSuffix = ".$it" }
     }
+    // Same upload key as Mosimo (apps/android/secrets/release.sops.yaml).
+    signingConfigs {
+        create("release") {
+            storeFile = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull?.let { file(it) }
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+        }
+    }
+    buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("release") } }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

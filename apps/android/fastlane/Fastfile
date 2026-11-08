@@ -1,7 +1,9 @@
 default_platform(:android)
 
+# dir is the Gradle root; Hanashi has its own and reuses this one's mesh modules in place.
 ANDROID_APPS = {
-  "mosimo" => { module: "app", package: "dev.jisaku.mosimo" }
+  "mosimo" => { dir: ".", module: "app", package: "dev.jisaku.mosimo" },
+  "hanashi" => { dir: "../messenger", module: "app", package: "dev.jisaku.hanashi", tests: [":mosimo-dm:test"] }
 }.freeze
 
 def android_app!(options)
@@ -11,14 +13,16 @@ end
 platform :android do
   desc "Run unit tests, lint, and build a debug APK for the selected app"
   lane :ci do |options|
-    m = android_app!(options)[:module]
-    gradle(tasks: [":dtn7-bpv7:test", ":bundle-core:test", ":mesh-android:testDebugUnitTest",
-                   ":#{m}:testDebugUnitTest", ":#{m}:lintDebug", ":#{m}:assembleDebug"])
+    app = android_app!(options)
+    m = app[:module]
+    gradle(project_dir: app[:dir], tasks: [":dtn7-bpv7:test", ":bundle-core:test", ":mesh-android:testDebugUnitTest", *app[:tests],
+                                           ":#{m}:testDebugUnitTest", ":#{m}:lintDebug", ":#{m}:assembleDebug"])
   end
 
   desc "Build a signed release AAB using the Gradle version"
   lane :build do |options|
-    gradle(task: ":#{android_app!(options)[:module]}:bundleRelease")
+    app = android_app!(options)
+    gradle(project_dir: app[:dir], task: ":#{app[:module]}:bundleRelease")
   end
 
   desc "Test, build, and publish the AAB and screenshots to the Google Play alpha track"
@@ -28,6 +32,8 @@ platform :android do
     ci(options)
     build(options)
     # ci leaves the debug APK in lane_context; upload only the AAB.
+    # ponytail: metadata defaults to ./fastlane/metadata/android, which only Mosimo's CI screengrab creates; a local hanashi
+    # deploy after a screengrab would upload Mosimo's screenshots. Pass a per-app metadata_path once Hanashi has a listing.
     upload_to_play_store(package_name: app[:package], track: "alpha", skip_upload_apk: true)
   end
 end

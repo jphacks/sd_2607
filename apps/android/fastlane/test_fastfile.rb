@@ -62,13 +62,10 @@ class FastfileTest < Minitest::Test
     assert_equal [:gradle], @runner.calls.map(&:first)
   end
 
-  def test_second_app_uses_its_own_module_and_package
-    @runner.define_singleton_method(:android_app!) do |_options|
-      { module: "messenger", package: "test.messenger" }
-    end
-    @runner.internal(app: "messenger")
-    assert_includes @runner.calls[0].last.fetch(:tasks), ":messenger:assembleDebug"
-    assert_equal ":messenger:bundleRelease", @runner.calls[1].last.fetch(:task)
-    assert_equal "test.messenger", @runner.calls[2].last.fetch(:package_name)
+  def test_hanashi_builds_in_its_own_gradle_root_and_uploads_its_package
+    @runner.internal(app: "hanashi")
+    assert_equal ["../messenger"] * 2, @runner.calls[0, 2].map { |c| c.last.fetch(:project_dir) }
+    assert_includes @runner.calls[0].last.fetch(:tasks), ":mosimo-dm:test"
+    assert_equal "dev.jisaku.hanashi", @runner.calls[2].last.fetch(:package_name)
   end
 end

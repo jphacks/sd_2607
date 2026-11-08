@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'apps/android/**'
+      - 'apps/messenger/**'
       - 'third_party/sd_2607-dtn7-kotlin/bpv7/**'
       - '.github/workflows/android.yml'
   push:
     branches: [main]
     paths:
       - 'apps/android/**'
+      - 'apps/messenger/**'
       - 'third_party/sd_2607-dtn7-kotlin/bpv7/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
@@ -17,7 +19,7 @@ on:
       app:
         description: Application to distribute
         type: choice
-        options: [mosimo]
+        options: [mosimo, hanashi]
         default: mosimo
         required: true
 
@@ -43,6 +45,9 @@ jobs:
   ci:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        app: [mosimo, hanashi]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
@@ -50,15 +55,19 @@ jobs:
           working_directory: apps/android
       - uses: gradle/actions/setup-gradle@v5
       - run: mise run fastlane-test
-      - run: mise run ci
+      # mise appends the arg to the task's `app:mosimo`; fastlane keeps the last value.
+      - run: mise run ci app:${{ matrix.app }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mosimo-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ matrix.app }}-ci-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/messenger/app/build/outputs/apk/debug/app-debug.apk
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
+            apps/messenger/**/build/reports/
+            apps/messenger/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
 
@@ -70,6 +79,7 @@ jobs:
       - uses: actions/checkout@v7
       # The emulator wants 1.2x its 6 GB userdata free after the APK build; drop toolchains this job never uses.
       - name: Free disk space
+        if: inputs.app == 'mosimo'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY/CodeQL"
           df -h /
@@ -84,16 +94,19 @@ jobs:
       - run: mise run fastlane-test
       # Build before booting the emulator: a concurrent Gradle build starves it and the launcher ANRs.
       - name: Build screenshot APKs
+        if: inputs.app == 'mosimo'
         run: |
           mise run sdk-setup
           mise exec -- ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PmosimoPlcRegistration=false
       - name: Enable KVM
+        if: inputs.app == 'mosimo'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       # pixel_2 (1080x1920) satisfies Play's 2:1 aspect limit; registration off keeps the emulator out of the production PLC.
       - name: Capture Play Store screenshots
+        if: inputs.app == 'mosimo'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -111,6 +124,8 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           # ponytail: versionCode = run number; resets if this workflow file is renamed, then add an offset.
           ORG_GRADLE_PROJECT_mosimoVersionCode: ${{ github.run_number }}
+          ORG_GRADLE_PROJECT_hanashiVersionCode: ${{ github.run_number }}
+          APP: ${{ inputs.app }}
         run: |
           set -euo pipefail
           umask 077
@@ -118,7 +133,7 @@ jobs:
           trap 'rm -f "$SOPS_AGE_KEY_FILE" "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$SOPS_AGE_KEY" > "$SOPS_AGE_KEY_FILE"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          mise run deploy
+          mise run deploy "app:$APP"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -129,5 +144,8 @@ jobs:
             apps/android/fastlane/metadata/android/
             apps/android/**/build/reports/
             apps/android/**/build/test-results/
+            apps/messenger/**/build/outputs/bundle/release/*.aab
+            apps/messenger/**/build/reports/
+            apps/messenger/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
