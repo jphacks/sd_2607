@@ -1,8 +1,8 @@
 <resources>
-    <string name="app_name">Hanashi</string>
-    <!-- Overrides mesh-android's foreground-service text. -->
-    <string name="mesh_channel">オフライン通信</string>
-    <string name="mesh_notification_title">Hanashi はオフラインでも届けます</string>
-    <string name="mesh_notification_body">近くの端末と Mosimo でメッセージを中継しています</string>
-    <string name="mesh_stop">停止</string>
+    <string name="app_name">Mosimo Talk</string>
+    <!-- Overrides mesh-android's foreground-service text (Japanese-only UI, so not per-locale). -->
+    <string name="mesh_channel" translatable="false">オフライン通信</string>
+    <string name="mesh_notification_title" translatable="false">もしもトークはオフラインでも届けます</string>
+    <string name="mesh_notification_body" translatable="false">近くの端末と Mosimo でメッセージを中継しています</string>
+    <string name="mesh_stop" translatable="false">停止</string>
 </resources>

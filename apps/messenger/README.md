@@ -1,4 +1,4 @@
-# Hanashi — Mosimo DM demo (Android)
+# もしもトーク / Mosimo Talk (code name Hanashi) — Mosimo DM demo (Android)
 
 An everyday-style messenger that always talks [Mosimo](../../protocol/README.md): DMs travel phone to phone over the
 BLE/LAN mesh, relayed by any Mosimo node (including the `apps/android` app). No server, no login, no internet.
