@@ -1,10 +1,12 @@
 # 災害時情報共有プロトコル仕様群
 
-更新日: 2026-10-19
+更新日: 2026-11-08
 
 **状態: 設計草案。** 日本語の RFC 風文書として、基本モデル、拡張、データ表現、配送、外部情報との互換性を分けて記述します。公式名前空間は `mosimo.oriom.dev` を基点として割り当て済みです。基本プロトコル・拡張型・メッシュ符号化の独立した版管理も採用済みです。正式な表示名称は「もしもプロトコル」です。版の具体表記・一部の具体型は未確定であり、相互運用可能な wire 仕様の完成を宣言するものではありません。
 
-**今すぐ実装するBSAF経路:** [0020: experimental wire-v1](0020-wire-v1.md) がroot→leaf発行、DID+atproto keyと相互Nostr binding、import-only scope、root-signed短期CRL snapshot、receiverのfail-closed ingress、priority拡張と標準REQを変えないopt-in順序取得を定義します。この範囲のwire契約は確定ですが、正式Lexicon公開や相互運用試験完了の宣言ではありません。
+**BSAF importer 経路:** [0029: Importer プロファイル](0029-importer-profile.md) が、鍵署名の `import` 役割と `importScope`・`organization` ブロック、受信者の自動投入の認可を定義します。転載する情報の形式は [0019](0019-bsaf.md) に従います。旧 [0020: experimental wire-v1](0020-wire-v1.md) は superseded であり、履歴として残します。
+
+**発信者証明拡張群（draft）:** [0022: 鍵署名](0022-key-attestation.md) を基盤に、[0023](0023-attestation-chain-extension.md) が投稿への同梱、[0024](0024-revocation-notice.md) が失効通知、[0025](0025-revocation-list-endpoint.md) が認証局の失効リスト配信、[0026](0026-revocation-request.md) が失効要求、[0027](0027-signing-request.md) が署名要求と自動発行、[0028](0028-external-account-attestation.md) が外部アカウント証明、[0029](0029-importer-profile.md) が importer を、[0030](0030-revocation-subkey.md) が主鍵を失ったときの失効用サブ鍵を、それぞれ前提文書の拡張として定義します。ルート鍵は複数あってよくオフラインに置き、定期的な鮮度通知を要求せず、失効は事象として配送します。
 
 ## 1. 最初に読む文書
 
@@ -21,9 +23,17 @@
 | [0017: 気象庁緊急地震速報](0017-jma-eew.md) | 予測・警報の拡張 | 警報・予報、震源精度、地域別予測、PLUM法、続報・取消、遅着時の動作 |
 | [0018: 気象庁地震観測情報](0018-jma-earthquake.md) | 観測情報の拡張 | 震度速報・震源・震源震度・長周期地震動の型と変換 |
 | [0019: BSAF v1互換拡張](0019-bsaf.md) | BSAFとの相互運用 | タグ・言語・原投稿参照、AppView収集、取り込みと別途BSAF公開の境界 |
-| [0020: Experimental wire-v1](0020-wire-v1.md) | BSAF importer実装契約 | 証明/binding/署名preimage、bounded delegation、CRL snapshot、Android/ESP32認可、priority |
+| [0020: Experimental wire-v1](0020-wire-v1.md) | superseded。旧 BSAF importer 契約 | 0022〜0029・0011 §10・0007 §6 への対応表。canonical CBOR と binding 形式の原典 |
 | [0021: 気象庁気象防災情報](0021-jma-weather.md) | 気象XML拡張の具体的ドラフト | 警報・注意報、土砂・竜巻・記録雨・洪水・台風・線状降水帯・大雪・一般情報の部分集合、地域別状態・時刻・限界 |
-| [0022: 個別通信（DM）プロファイル](0022-direct-messages.md) | 提案・未採用。他アプリ間の相互運用デモ用 | NIP-04 kind 4 の DM・配達通知・kind 0 表示名、メッシュ上の扱い、未決定事項 |
+| [0022: 鍵署名](0022-key-attestation.md) | 発信者証明拡張群の基盤 | 鍵が鍵を署名する形式、所有者・スコープ・追加ブロック、stratum、オフラインのチェーン検証 |
+| [0023: 署名チェーン拡張ブロック](0023-attestation-chain-extension.md) | 投稿への同梱 | `attest#chain` の構造、末端鍵と Nostr 鍵の対応、検証と表示の状態 |
+| [0024: 失効通知](0024-revocation-notice.md) | 失効の事実 | 即時形・事前発行形、ルート鍵の自己失効、制御イベントとしての運び方 |
+| [0025: 失効リスト配信](0025-revocation-list-endpoint.md) | 認証局のエンドポイント | 失効リストの公開・購読・再掲、オンライン時の確認と拡散停止 |
+| [0026: 失効要求](0026-revocation-request.md) | 通報と自己失効 | 要求形式、対象鍵署名による即時失効、通報の判断 |
+| [0027: 署名要求と自動発行](0027-signing-request.md) | 認証局の発行経路 | 署名要求、鍵所持の証明、NIP-05 ドメイン検証プロファイル、手動審査 |
+| [0028: 外部アカウント証明](0028-external-account-attestation.md) | 個人向けプロファイル | NIP-39 の外部アカウント検証に基づく鍵署名 |
+| [0029: Importer プロファイル](0029-importer-profile.md) | 転載サーバーの認証と自動投入 | `import` 役割、`importScope`・`organization`、受信者の認可、重複抑止、表示 |
+| [0030: 失効用サブ鍵](0030-revocation-subkey.md) | 主鍵を失ったときの失効 | 副鍵の公開鍵を鍵署名に載せ、副鍵の署名で事前発行形を活性化 |
 
 ```mermaid
 flowchart TD
@@ -34,6 +44,14 @@ flowchart TD
   F[0013 CAP・EDXL・気象庁XML] --> A
   G[0013 既存BSAF投稿] --> H[対応AppViewで別入力として統合]
   E --> H
+  I[0022 鍵署名] --> J[0023 署名チェーン拡張]
+  B --> J
+  I --> K[0024 失効通知] --> L[0025 失効リスト配信] --> M[0026 失効要求]
+  K --> R[0030 失効用サブ鍵]
+  I --> N[0027 署名要求] -.-> O[0028 外部アカウント証明]
+  I --> O
+  J --> P[0029 Importer プロファイル]
+  Q[0019 BSAF v1] --> P
 ```
 
 ### 実装の担当別の入口
@@ -42,8 +60,10 @@ flowchart TD
 - **本文表示・中継のみのアプリ**: 0010 とメッシュ配送。未知の著者拡張は書き換えず保持し、DID 認証のための情報取得を本文表示の前提にしません。
 - **PDS・オンラインリレー**: 0012 → 0006・0007。
 - **公的情報の取り込み**: 0013 → 0011・0012、CAPの個別仕様草案は0015、EDXL-DEは0016、気象庁の緊急地震速報は0017、地震観測情報は0018、気象防災情報の構造化ドラフトは0021、信頼の方針は 0002。
-- **BSAF server importer・Android/ESP32 ingress・認可対応relay**: 0020 → 0009・0012・0019。0020のexact wire契約を使用します。
+- **BSAF server importer・Android/ESP32 ingress・認可対応relay**: 0029 → 0023・0022・0019・0024。priority 順取得は 0007 §6。
 - **BSAF 対応 AppView・変換機能**: 0019 → 0013 §6.4。既存投稿の収集と、任意の取り込み・BSAF向け別途公開を区別します。
+- **発信者証明の検証（クライアント・PDS・リレー）**: 0022 → 0023 → 0024。オンライン時の確認は 0025 §5。
+- **認証局**: 0022 → 0024 → 0025 → 0026。自動発行を提供する場合は 0027、個人向けは 0028、importer への発行は 0029 §2、鍵喪失への備えは 0030。
 
 ## 2. 専門文書と既存の設計記録
 
@@ -71,7 +91,7 @@ flowchart TD
 - **未決定**: 決定に必要な事項。仕様全体の整理を先に進め、互換性・責務・安全性を左右する判断が必要な場合に確認します。
 - **延期**: 初期仕様の対象外。個別通信・限定公開・メディア本体・欠落履歴の探索・全面的な逆変換・端末状態の巻き戻りへの対応。
 
-各文書の TypeScript 風の型は説明用であり、そのまま正式 Lexicon や登録済みの wire schema ではありません。基本投稿の実装済み Lexicon JSON は [`lexicons/dev/oriom/mosimo/post.json`](../lexicons/dev/oriom/mosimo/post.json)、利用方法と実装範囲は [`lexicons/README.md`](../lexicons/README.md) に置きます。個別拡張は未確定の型案を実装済みとは扱いません。明示的な合意と型案が食い違う場合は合意を優先します。0020ではBSAF importerに限り、実装用のexact field・符号化・署名対象・検証アルゴリズム・適合チェックを確定しました。同書の型はその範囲のwire契約として扱います。テストベクトルの作成・実行や正式Lexicon公開の完了は宣言しません。署名等に関する既存要件は維持します。
+各文書の TypeScript 風の型は説明用であり、そのまま正式 Lexicon や登録済みの wire schema ではありません。基本投稿の実装済み Lexicon JSON は [`lexicons/dev/oriom/mosimo/post.json`](../lexicons/dev/oriom/mosimo/post.json)、利用方法と実装範囲は [`lexicons/README.md`](../lexicons/README.md) に置きます。個別拡張は未確定の型案を実装済みとは扱いません。明示的な合意と型案が食い違う場合は合意を優先します。0020 は superseded であり、その型を新規実装の契約として扱いません。テストベクトルの作成・実行や正式Lexicon公開の完了は宣言しません。署名等に関する既存要件は維持します。
 
 旧 MNDT draft-00 は現在の責務分離に合わせて改訂しました。旧案のタグ・EID・ブロック番号・数値を採用済みとして実装しないでください。
 
@@ -81,7 +101,7 @@ flowchart TD
 
 独自 Lexicon の投稿が既存 Bluesky クライアントへ自動表示されることや、既存 BSAF 投稿をそのまま本プロトコルのメッシュへ投入できることは保証しません。独立拡張 `bsafV1` の型・タグ・言語・原投稿参照と、任意の取り込み・BSAF向け別途公開の経路案は [0019](0019-bsaf.md) に定義します。自動再配信は、各取り込み側の運用者・利用者が明示的に選んだBotと情報種別の組だけを対象とします。中央登録制ではなく、設定なしでは自動投入しません。収集・閲覧やBot定義の更新だけで再配信を有効にしません。BSAF向け自動公開と更新削除の連携等は未決定です。
 
-追加ソース `@bsaf-kikikuru-bot.bsky.social` の固定23種は [0019 §5.2.3](0019-bsaf.md#523-kikikuru-botの追加ソース固定した選択肢) に列挙します。既存JMA Botの5種の選択を維持し、Kikikuru Botは別途明示選択します。0020は各Botのtype上限のみ32へ拡大し、全体64組・署名・認可方式は維持します。これは文書契約の変更であり、現行実装・設定・証明書の更新を実施したという意味ではありません。原BSAFは `bsafV1`、実際に取得保存した気象XMLの構造化部分集合は0021の `jmaWeather` とし、両者を同一視しません。
+追加ソース `@bsaf-kikikuru-bot.bsky.social` の固定23種は [0019 §5.2.3](0019-bsaf.md#523-kikikuru-botの追加ソース固定した選択肢) に列挙します。既存JMA Botの5種の選択を維持し、Kikikuru Botは別途明示選択します。`importScope` の推奨上限は 0029 §5 に従います。原BSAFは `bsafV1`、実際に取得保存した気象XMLの構造化部分集合は0021の `jmaWeather` とし、両者を同一視しません。
 
 ## 5. 更新方針
 

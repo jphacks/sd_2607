@@ -1,6 +1,6 @@
 # 0007: 物理 PDS の Nostr リレープロファイル
 
-状態: draft-00（役割・受け入れ方針・本文 kind・NIP-11 拡張は合意済み。制御イベントの kind・タグ・制限・具体スキーマは未定）
+状態: draft-01（役割・受け入れ方針・本文 kind・NIP-11 拡張は合意済み。制御イベントの kind・タグ・制限・具体スキーマは未定）
 
 ## 1. 目的と構成
 
@@ -28,7 +28,7 @@ NIP-01 の標準イベントと WebSocket の投稿・取得・購読を提供�
 
 初期仕様の変換方向は Nostr から atproto への復元・公開とする。端末署名済み commit と必要なレコード等を配送し、PDS は著者の commit を再署名しない。atproto から Nostr への逆変換を目的に atproto レコードへ Nostr 署名を格納する要件は設けない。保持済みの元 Nostr イベントをそのまま再配信することは可能である。Nostr の署名対象外トップレベル拡張の案は未採用である。
 
-削除要求は NIP-09 の `kind: 5` を用いる。PLC 初期操作・一般の独立鍵対応宣言等の制御イベントのkind・参照・配送形式は今後決定する。BSAF importerの0020経路では、鍵対応宣言をidentity拡張へ埋め込み、独立制御イベントの取得を前提にしない。
+削除要求は NIP-09 の `kind: 5` を用いる。鍵の失効通知は [0024 §5](0024-revocation-notice.md#5-制御イベントとしての運び方) の制御イベント（提案 kind `9024`）とし、リレーは通常イベントとして保存・配信する。PLC 初期操作・一般の独立鍵対応宣言等の制御イベントのkind・参照・配送形式は今後決定する。BSAF importerの0020経路では、鍵対応宣言をidentity拡張へ埋め込み、独立制御イベントの取得を前提にしない。
 
 通常投稿と訂正・補足・追認は、1件につき発信者自身の1レコード追加・1 commit・1 Nostr 投稿イベントを基本単位とする。Label の発行・配信は別の仕組みであり、詳細は [投稿と注釈・Label](0008-posts-and-labels.md) を参照する。
 
@@ -88,11 +88,33 @@ Nostr 等で発見した未知の候補は信頼済み一覧と区別し、接�
 
 一覧発行者への信頼は接続先候補の選定に関するもので、投稿内容、公的情報の取り込みサーバー、論理 PDS の参加権限への信頼を付与しない。候補一覧の署名・発行者認証・版管理・更新・失効と、AppView 上のレコード形式は今後定義する。
 
-## 6. Experimental wire-v1 のBSAF取得とpriority
+## 6. priority 順の opt-in 取得
 
-[0020](0020-wire-v1.md) はroot認可されたBSAF importerのkind1投稿、receiverの独立検証とfail-closed ingress、任意のpriority-order取得を定義する。通常の `REQ` はNIP-01の保存イベント順（created_at降順、同時刻id辞書順昇順）を維持し、priority順に変更しない。
+著者の配送優先度ヒント `priority`（[0011 §10](0011-extensions.md#10-配送優先度ヒント-priority)）に基づく取得順を、標準 NIP-01 を変えずに任意機能として提供できる。
 
-明示opt-inの `MOSIMO-REQ` は有限snapshot取得であり、`effectivePriority`降順→created_at降順→id昇順でsort後にlimitを適用する。対応はNIP-11の `mosimo: {wire:1, priority_order:["priority-v1"]}` に示す。正確なmessage/schema・fallbackは0020 §8、capabilityの自己申告と認可の分離も同書に従う。root/binding/CRLを全一般投稿の受理条件にするものではない。
+### 6.1 標準 REQ を変更しない
+
+通常の `REQ` は NIP-01 のフィルタ・limit・保存イベントの順序（`created_at` 降順、同時刻は id 辞書順昇順）を維持し、priority 順へ変更しない。未知の filter field を入れただけで opt-in したと扱わない。
+
+対応リレーは NIP-11 に次の任意情報を示す。自己申告は信頼の起点や認可を与えない。
+
+```json
+{"mosimo":{"priority_order":["priority-v1"]}}
+```
+
+### 6.2 MOSIMO-REQ
+
+priority 順の取得は独自の message verb を明示的に選ぶ。標準 NIP の番号を自称しない。
+
+```json
+["MOSIMO-REQ", "bsaf-priority", {"order":"priority-v1","filter":{"kinds":[1],"#t":["mosimo.oriom.dev"],"limit":100}}]
+```
+
+- request object の必須 field は `order`・`filter`。subscription ID は 1..64 の ASCII printable bytes で、同じ接続の既存 ID と衝突させない。`filter` は一つの NIP-01 filter で、`kinds` は `[1]`、`#t` に `mosimo.oriom.dev` を含み、`limit` は整数 1..100 を必須とする。他の標準条件は AND、値リスト内は OR とする。
+- これは保存済みイベントの有限な snapshot 取得であり、live 購読ではない。受理時点の候補・リレーの認可状態・時刻を固定し、filter に一致する集合を effectivePriority 降順、`created_at` 降順、id 辞書順昇順で sort した後に limit を適用する。
+- 応答は同じ ID の標準 `EVENT` を使い、完了時に `EOSE` を送って解放する。`CLOSE` で中止できる。不正・超過・資源上限で処理できない場合は黙って別順にせず `CLOSED` と理由を返す。
+- リレーは自身のルート鍵・失効状態・ローカル選択で effectivePriority を評価する（[0029 §4](0029-importer-profile.md#4-受信者の認可)）。受信者はリレーの順序を信用して自身の認可検証を省略しない。
+- 非対応・timeout・`CLOSED` の場合、クライアントは別の subscription ID で標準 `REQ` へ fallback し、受信後に自身の優先度で処理する。無応答を空の成功としない。
 
 ## 7. 参照
 

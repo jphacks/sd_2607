@@ -16,6 +16,7 @@
 |---|---|---|
 | `dev.oriom.mosimo.post` | 通常投稿・訂正・補足・追認のレコード型と collection | [基本投稿の Lexicon JSON](../lexicons/dev/oriom/mosimo/post.json) を実装。個別拡張・一部の資源上限は未確定 |
 | `dev.oriom.mosimo.defs` | 公式拡張の共有定義を収める Lexicon | NSID を割り当て。各拡張は下記の定義を参照 |
+| `dev.oriom.mosimo.attest` | 発信者証明拡張群（[0022](0022-key-attestation.md)〜[0030](0030-revocation-subkey.md)）の定義 | NSID を割り当て。型は §2.1.1 |
 
 ### 2.1 公式拡張の型参照
 
@@ -36,7 +37,24 @@
 | 身元証明 | `dev.oriom.mosimo.defs#identity` |
 | 著者の配送優先度ヒント | `dev.oriom.mosimo.defs#priority` |
 
-`identity`・`priority` の実装用フィールド・上限・署名・意味は [0020: experimental wire-v1](0020-wire-v1.md) に定義する。正式Lexicon公開済みという意味ではない。その他についても、型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。これはすべての原形式を同じ型へ格納する義務ではない。CAP 1.2は独立型 `cap12` の[仕様草案](0015-cap.md)、EDXL-DE 1.0は `edxlDe10` の[仕様草案](0016-edxl-de.md)で具体化し、`publicInformation` へ重複して格納することは要求しない。気象庁XMLの緊急地震速報は `jmaEew` の[仕様草案](0017-jma-eew.md)、地震観測情報は `jmaEarthquake` の[仕様草案](0018-jma-earthquake.md)で具体化する。気象防災情報は `jmaWeather` の[仕様草案](0021-jma-weather.md)で地域別状態・気象内容の部分集合・原文保存・時刻の曖昧さを具体化する。BSAFタグだけから本型を生成せず、気象XMLの全要素対応を意味しない。共通管理型は各拡張内に格納し、別の共通ヘッダ拡張の必須同梱は要求しない。BSAF v1は `bsafV1` の[仕様草案](0019-bsaf.md)に型・フィルタ・変換経路を定義する。独自Lexiconへ本拡張を付けることと、既存クライアント向けの `app.bsky.feed.post` の公開は別である。
+`identity` は 0020 の BSAF importer 用であり、[0023](0023-attestation-chain-extension.md) の `attest#chain` に置き換えた。名前は予約のまま残し、新規に発行しない。`priority` は [0011 §10](0011-extensions.md#10-配送優先度ヒント-priority) に定義する。正式Lexicon公開済みという意味ではない。その他についても、型名を割り当てたことと、型の必須フィールド・上限・証明書形式等を確定したことは異なる。未決定のスキーマを公開済み Lexicon として扱わない。既存仕様の `public-information` は説明用の名称であり、型参照の定義名は `publicInformation` とする。これはすべての原形式を同じ型へ格納する義務ではない。CAP 1.2は独立型 `cap12` の[仕様草案](0015-cap.md)、EDXL-DE 1.0は `edxlDe10` の[仕様草案](0016-edxl-de.md)で具体化し、`publicInformation` へ重複して格納することは要求しない。気象庁XMLの緊急地震速報は `jmaEew` の[仕様草案](0017-jma-eew.md)、地震観測情報は `jmaEarthquake` の[仕様草案](0018-jma-earthquake.md)で具体化する。気象防災情報は `jmaWeather` の[仕様草案](0021-jma-weather.md)で地域別状態・気象内容の部分集合・原文保存・時刻の曖昧さを具体化する。BSAFタグだけから本型を生成せず、気象XMLの全要素対応を意味しない。共通管理型は各拡張内に格納し、別の共通ヘッダ拡張の必須同梱は要求しない。BSAF v1は `bsafV1` の[仕様草案](0019-bsaf.md)に型・フィルタ・変換経路を定義する。独自Lexiconへ本拡張を付けることと、既存クライアント向けの `app.bsky.feed.post` の公開は別である。
+
+### 2.1.1 発信者証明拡張群の型参照
+
+| 用途 | `$type` | 定義 |
+|---|---|---|
+| 鍵署名の本体 | `dev.oriom.mosimo.attest#keyAttestation` | [0022 §3](0022-key-attestation.md#3-鍵署名の構造) |
+| 追加ブロック | `dev.oriom.mosimo.attest#keyValidity`、`#delegation`、`#organization`、`#issuerDomain`、`#subjectDomain`、`#trustLevel` | [0022 §3.2](0022-key-attestation.md#32-追加ブロック) |
+| importer のブロック | `dev.oriom.mosimo.attest#importScope` | [0029 §2](0029-importer-profile.md#2-役割とブロック) |
+| 投稿に同梱するチェーン | `dev.oriom.mosimo.attest#chain` | [0023](0023-attestation-chain-extension.md) |
+| 失効通知・活性化・運搬単位 | `dev.oriom.mosimo.attest#revocationNotice`、`#revocationActivation`、`#revocation`、`#reason` | [0024](0024-revocation-notice.md) |
+| 失効用サブ鍵 | `dev.oriom.mosimo.attest#revocationKey` | [0030](0030-revocation-subkey.md) |
+| 失効リスト | `dev.oriom.mosimo.attest#revocationList` | [0025](0025-revocation-list-endpoint.md) |
+| 失効要求 | `dev.oriom.mosimo.attest#revocationRequest`、`#revocationRequestResponse`、`#evidence`、`#subjectChain`、`#reporterChain` | [0026](0026-revocation-request.md) |
+| 署名要求 | `dev.oriom.mosimo.attest#signingRequest`、`#signingRequestResponse`、`#nip05` | [0027](0027-signing-request.md) |
+| 外部アカウント | `dev.oriom.mosimo.attest#externalAccounts` | [0028](0028-external-account-attestation.md) |
+
+`attest#chain` と `attest#revocation` は投稿・制御イベントの自己完結タグとして運ぶ（§3.2）。それ以外は投稿の `extensions` に直接置く型ではなく、鍵署名・エンドポイントの本体・入れ子の要素である。鍵署名の `roles` は型ではなく文字列の登録値で、[0022 §3.1](0022-key-attestation.md#31-役割) と各拡張が割り当てる。
 
 投稿の repository path は `dev.oriom.mosimo.post/<record-key>`。record key は端末で生成する13文字の atproto TID とする（[0012 §2.1.1](0012-bindings.md#211-レコードキーの生成合意済み)）。atURI の collection も同じ NSID を使う。
 
@@ -93,6 +111,14 @@ mosimo.oriom.dev:ext:dev.oriom.mosimo.defs#area
 | `mosimo.oriom.dev:version` | 通常投稿では初期基本版の文字列 `"1"` を1個含める。拡張型・メッシュ符号化版とは独立 |
 
 Nostr 標準フィールドや、意味が正確に一致する既存標準タグを、これらの名前へ一律に置換するものではない。検索のためだけの重複タグは増やさない。追加の基本項目が必要になった場合は同じ管理範囲で名前を割り当てる。
+
+### 3.4 制御イベントの kind（提案）
+
+| kind | 用途 | 定義 |
+|---|---|---|
+| `9024` | 失効通知の運搬 | [0024 §5](0024-revocation-notice.md#5-制御イベントとしての運び方) |
+
+通常投稿の `kind: 1`・削除要求の `kind: 5` に加える値であり、他の NIP の割り当てと衝突しない限り確定とする。制御イベントは `["t", "mosimo.oriom.dev"]` を含め、`mosimo.oriom.dev:version` タグを付けない。
 
 ## 4. 第三者の自由な拡張
 
