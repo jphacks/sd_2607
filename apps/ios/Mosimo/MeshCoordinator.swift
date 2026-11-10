@@ -62,7 +62,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             #endif
         },
         allowedPeerNode: allowedPeerNode, blocked: { [weak self] in self?.blocked.contains($0) ?? false },
-        accepted: { [weak self] _ in try self?.persist(); self?.drainRelay(); self?.received(online: false) })
+        accepted: { [weak self] entry in try self?.persist(); self?.drainRelay(); if entry.event.kind == 1 { self?.received(online: false) } })
     private var lastSync: Int64 = 0
     private var blocked: [String] { disk?.blockedDids ?? [] }
     private var hideExpired: Bool { defaults.object(forKey: "hideExpired") as? Bool ?? true }

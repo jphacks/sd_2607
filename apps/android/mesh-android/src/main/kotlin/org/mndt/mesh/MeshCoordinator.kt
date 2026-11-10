@@ -103,7 +103,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
     private val forwarded = mutableMapOf<String, MutableSet<String>>()
     private val exchange = Exchange(engine, node, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor, blocked = { it in blocked },
-        forwarded = { id, peer -> forwarded.getOrPut(id) { mutableSetOf() } += peer }) { persist(); drainRelay(); received(online = false) }
+        forwarded = { id, peer -> forwarded.getOrPut(id) { mutableSetOf() } += peer }) { persist(); drainRelay(); if (it.event.kind == 1) received(online = false) }
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
