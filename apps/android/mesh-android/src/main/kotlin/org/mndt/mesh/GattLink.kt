@@ -1,6 +1,7 @@
 package org.mndt.mesh
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -21,7 +22,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -91,9 +95,24 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private val backoff = HashMap<String, Pair<Int, Long>>()
     /** First time each node was seen; lets the tie-break loser dial when the winner cannot see us. */
     private val firstSeen = HashMap<String, Long>()
+    /** The last start request: Bluetooth turned on later (or OFF→ON, which kills scanner/advertiser/server) restarts the link. */
+    @Volatile private var wanted: Pair<String, LinkListener>? = null
+
+    init {
+        context.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: Intent) {
+                val (n, l) = wanted ?: return
+                when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
+                    BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> halt()
+                    BluetoothAdapter.STATE_ON -> start(n, l)
+                }
+            }
+        }, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+    }
 
     override fun start(node: String, listener: LinkListener) {
         require(node.matches(Regex("[0-9a-fA-F]{16}"))) { "node must be 16 hex" }
+        wanted = node to listener
         safe(Unit) {
             synchronized(lock) {
                 if (running) return
@@ -113,7 +132,9 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         }
     }
 
-    override fun stop() {
+    override fun stop() { wanted = null; halt() }
+
+    private fun halt() {
         synchronized(lock) {
             if (!running) return
             running = false; gen++
