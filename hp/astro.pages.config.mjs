@@ -26,11 +26,11 @@ export default defineConfig({
       status: 301,
     },
     '/reference/mobile/hanashi/android/policy': {
-      destination: '/reference/mobile/policy',
+      destination: '/reference/mobile/hanashi/policy',
       status: 301,
     },
     '/reference/mobile/hanashi/ios/policy': {
-      destination: '/reference/mobile/policy',
+      destination: '/reference/mobile/hanashi/policy',
       status: 301,
     },
   },
