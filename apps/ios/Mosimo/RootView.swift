@@ -66,6 +66,7 @@ struct RootView: View {
         case .advanced: AdvancedScreen()
         case .identity: IdentityScreen()
         case .blocked: BlockedScreen()
+        case .terms: TermsScreen()
         }
     }
 }

@@ -100,7 +100,7 @@ func openAppSettings() {
 }
 
 enum Tab { case timeline, map, settings }
-enum Route: Hashable { case post(String), trust, advanced, identity, blocked }
+enum Route: Hashable { case post(String), trust, advanced, identity, blocked, terms }
 
 /// One stack per tab. The map is the start tab; posts opened from the map live in its sheet.
 @MainActor

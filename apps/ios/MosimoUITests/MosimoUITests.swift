@@ -50,6 +50,8 @@ final class MosimoUITests: XCTestCase {
         let open = app.buttons["compose.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10))
         open.tap()
+        // First post on this install: agree to the terms once.
+        if app.buttons["terms.agree"].waitForExistence(timeout: 3) { app.buttons["terms.agree"].tap() }
         app.buttons["category.危険"].tap()
         let detail = app.textViews["compose.detail"].exists ? app.textViews["compose.detail"] : app.textFields["compose.detail"]
         detail.tap()

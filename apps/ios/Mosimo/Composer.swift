@@ -8,8 +8,18 @@ struct Composer: View {
     let onPick: () -> Void
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var location: LocationRepository
+    @AppStorage("termsAccepted") private var termsAccepted = false
 
     var body: some View {
+        Group {
+            if termsAccepted { form } else { TermsAgreement(onClose: { vm.composing = false }) }
+        }
+        .background(Mosimo.bgSurface.ignoresSafeArea())
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder private var form: some View {
         let fix = location.location
         let point = vm.picked ?? fix?.coordinate
         let fromFix = vm.picked == nil && fix != nil
@@ -108,9 +118,6 @@ struct Composer: View {
             }
             .padding(16)
         }
-        .background(Mosimo.bgSurface.ignoresSafeArea())
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
     }
 
     private func label(_ text: String) -> some View { Text(text).font(.titleMedium).foregroundStyle(Mosimo.textSecondary) }

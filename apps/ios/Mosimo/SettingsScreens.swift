@@ -5,6 +5,7 @@ import UIKit
 struct SettingsScreen: View {
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var nav: Navigator
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let state = mesh.state
@@ -17,8 +18,11 @@ struct SettingsScreen: View {
                 Group_ {
                     SettingRow(icon: "checkmark.shield", tint: Mosimo.safe, title: "公式情報とみなす発信元",
                                subtitle: unique(sources.map(\.org)).joined(separator: " / ").nilIfEmpty, value: "\(sources.count)件", action: { nav.push(.trust) })
+                    // Release keeps every switch at its default (all on) and hides the developer-facing diagnostics (App Review 2.1).
+                    #if DEBUG
                     Line()
                     SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "オフライン中継・端末時計・リレー・診断", action: { nav.push(.advanced) })
+                    #endif
                 }
                 Header(text: "あなたの情報")
                 Group_ {
@@ -29,6 +33,13 @@ struct SettingsScreen: View {
                 }
                 Header(text: "このアプリについて")
                 Group_ {
+                    SettingRow(icon: "hand.raised", tint: Mosimo.textSecondary, title: "プライバシーポリシー", action: { openURL(policyURL) })
+                    Line()
+                    SettingRow(icon: "doc.text", tint: Mosimo.textSecondary, title: "利用規約", action: { nav.push(.terms) })
+                    Line()
+                    SettingRow(icon: "envelope", tint: Mosimo.textSecondary, title: "お問い合わせ", subtitle: contactAddress,
+                               action: { openURL(URL(string: "mailto:\(contactAddress)")!) })
+                    Line()
                     SettingRow(icon: "info.circle", tint: Mosimo.textSecondary, title: "バージョン",
                                value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 }
@@ -235,6 +246,10 @@ struct TrustScreen: View {
             }
         }
     }
+}
+
+struct TermsScreen: View {
+    var body: some View { SubScreen(title: "利用規約") { TermsText().padding(.top, 8) } }
 }
 
 struct AdvancedScreen: View {

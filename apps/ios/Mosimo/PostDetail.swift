@@ -9,7 +9,9 @@ struct PostDetail: View {
     var onBlocked: () -> Void = {}
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var location: LocationRepository
+    @Environment(\.openURL) private var openURL
     @State private var confirmBlock = false
+    @State private var confirmReport = false
 
     var body: some View {
         let state = mesh.state
@@ -40,7 +42,7 @@ struct PostDetail: View {
                         .foregroundStyle(Mosimo.safe)
                     }
                 }
-                HStack(spacing: 8) {
+                FlowLayout(spacing: 8) {
                     if let onShowOnMap, post.coordinate != nil {
                         Button("マップで見る", action: onShowOnMap).font(.labelLarge).foregroundStyle(Mosimo.primary)
                             .padding(.horizontal, 16).frame(height: 40).overlay(Capsule().stroke(Mosimo.borderStrong))
@@ -48,6 +50,15 @@ struct PostDetail: View {
                     if let did = post.did, did != state.did {
                         Button("ブロック") { confirmBlock = true }.font(.labelLarge).foregroundStyle(Mosimo.danger).padding(.horizontal, 12).frame(height: 40)
                     }
+                    Button("不適切な投稿を報告") { confirmReport = true }.font(.labelLarge).foregroundStyle(Mosimo.textSecondary).padding(.horizontal, 12).frame(height: 40)
+                        // Official (bot) posts are report-only: blocking the bot would hide all official information.
+                        .confirmationDialog("運営に報告しますか？", isPresented: $confirmReport, titleVisibility: .visible) {
+                            Button("報告する") { report() }
+                            if !post.isPublic, let did = post.did, did != state.did {
+                                Button("報告してブロック", role: .destructive) { report(); mesh.block(did); onBlocked() }
+                            }
+                            Button("キャンセル", role: .cancel) {}
+                        } message: { Text("メールで送ります。24時間以内に確認します。") }
                 }
                 Divider().overlay(Mosimo.border)
                 if post.isPublic {
@@ -67,6 +78,15 @@ struct PostDetail: View {
                 onBlocked()
             }
         } message: { Text("この人の投稿はすべて表示されなくなります。") }
+    }
+
+    private func report() {
+        var mail = URLComponents()
+        mail.scheme = "mailto"
+        mail.path = reportAddress
+        mail.queryItems = [URLQueryItem(name: "subject", value: "不適切な投稿の報告"),
+                           URLQueryItem(name: "body", value: "報告の理由（任意）：\n\n---\nイベントID：\(post.id)\n投稿者：\(post.did ?? post.pubkey)\n本文：\(post.content)")]
+        if let url = mail.url { openURL(url) }
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -94,28 +114,40 @@ private struct AnnotationItem: View {
     }
 }
 
-/// 「確認した N」「補足する」「訂正を報告」 for a user post; publishes #annotation posts, with origin when a fix exists.
+/// 「確認した N」「補足する」「訂正を投稿」 for a user post; publishes #annotation posts, with origin when a fix exists.
 struct AnnotationActions: View {
     let target: PostView
     let annotations: [PostView]
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var location: LocationRepository
+    @AppStorage("termsAccepted") private var termsAccepted = false
     @State private var sent = false
     @State private var writing: Relation?
     @State private var text = ""
+    @State private var askTerms = false
+    @State private var pending: (() -> Void)?
 
     var body: some View {
         let endorsed = endorsers(annotations)
         let mine = sent || endorsed.contains(mesh.state.did) || endorsed.contains(mesh.state.publicKey)
         HStack(spacing: 8) {
             action("確認した \(endorsed.count)", "checkmark", Mosimo.safe, enabled: !mine) {
-                sent = true
-                send(.endorsement, "確認しました：" + String(target.body.prefix(20)))
+                agreed {
+                    sent = true
+                    send(.endorsement, "確認しました：" + String(target.body.prefix(20)))
+                }
             }
-            action("補足する", "pencil", Mosimo.textSecondary) { text = ""; writing = .supplement }
-            action("訂正を報告", "flag", Mosimo.textSecondary) { text = ""; writing = .correction }
+            action("補足する", "pencil", Mosimo.textSecondary) { agreed { text = ""; writing = .supplement } }
+            action("訂正を投稿", "flag", Mosimo.textSecondary) { agreed { text = ""; writing = .correction } }
         }
-        .alert(writing == .supplement ? "補足する" : "訂正を報告", isPresented: Binding(get: { writing != nil }, set: { if !$0 { writing = nil } })) {
+        // The pending action runs after the sheet is gone; the sheet has its own host so the alert below is free to present.
+        .background {
+            Color.clear.sheet(isPresented: $askTerms, onDismiss: {
+                if termsAccepted { pending?() }
+                pending = nil
+            }) { TermsAgreement(onClose: { askTerms = false }, onAgree: { askTerms = false }) }
+        }
+        .alert(writing == .supplement ? "補足する" : "訂正を投稿", isPresented: Binding(get: { writing != nil }, set: { if !$0 { writing = nil } })) {
             TextField("", text: Binding(get: { text }, set: { text = String($0.prefix(140)) }), axis: .vertical)
             Button("キャンセル", role: .cancel) { writing = nil }
             Button("送信") {
@@ -124,6 +156,11 @@ struct AnnotationActions: View {
                 writing = nil
             }
         } message: { Text("\(text.count)/140") }
+    }
+
+    /// Runs [run] now, or once the first-post terms are agreed.
+    private func agreed(_ run: @escaping () -> Void) {
+        if termsAccepted { run() } else { pending = run; askTerms = true }
     }
 
     private func send(_ relation: Relation, _ body: String) {
