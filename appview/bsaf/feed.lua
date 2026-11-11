@@ -19,19 +19,21 @@ function handle()
   end
   -- SQLite merges two index-ordered streams, rather than sorting all history
   -- through a cross-collection OR. Pagination applies to the combined order.
+  -- Order by created_at (first local arrival): HappyView backfills rewrite
+  -- indexed_at on existing rows, which would reshuffle the whole timeline.
   local sql = [[
-    SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at,
+    SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at, r.created_at,
            NULL AS fetched_at, NULL AS source_url
     FROM happyview_records r WHERE r.collection = 'dev.oriom.mosimo.post'
   ]] .. filter .. [[
     UNION ALL
-    SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at,
+    SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at, r.created_at,
            e.fetched_at, e.source_url
     FROM happyview_records r
     JOIN mosimo_bsaf_events e ON e.uri = r.uri AND e.cid = r.cid
     WHERE r.collection = 'app.bsky.feed.post'
       AND EXISTS (SELECT 1 FROM mosimo_bsaf_sources s WHERE s.did = r.did)
-  ]] .. filter .. " ORDER BY indexed_at DESC, uri DESC LIMIT ? OFFSET ?"
+  ]] .. filter .. " ORDER BY created_at DESC, uri DESC LIMIT ? OFFSET ?"
   local binds = {}
   for branch = 1, 2 do
     for _, value in ipairs(values) do table.insert(binds, value) end
