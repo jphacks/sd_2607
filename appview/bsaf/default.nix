@@ -67,11 +67,11 @@ in {
       enable = lib.mkEnableOption "opt-in signed BSAF conversion and EVENT publication to PDS";
       credentialsFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str; default = null;
-        description = "Absolute importer-only JSON secret path, loaded using systemd credentials; never a Nix path/root key.";
+        description = "Absolute path of the importer-only credentials.json (DID, signing secrets, signing chain) from identity-cli assemble, loaded using systemd credentials; never a Nix path, root or CA key.";
       };
       trustFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str; default = null;
-        description = "Absolute public roots JSON path; no trust anchor discovered from the relay.";
+        description = "Absolute path of the public roots.json (root pubkey, roles, maxDepth) used for the publisher self-check; no trust anchor is discovered from the relay.";
       };
       relayUrl = lib.mkOption { type = lib.types.str; default = ""; description = "Explicit wss PDS Nostr endpoint; no default posting destination."; };
       selectJmaDefaults = lib.mkOption {

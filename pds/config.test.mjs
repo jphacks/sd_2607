@@ -1,19 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validateConfig } from './config.mjs';
-import { createRoot, JMA_SELECTION } from './public-information.mjs';
+import { randomSecret, nostrPublicKey, atprotoPublicKey, hex, JMA_SELECTION } from './attest.mjs';
 
 test('public priority defaults grant no authority; provisioned roots and selection are bounded and explicit', () => {
-  assert.deepEqual(validateConfig(input()).publicInformation, { roots: [], selection: [] });
-  const { root } = createRoot({ scope: { orgIds: ['test'], bsaf: JMA_SELECTION }, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
-  assert.doesNotThrow(() => validateConfig(input({ publicInformation: { roots: [root], selection: JMA_SELECTION } })));
-  for (const patch of [{ enabled: undefined }, { minSequence: 0 }, { snapshotUrl: 'http://trust.invalid/snapshot' },
-    { snapshotUrl: 'https://user:secret@trust.invalid/snapshot' }, { snapshotUrl: 'https://trust.invalid/#fragment' }, { scope: {} }]) {
+  assert.deepEqual(validateConfig(input()).publicInformation, { roots: [], selection: [], revocationDomains: [] });
+  const root = { pubkey: hex(nostrPublicKey(randomSecret())), roles: ['import', 'attest'], maxDepth: 2, enabled: true };
+  const normalized = validateConfig(input({ publicInformation: { roots: [root], selection: JMA_SELECTION, revocationDomains: ['pds.example.org'] } })).publicInformation;
+  assert.deepEqual(normalized.roots, [root]); assert.deepEqual(normalized.revocationDomains, ['pds.example.org']);
+  assert.doesNotThrow(() => validateConfig(input({ publicInformation: { roots: [{ ...root, pubkey: hex(atprotoPublicKey(randomSecret())) }], selection: [] } })));
+  for (const patch of [{ enabled: 'yes' }, { maxDepth: 0 }, { maxDepth: 17 }, { pubkey: 'zz' }, { pubkey: hex(new Uint8Array(32)) },
+    { roles: ['import', 'import'] }, { roles: 'import' }, { extra: true }]) {
     assert.throws(() => validateConfig(input({ publicInformation: { roots: [{ ...root, ...patch }], selection: [] } })));
   }
   for (const roots of [[root, root], Array(65).fill(root)]) {
     assert.throws(() => validateConfig(input({ publicInformation: { roots, selection: [] } })));
   }
+  assert.throws(() => validateConfig(input({ publicInformation: { roots: [], selection: [{ botDid: 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi', types: ['b', 'a'] }] } })));
+  assert.throws(() => validateConfig(input({ publicInformation: { roots: [], selection: [], revocationDomains: ['https://x'] } })));
 });
 
 const input = extra => ({ groups: [{ id: 'alpha', endpoint: 'https://PDS.example:443/' }], ...extra });

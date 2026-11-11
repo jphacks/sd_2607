@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openSqliteStore, schema } from './store.mjs';
 import { PGlite } from '@electric-sql/pglite';
-import { canonical, decodeCanonical, NS, createSnapshot, timestamp } from './public-information.mjs';
+import { canonical, timestamp, b64, PRIORITY, REVOCATION, createNotice, validateRevocation } from './attest.mjs';
+import { importFixture } from './fixture.test.mjs';
 import { WebSocket } from 'ws';
 import { MST, MemoryBlockstore, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
@@ -17,7 +18,8 @@ import { createServer } from './server.mjs';
 import { validateConfig } from './config.mjs';
 
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
-const collection = 'dev.oriom.mosimo.post';
+const collection = 'dev.jisaku.mosimo.post';
+const TAG = 'mosimo.jisaku.dev';
 const author = 'a'.repeat(64);
 const cidFor = async bytes => CID.createV1(cbor.code, await sha256.digest(bytes));
 const event = (index, extra = {}) => ({ id: index.toString(16).padStart(64, '0'), pubkey: author,
@@ -36,7 +38,7 @@ function fakeStore() {
     if (sql.includes('MAX(arrival)')) rows = [{ cursor: String(state.events.length) }];
     else if (sql.includes('e.arrival <= $1')) {
       if (state.beforeHistory) { const callback = state.beforeHistory; state.beforeHistory = null; await callback(); }
-      rows = state.events.filter(row => BigInt(row.arrival) <= BigInt(params[0]) && visible(row) && [1, 5].includes(row.event.kind));
+      rows = state.events.filter(row => BigInt(row.arrival) <= BigInt(params[0]) && visible(row) && [1, 5, 8173].includes(row.event.kind));
       for (const match of sql.matchAll(/e\.(id|pubkey|kind) = ANY\(\$(\d+)/g)) {
         const field = { id: 'id', pubkey: 'pubkey', kind: 'kind' }[match[1]];
         rows = rows.filter(row => params[Number(match[2]) - 1].includes(row.event[field]));
@@ -119,8 +121,8 @@ async function connect(t, base, path = '/', host = 'one.test') {
 }
 
 async function prioritySetup(t, { trusted = true, maxResults = 500, dialect = 'sqlite' } = {}) {
-  const fixture = JSON.parse(await readFile(new URL('../apps/android/bundle-core/src/test/resources/wire-v1.json', import.meta.url), 'utf8'));
-  let seconds = fixture.event.created_at;
+  const fixture = await importFixture();
+  let seconds = fixture.now;
   t.mock.method(Date, 'now', () => seconds * 1000);
   const directory = await mkdtemp(join(tmpdir(), 'mosimo-priority-'));
   let store;
@@ -131,22 +133,25 @@ async function prioritySetup(t, { trusted = true, maxResults = 500, dialect = 's
     store = { dialect, query: (sql, values) => db.query(sql, values),
       transaction: fn => db.transaction(tx => fn({ query: (sql, values) => /^SELECT pg_advisory_xact_lock/.test(sql) ? Promise.resolve({ rows: [] }) : tx.query(sql, values) })), close: () => db.close() };
   }
-  const config = { maxResults, publicInformation: { roots: trusted ? fixture.config.roots : [],
-    selection: fixture.config.selected.map(e => ({ botDid: e.botDid, types: [e.type] })) } };
+  const config = { maxResults, publicInformation: { roots: trusted ? fixture.roots : [], selection: fixture.selection } };
   const app = createServer({ config, store, ingest: async () => ({ accepted: true }) });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   t.after(async () => { await app.close(); await store.close(); await rm(directory, { recursive: true, force: true }); });
-  const fetch = t.mock.method(globalThis, 'fetch', async url => {
-    assert.equal(url, fixture.config.roots[0].snapshotUrl);
-    return new Response(Buffer.from(fixture.snapshotHex, 'hex'), { headers: { 'content-type': 'application/cbor' } });
-  });
+  // Priority evaluation is offline: revocations come from the table, never from a fetch.
+  const fetch = t.mock.method(globalThis, 'fetch', async url => assert.fail(`Unexpected fetch: ${url}`));
   const insert = value => store.query('INSERT INTO events(id,pubkey,created_at,kind,event) VALUES($1,$2,$3,$4,$5)',
     [value.id, value.pubkey, value.created_at, value.kind, JSON.stringify(value)]);
   const socket = await connect(t, `http://127.0.0.1:${app.server.address().port}`);
   const request = (id, limit = 1, extra = {}) => socket.send(['MOSIMO-REQ', id, { order: 'priority-v1',
-    filter: { kinds: [1], '#t': ['mosimo.oriom.dev'], limit, ...extra } }]);
-  return { fixture, store, socket, insert, request, fetch, setNow: value => { seconds = value; } };
+    filter: { kinds: [1], '#t': [TAG], limit, ...extra } }]);
+  const revoke = async () => {
+    const revocation = { $type: REVOCATION, notice: createNotice(fixture.caSecret, fixture.ca, { subject: fixture.leafKey, issuedAt: timestamp(fixture.now), effectiveAt: timestamp(fixture.now) }) };
+    const facts = validateRevocation(revocation);
+    await store.query('INSERT INTO revocations(id,subject,issuer,effective_at,seen_at,revocation) VALUES($1,$2,$3,$4,$5,$6)',
+      [facts.id, facts.subject, facts.issuer, facts.effectiveAt, fixture.now, 'test']);
+  };
+  return { fixture, store, socket, insert, request, fetch, revoke, setNow: value => { seconds = value; } };
 }
 
 for (const dialect of ['sqlite', 'postgres']) test(`${dialect}: MOSIMO-REQ sorts before limit; REQ stays chronological and live`, async t => {
@@ -154,11 +159,11 @@ for (const dialect of ['sqlite', 'postgres']) test(`${dialect}: MOSIMO-REQ sorts
   await insert(fixture.event);
   // More than one newest result separates the older authorized event from limit=1.
   for (let i = 1; i <= 12; i++) await insert(event(i, { created_at: fixture.event.created_at + i,
-    tags: [['t', 'mosimo.oriom.dev'], [`${NS}:ext:dev.oriom.mosimo.defs#priority`, Buffer.from(canonical({ version: 1, level: 3 })).toString('base64')]] }));
+    tags: [['t', TAG], [`mosimo:ext:${PRIORITY}`, b64(canonical({ level: 3 }))]] }));
   request('priority');
   assert.equal((await socket.next())[2].id, fixture.event.id);
   assert.deepEqual(await socket.next(), ['EOSE', 'priority']);
-  socket.send(['REQ', 'standard', { kinds: [1], '#t': ['mosimo.oriom.dev'], limit: 1, order: 'priority-v1' }]);
+  socket.send(['REQ', 'standard', { kinds: [1], '#t': [TAG], limit: 1, order: 'priority-v1' }]);
   assert.equal((await socket.next())[2].id, event(12).id);
   assert.deepEqual(await socket.next(), ['EOSE', 'standard']);
   request('standard');
@@ -170,44 +175,46 @@ for (const dialect of ['sqlite', 'postgres']) test(`${dialect}: MOSIMO-REQ sorts
   assert.deepEqual(await socket.next(), ['EOSE', 'priority']);
 });
 
-for (const change of ['expiry', 'final-pass expiry', 'serial conflict', 'revocation']) test(`priority final gate rejects ${change} discovered after initial authorization`, async t => {
-  const { fixture, store, socket, insert, request, setNow } = await prioritySetup(t);
+for (const change of ['expiry', 'revocation']) test(`priority final gate rejects ${change} discovered after initial authorization`, async t => {
+  const { fixture, store, socket, insert, request, setNow, revoke } = await prioritySetup(t);
   await insert(fixture.event);
-  const transaction = store.transaction.bind(store);
-  let changed = false;
-  let serialReads = 0;
-  t.mock.method(store, 'transaction', async fn => {
-    let recorded = false;
-    const result = await transaction(tx => fn({ query: async (sql, values) => {
-      const value = await tx.query(sql, values);
-      if (sql.includes('AS conflicted FROM trust_serials')) {
-        serialReads++;
-        if (change === 'final-pass expiry' && serialReads === 2) recorded = true;
-      }
-      if (sql.startsWith('INSERT INTO trust_serials') && change !== 'final-pass expiry') recorded = true;
-      return value;
-    } }));
-    if (recorded && !changed) {
+  const query = store.query.bind(store);
+  let reads = 0, changed = false;
+  t.mock.method(store, 'query', async (sql, values) => {
+    const result = await query(sql, values);
+    if (sql.startsWith('SELECT subject, issuer, effective_at FROM revocations') && ++reads === 1) {
+      if (change === 'expiry') setNow(fixture.exp); else await revoke();
       changed = true;
-      if (change.includes('expiry')) setNow(Date.parse(fixture.event.tags.find(tag => tag[0] === `${NS}:delivery-expires-at`)[1]) / 1000);
-      else if (change === 'serial conflict') await store.query('INSERT INTO trust_serial_conflicts(issuer,serial) SELECT issuer,serial FROM trust_serials');
-      else {
-        const snapshot = createSnapshot('01'.padStart(64, '0'), { sequence: 8, issuedAt: timestamp(fixture.event.created_at),
-          validUntil: timestamp(fixture.event.created_at + 600), revokedPubkeys: [fixture.config.roots[0].rootPubkey] });
-        await store.query('UPDATE trust_snapshots SET snapshot=$1', [JSON.stringify(snapshot)]);
-      }
     }
     return result;
   });
   request('changed');
   assert.equal((await socket.next())[0], 'CLOSED', 'no EVENT may escape with stale elevated ranking');
   assert.equal(changed, true);
+  // A later request evaluates against the new state consistently and completes.
+  request('after');
+  assert.equal((await socket.next())[0], 'EVENT');
+  assert.deepEqual(await socket.next(), ['EOSE', 'after']);
+});
+
+test('a revoked importer is ranked like any unauthorized post', async t => {
+  const { fixture, insert, socket, request, revoke } = await prioritySetup(t);
+  await insert(fixture.event);
+  const newer = event(1, { created_at: fixture.event.created_at + 1, tags: [['t', TAG]] });
+  await insert(newer);
+  request('before', 1);
+  assert.equal((await socket.next())[2].id, fixture.event.id);
+  assert.deepEqual(await socket.next(), ['EOSE', 'before']);
+  await revoke();
+  request('after', 1);
+  assert.equal((await socket.next())[2].id, newer.id);
+  assert.deepEqual(await socket.next(), ['EOSE', 'after']);
 });
 
 test('empty trust never elevates self priority, authorization failures cap at one and ties use ID', async t => {
   const { fixture, insert, socket, request, fetch } = await prioritySetup(t, { trusted: false });
   await insert(fixture.event);
-  const newer = event(1, { created_at: fixture.event.created_at + 1, tags: [['t', 'mosimo.oriom.dev']] });
+  const newer = event(1, { created_at: fixture.event.created_at + 1, tags: [['t', TAG]] });
   await insert(newer);
   await insert({ ...newer, id: event(2).id });
   request('empty', 3);
@@ -238,15 +245,17 @@ test('CLOSE can cancel a finite request queued in the same WebSocket batch', asy
   assert.deepEqual(await socket.next(), ['EOSE', 'barrier']);
 });
 
-test('finite request CLOSE cancels pending snapshot work and releases its ID without live delivery', async t => {
-  const { fixture, insert, socket, request, fetch } = await prioritySetup(t);
+test('finite request CLOSE cancels pending trust work and releases its ID without live delivery', async t => {
+  const { fixture, store, insert, socket, request } = await prioritySetup(t);
   await insert(fixture.event);
   const started = Promise.withResolvers();
   const unblock = Promise.withResolvers();
   t.after(() => unblock.resolve());
-  fetch.mock.mockImplementation(async () => {
-    started.resolve(); await unblock.promise;
-    return new Response(Buffer.from(fixture.snapshotHex, 'hex'), { headers: { 'content-type': 'application/cbor' } });
+  const query = store.query.bind(store);
+  let blocked = false;
+  t.mock.method(store, 'query', async (sql, values) => {
+    if (!blocked && sql.startsWith('SELECT subject, issuer, effective_at FROM revocations')) { blocked = true; started.resolve(); await unblock.promise; }
+    return query(sql, values);
   });
   request('cancel');
   await started.promise;
@@ -260,7 +269,7 @@ test('finite request CLOSE cancels pending snapshot work and releases its ID wit
   request('cancel');
   assert.equal((await socket.next())[0], 'EVENT');
   assert.deepEqual(await socket.next(), ['EOSE', 'cancel']);
-  await insert(event(99, { tags: [['t', 'mosimo.oriom.dev']] }));
+  await insert(event(99, { tags: [['t', TAG]] }));
   socket.send(['REQ', 'last', { limit: 0 }]);
   assert.deepEqual(await socket.next(), ['EOSE', 'last']);
 });
@@ -268,26 +277,14 @@ test('finite request CLOSE cancels pending snapshot work and releases its ID wit
 test('candidate bytes are budgeted in SQL before materializing event JSON', async t => {
   const { insert, socket, request } = await prioritySetup(t, { trusted: false });
   const content = 'x'.repeat(131000);
-  for (let i = 1; i <= 65; i++) await insert(event(i, { content, tags: [['t', 'mosimo.oriom.dev']] }));
+  for (let i = 1; i <= 65; i++) await insert(event(i, { content, tags: [['t', TAG]] }));
   request('bytes');
   assert.equal((await socket.next())[0], 'CLOSED');
 });
 
-test('oversized candidate requests cannot starve due snapshot revocation refresh', async t => {
-  const { fixture, insert, socket, request, fetch, store } = await prioritySetup(t);
-  const snapshot = createSnapshot('01'.padStart(64, '0'), { sequence: 8, issuedAt: timestamp(fixture.event.created_at),
-    validUntil: timestamp(fixture.event.created_at + 600), revokedPubkeys: [fixture.config.roots[0].rootPubkey] });
-  fetch.mock.mockImplementation(async () => new Response(canonical(snapshot), { headers: { 'content-type': 'application/cbor' } }));
-  for (let i = 1; i <= 1001; i++) await insert(event(i, { tags: [['t', 'mosimo.oriom.dev']] }));
-  request('refresh-overflow');
-  assert.equal((await socket.next())[0], 'CLOSED');
-  assert.equal(fetch.mock.callCount(), 1);
-  assert.deepEqual(JSON.parse((await store.query('SELECT snapshot FROM trust_snapshots')).rows[0].snapshot), snapshot);
-});
-
 test('candidate budget overflow is CLOSED, never a truncated success', async t => {
   const { insert, socket, request } = await prioritySetup(t, { trusted: false });
-  for (let i = 1; i <= 1001; i++) await insert(event(i, { tags: [['t', 'mosimo.oriom.dev']] }));
+  for (let i = 1; i <= 1001; i++) await insert(event(i, { tags: [['t', TAG]] }));
   request('overflow');
   assert.equal((await socket.next())[0], 'CLOSED');
 });
@@ -313,7 +310,8 @@ test('health, NIP-11 capabilities, HTTP errors and method handling', async t => 
   assert.equal(info.headers.get('content-type'), 'application/nostr+json');
   const capabilities = await info.json();
   assert.deepEqual(capabilities.supported_nips, [1, 9, 11]);
-  assert.equal(capabilities.mosimo.wire, 1);
+  assert.equal(capabilities.mosimo.protocol, 'dev.jisaku.mosimo'); assert.equal(capabilities.mosimo.v, '1');
+  assert.deepEqual(capabilities.mosimo.kinds, [1, 5, 8173]);
   assert.deepEqual(capabilities.mosimo.priority_order, ['priority-v1']);
   assert.equal((await app.request('/unknown')).status, 404);
   assert.equal((await app.xrpc('com.atproto.sync.listRepos', {}, { method: 'POST' })).status, 405);

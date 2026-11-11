@@ -20,9 +20,11 @@ import { validateConfig } from './config.mjs';
 import { createIngestion } from './ingest.mjs';
 import { createServer } from './server.mjs';
 import { startNetwork } from './network.mjs';
+import { REVOCATION, createNotice, createRevocationEvent, randomSecret, nostrPublicKey, hex, timestamp } from './attest.mjs';
 
-const namespace = 'mosimo.oriom.dev';
-const collection = 'dev.oriom.mosimo.post';
+const namespace = 'mosimo.jisaku.dev';
+const collection = 'dev.jisaku.mosimo.post';
+const bsafType = 'dev.jisaku.mosimo.public.bsaf';
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
 const repoKey = await Secp256k1Keypair.create();
 const nostrKey = generateSecretKey();
@@ -38,7 +40,7 @@ const envelope = event => JSON.parse(JSON.stringify(event));
 async function fixture({ index = 0, parent = null, key = repoKey, identity = did,
   badRoot = false, badSignature = false, author = nostrKey, rev, text, extensions = [] } = {}) {
   const record = { $type: collection, text: text ?? `避難所 ${index}\r\nか\u3099 🏠`,
-    createdAt: '2026-10-17T12:34:56.120Z', deliveryExpiresAt: '2026-10-18T12:34:56Z', extensions };
+    exp: '2026-10-18T12:34:56Z', created: '2026-10-17T12:34:56.120Z', ext: extensions };
   const path = `${collection}/3jzfcijpj2z2${'234567abcdefghijklmnopqrstuvwxyz'[index]}`;
   const recordBytes = new Uint8Array(cbor.encode(record));
   const recordCid = await cidFor(recordBytes);
@@ -53,10 +55,10 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
   const commitBytes = new Uint8Array(cbor.encode(commit));
   const commitCid = await cidFor(commitBytes);
   const event = signEvent({ content: record.text, tags: [
-    ['t', namespace], [`${namespace}:version`, '1'], [`${namespace}:commit`, b64(commitBytes)],
-    [`${namespace}:base`, parent?.commitCid.toString() ?? ''], [`${namespace}:path`, path],
-    [`${namespace}:created-at`, record.createdAt], [`${namespace}:delivery-expires-at`, record.deliveryExpiresAt],
-    ...extensions.map(({ $type, ...fields }) => [`${namespace}:ext:${$type}`, b64(cbor.encode(fields))]),
+    ['t', namespace], ['mosimo:v', '1'], ['mosimo:commit', b64(commitBytes)],
+    ['mosimo:base', parent?.commitCid.toString() ?? ''], ['mosimo:rkey', path.split('/')[1]],
+    ['mosimo:exp', record.exp], ['mosimo:created', record.created],
+    ...extensions.map(({ $type, ...fields }) => [`mosimo:ext:${$type}`, b64(cbor.encode(fields))]),
   ] }, author);
   return { event, record, path, recordBytes, recordCid, commit, commitBytes, commitCid,
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
@@ -156,11 +158,11 @@ after(async () => {
 beforeEach(async () => {
   if (dialect === 'sqlite') {
       await store.transaction(async tx => {
-        for (const table of ['outbox', 'streams', 'group_sequences', 'repos', 'repo_blocks', 'blocks', 'commits', 'jobs', 'deletions', 'events', 'sqlite_sequence']) {
+        for (const table of ['outbox', 'streams', 'group_sequences', 'repos', 'repo_blocks', 'blocks', 'commits', 'jobs', 'deletions', 'revocations', 'revocation_sources', 'events', 'sqlite_sequence']) {
           await tx.query(`DELETE FROM ${table}`);
         }
       });
-    } else await db.exec('TRUNCATE outbox, streams, group_sequences, repos, blocks, commits, jobs, deletions, events RESTART IDENTITY CASCADE');
+    } else await db.exec('TRUNCATE outbox, streams, group_sequences, repos, blocks, commits, jobs, deletions, revocations, revocation_sources, events RESTART IDENTITY CASCADE');
   config = validateConfig({ groups: [{ id: 'alpha', endpoint: 'https://alpha.example' },
     { id: 'beta', endpoint: 'https://beta.example' }], peers: [{ url: 'https://peer.example' }] }, { PEER_TOKEN: 'test-only' });
   identityEndpoint = 'https://alpha.example';
@@ -169,7 +171,7 @@ beforeEach(async () => {
 });
 
 test('BSAF originals are Nostr-only even with expired delivery or untrusted identity; old queued jobs skip without history writes', async () => {
-  const extension = { $type: 'dev.oriom.mosimo.defs#bsafV1', tags: ['bsaf:v1'], langs: [],
+  const extension = { $type: bsafType, tags: ['bsaf:v1'], langs: [],
     original: { uri: `at://${did}/app.bsky.feed.post/one`, cid: (await fixture()).recordCid.toString(), createdAt: '2020-01-01T00:00:00Z' } };
   const imported = await fixture({ extensions: [extension] });
   resolutionError = new Error('Unregistered or stale identity must not affect routing');
@@ -190,15 +192,40 @@ test('BSAF originals are Nostr-only even with expired delivery or untrusted iden
   assert.equal((await rows('SELECT * FROM events')).length, 1);
 });
 
+test('revocation control events are stored durably as notices and forwarded; other control types are refused', async () => {
+  const rootSecret = randomSecret(), root = nostrPublicKey(rootSecret), subject = nostrPublicKey(randomSecret());
+  const revocation = { $type: REVOCATION, notice: createNotice(rootSecret, root, { subject, issuedAt: timestamp(1792240000), effectiveAt: timestamp(1792240100) }) };
+  const event = createRevocationEvent(revocation, { carrierSecret: otherNostrKey, createdAt: 1792240496, exp: timestamp(1792340496) });
+  const result = await ingestion.ingest(event);
+  assert.equal(result.accepted, true); assert.match(result.message, /revocation/);
+  const stored = await rows('SELECT * FROM revocations');
+  assert.equal(stored.length, 1); assert.equal(stored[0].subject, hex(subject)); assert.equal(stored[0].issuer, hex(root));
+  assert.equal(Number(stored[0].effective_at), 1792240100); assert.equal(stored[0].revocation, event.tags[3][1]);
+  assert.equal((await rows('SELECT * FROM outbox')).length, 1);
+  assert.equal((await rows('SELECT * FROM jobs')).length, 0);
+  assert.equal((await ingestion.ingest(event)).duplicate, true);
+  // The same notice carried by another key is a duplicate fact, not a second revocation.
+  const recarried = createRevocationEvent(revocation, { carrierSecret: nostrKey, createdAt: 1792240497, exp: timestamp(1792340496) });
+  assert.equal((await ingestion.ingest(recarried)).accepted, true);
+  assert.equal((await rows('SELECT * FROM revocations')).length, 1);
+  assert.equal((await rows('SELECT * FROM events')).length, 2);
+  const plc = signEvent({ kind: 8173, tags: [['t', namespace], ['t', `${namespace}/plc`], ['mosimo:exp', timestamp(1792340496)]] });
+  assert.match((await ingestion.ingest(plc)).message, /restricted/);
+  const forged = signEvent({ kind: 8173, tags: event.tags.map(tag => tag[0].startsWith('mosimo:ext:')
+    ? [tag[0], b64(cbor.encode({ notice: { body: { ...revocation.notice.body, effectiveAt: timestamp(1792240000) }, sig: revocation.notice.sig } }))] : tag) });
+  assert.match((await ingestion.ingest(forged)).message, /invalid/);
+  assert.equal((await rows('SELECT * FROM revocations')).length, 1);
+});
+
 test('malformed claimed BSAF import is fail-closed for atproto, ordinary BSAF without original still publishes', async () => {
   const base = await fixture();
-  const tag = `${namespace}:ext:dev.oriom.mosimo.defs#bsafV1`;
+  const tag = `mosimo:ext:${bsafType}`;
   for (const encoded of ['not-cbor', b64(cbor.encode({ original: null })), b64(cbor.encode(['invalid-fields']))]) {
     const event = signEvent({ ...base.event, tags: [...base.event.tags, [tag, encoded]] });
     assert.equal((await ingestion.ingest(event)).accepted, true);
     assert.equal((await rows('SELECT * FROM jobs WHERE event_id=$1', [event.id])).length, 0);
   }
-  const ordinary = await fixture({ extensions: [{ $type: 'dev.oriom.mosimo.defs#bsafV1', tags: ['bsaf:v1'], langs: [] }] });
+  const ordinary = await fixture({ extensions: [{ $type: bsafType, tags: ['bsaf:v1'], langs: [] }] });
   assert.equal((await process(ordinary)).status, 'validated');
   assert.equal((await rows('SELECT * FROM streams')).length, 3);
 });
@@ -369,7 +396,7 @@ test('re-signed changed content cannot bypass the signed MST and changed commit 
   assert.match((await job(content)).error, /MST root/);
   const commitBytes = cbor.encode({ ...source.commit, rev: '3jzfcijpj2z23' });
   const commit = { ...source, event: signEvent({ ...source.event,
-    tags: source.event.tags.map(tag => tag[0] === `${namespace}:commit` ? [tag[0], b64(commitBytes)] : tag) }) };
+    tags: source.event.tags.map(tag => tag[0] === 'mosimo:commit' ? [tag[0], b64(commitBytes)] : tag) }) };
   assert.equal((await process(commit)).status, 'retry');
   assert.match((await job(commit)).error, /Signature\/key state/);
   for (const table of ['commits', 'blocks', 'repos', 'streams']) assert.deepEqual(await rows(`SELECT * FROM ${table}`), []);
@@ -401,9 +428,9 @@ test('identity failures and bad repository signatures retry without canonical st
 test('malformed repository tags and validly signed invalid MST roots become invalid', async () => {
   const badTags = await fixture();
   badTags.event = signEvent({ ...badTags.event,
-    tags: badTags.event.tags.filter(tag => tag[0] !== `${namespace}:path`) });
+    tags: badTags.event.tags.filter(tag => tag[0] !== 'mosimo:rkey') });
   assert.equal((await process(badTags)).status, 'invalid');
-  assert.match((await job(badTags)).error, /path/);
+  assert.match((await job(badTags)).error, /rkey/);
   const badTree = await fixture({ index: 1, badRoot: true });
   assert.equal((await process(badTree)).status, 'invalid');
   assert.match((await job(badTree)).error, /MST root/);
@@ -557,7 +584,7 @@ test('Nostr-only BSAF relay accepts EVENT, forwards outbox and delivers live/his
   reader.send(['REQ', 'live-imports', { kinds: [1], '#t': [namespace], limit: 0 }]);
   assert.deepEqual(await reader.next(), ['EOSE', 'live-imports']);
   resolutionError = new Error('No PLC/root authorization available');
-  const source = await fixture({ extensions: [{ $type: 'dev.oriom.mosimo.defs#bsafV1', original: { uri: 'at://source/post' }, tags: ['bsaf:v1'] }] });
+  const source = await fixture({ extensions: [{ $type: bsafType, original: { uri: 'at://source/post' }, tags: ['bsaf:v1'] }] });
   const writer = await connect(t, app);
   writer.send(['EVENT', source.event]);
   const ack = await writer.next();
@@ -583,7 +610,7 @@ test('real relay EVENT acknowledgement is separate from repository validation an
     client.send(['EVENT', event]);
     const ack = await client.next();
     assert.deepEqual(ack.slice(0, 3), ['OK', event.id, false]);
-    assert.match(ack[3], /kind 1 or 5/);
+    assert.match(ack[3], /kind 1, 5 or 8173/);
   }
   assert.deepEqual(await rows('SELECT * FROM events'), []);
   const source = await fixture({ badRoot: true });
@@ -618,7 +645,7 @@ test('configured upstream WebSocket feeds signed events into real SQL ingestion 
   const [socket] = await connected;
   const [request] = await once(socket, 'message', { signal: AbortSignal.timeout(5000) });
   assert.deepEqual(JSON.parse(request.toString()), ['REQ', 'mosimo',
-    { kinds: [1], '#t': [namespace] }, { kinds: [5] }]);
+    { kinds: [1, 8173], '#t': [namespace] }, { kinds: [5] }]);
   const source = await fixture();
   socket.send(JSON.stringify(['EVENT', 'mosimo', source.event]));
   assert.equal((await delivered.promise).accepted, true);

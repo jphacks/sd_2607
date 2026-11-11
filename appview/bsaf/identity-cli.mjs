@@ -1,147 +1,202 @@
-import { mkdir, readFile, writeFile, rename, stat, open, unlink } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+// Offline issuance for the BSAF importer under dev.jisaku.mosimo.attest.
+//
+//   root (stratum 0, offline) --unlimited--> CA (stratum 1, issuerDomain) --keyValidity--> importer leaf (Nostr key)
+//
+// Nothing here needs a periodic refresh: the CA attestation has no expiry, the leaf is issued for
+// years, and revocation is a signed fact published only when something is revoked. All private
+// output stays in the private directory (default ./private/, override with MOSIMO_PRIVATE_DIR),
+// which must be ignored by Git and mode 0700. No key material is printed.
+import { mkdir, readFile, stat, open, rename } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRoot, createImporter, issueCertificate, createSnapshot, canonical,
-  timestamp, keyPublic, rootId, JMA_SELECTION, KIKIKURU_SELECTION, verifyImporterGenesis, verifyBinding,
-  verifyChain, verifySnapshot, certId, validateScope } from '../../pds/public-information.mjs';
+import { BLOCK, IMPORTER, REVOCATION, JMA_SELECTION, KIKIKURU_SELECTION, canonical, decodeCanonical, b64, unb64, hex, unhex, timestamp,
+  randomSecret, nostrPublicKey, createAttestation, validateAttestation, attestationId, verifyChain, createNotice, validateRevocation,
+  createRevocationList, decodeRevocationList, createImporter, validateImporterBlock, blockOf } from '../../pds/attest.mjs';
+import { encodeChain, loadCredentials } from './publisher.mts';
 
-// All private outputs are confined to this ignored directory; no key material is printed.
-const directory = fileURLToPath(new URL('./private/', import.meta.url));
-const orgId = 'mosimo-bsaf-importer';
-// No flags retains the historical five-type JMA scope, never the combined scope.
+const directory = process.env.MOSIMO_PRIVATE_DIR ? resolve(process.env.MOSIMO_PRIVATE_DIR) + '/' : fileURLToPath(new URL('./private/', import.meta.url));
+const DEFAULT_ORG = { orgId: 'oriom.dev:mosimo-bsaf-importer', orgName: 'Mosimo BSAF importer (not JMA)' };
+const DEFAULT_DAYS = 730;
+
 export function presetSelection(flags = []) {
-  if (flags.some(f => !['--jma', '--kikikuru'].includes(f)) || new Set(flags).size !== flags.length) throw new Error('Use --jma and/or --kikikuru');
-  return [...(flags.length === 0 || flags.includes('--jma') ? JMA_SELECTION : []),
-    ...(flags.includes('--kikikuru') ? KIKIKURU_SELECTION : [])].sort((a, b) => a.botDid.localeCompare(b.botDid));
+  const known = flags.filter(f => ['--jma', '--kikikuru'].includes(f));
+  if (new Set(known).size !== known.length) throw new Error('Duplicate preset flag');
+  // No preset flags retains the historical five-type JMA scope, never the combined scope.
+  return [...(known.length === 0 || known.includes('--jma') ? JMA_SELECTION : []),
+    ...(known.includes('--kikikuru') ? KIKIKURU_SELECTION : [])].sort((a, b) => a.botDid < b.botDid ? -1 : 1)
+    .map(e => ({ botDid: e.botDid, types: [...e.types] }));
 }
-function checkChain(certificate, roots, nowSeconds, selection) {
-  validateScope({ orgIds: [orgId], bsaf: selection });
-  for (const entry of selection) for (const type of entry.types) {
-    verifyChain([certificate], { roots, nowSeconds, botDid: entry.botDid, type, selection });
-  }
+function option(flags, name, fallback) {
+  const entry = flags.find(f => f.startsWith(`${name}=`));
+  return entry ? entry.slice(name.length + 1) : fallback;
 }
 const load = async name => JSON.parse(await readFile(join(directory, name), 'utf8'));
+const loadOptional = name => load(name).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
 async function writeDurable(path, data, flag = 'wx') {
   const file = await open(path, flag, 0o600);
   try { await file.writeFile(data); await file.sync(); } finally { await file.close(); }
 }
 async function syncDirectory() {
-  // Windows has no POSIX directory fsync; files themselves are flushed on both platforms.
   if (process.platform === 'win32') return;
   const handle = await open(directory, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
-async function save(name, value) {
-  await writeDurable(join(directory, name), `${JSON.stringify(value, null, 2)}\n`);
+async function save(name, value, { replace = false } = {}) {
+  const data = typeof value === 'string' || value instanceof Uint8Array ? value : `${JSON.stringify(value, null, 2)}\n`;
+  if (!replace) { await writeDurable(join(directory, name), data); }
+  else {
+    await writeDurable(join(directory, `${name}.tmp`), data, 'w');
+    await rename(join(directory, `${name}.tmp`), join(directory, name));
+  }
   await syncDirectory();
 }
-// Public export only: explicitly select known fields so a caller cannot export private-key fields.
-export function receiverConfigurations(root, snapshotSequence, selection) {
-  validateScope(root.scope);
-  const id = rootId(root.rootPubkey);
-  const url = new URL(root.snapshotUrl);
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash
-    || typeof root.enabled !== 'boolean' || !Number.isSafeInteger(root.minSequence) || root.minSequence < 1
-    || !Number.isSafeInteger(snapshotSequence) || snapshotSequence < root.minSequence) throw new Error('Invalid public export root/sequence');
-  const publicRoot = { rootPubkey: root.rootPubkey, enabled: root.enabled, scope: root.scope,
-    snapshotUrl: root.snapshotUrl, minSequence: snapshotSequence };
-  validateScope({ orgIds: [orgId], bsaf: selection });
-  const selected = selection.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type })));
-  if (!root.scope.orgIds.includes(orgId) || !selection.every(e => e.types.every(type =>
-    root.scope.bsaf.some(s => s.botDid === e.botDid && s.types.includes(type))))) throw new Error('Root does not permit selected importer scope');
-  const hex = value => Buffer.from(canonical(value)).toString('hex');
+const encodeSigned = value => b64(canonical(value, { maxBytes: 65536 }));
+const decodeSigned = value => decodeCanonical(unb64(value), { maxBytes: 65536 });
+const summary = attestation => ({ id: attestationId(attestation), issuer: hex(attestation.body.issuer), subject: hex(attestation.body.subject),
+  roles: attestation.body.roles, blocks: attestation.body.blocks.map(block => block.$type) });
+
+/** Public receiver exports. Only named public fields are copied, so a caller cannot leak secrets. */
+export function receiverConfigurations(root, domain, selection) {
+  validateImporterBlock({ $type: IMPORTER, sources: selection });
+  const publicRoot = { pubkey: root.pubkey, roles: root.roles, maxDepth: root.maxDepth, enabled: root.enabled ?? true, ...(root.name ? { name: root.name } : {}) };
+  if (!/^[0-9a-f]{64,66}$/.test(publicRoot.pubkey) || !Array.isArray(publicRoot.roles)) throw new Error('Invalid root settings');
   return {
-    android: { roots: [{ rootId: id, ...publicRoot }], selected },
-    pds: { publicInformation: { roots: [publicRoot], selection } },
-    esp32: `#pragma once\n// PUBLIC, operator-provisioned export. Not installed by this CLI.\n// Root fingerprint (SHA-256 of compressed public key): ${id}\n#define MESH_INGRESS_ROOT_PUBKEY ${JSON.stringify(publicRoot.rootPubkey)}\n#define MESH_INGRESS_SCOPE_CBOR_HEX "${hex(publicRoot.scope)}"\n#define MESH_INGRESS_SELECTED_CBOR_HEX "${hex(selection)}"\n#define MESH_INGRESS_SNAPSHOT_URL ${JSON.stringify(publicRoot.snapshotUrl)}\n#define MESH_INGRESS_MIN_SEQUENCE ${publicRoot.minSequence}ULL\n// Supply the verified public TLS CA before snapshot fetching; empty is fail-closed.\n#define MESH_INGRESS_SNAPSHOT_CA R"PEM()PEM"\n// No MESH_INGRESS_ENABLED or MESH_INGRESS_TRUST_CLOCK override.\n`,
+    pds: { publicInformation: { roots: [publicRoot], selection, revocationDomains: [domain] } },
+    android: { roots: [publicRoot], selected: selection.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))), revocationDomains: [domain] },
   };
 }
+
 export async function run(args) {
   const [command, ...rest] = args;
-  const acceptsPresets = ['root-create', 'issue-genesis', 'receiver-export'].includes(command);
-  const flags = acceptsPresets ? rest.filter(a => a.startsWith('--')) : [];
-  const positional = acceptsPresets ? rest.filter(a => !a.startsWith('--')) : rest;
-  if (positional.length > 1 || (command === 'receiver-export' && positional.length)) throw new Error('Unexpected arguments');
+  const flags = rest.filter(a => a.startsWith('--'));
+  const positional = rest.filter(a => !a.startsWith('--'));
   const [argument] = positional;
-  const selection = presetSelection(flags);
-  const scope = { orgIds: [orgId], bsaf: selection };
+  const now = Math.floor(Date.now() / 1000);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32' && ((await stat(directory)).mode & 0o077)) throw new Error('Private directory must be mode 0700');
-  const now = Math.floor(Date.now() / 1000);
   if (command === 'root-create') {
-    if (!argument || new URL(argument).protocol !== 'https:') throw new Error('Absolute HTTPS snapshot URL required');
-    const result = createRoot({ scope, snapshotUrl: argument });
-    await save('root-secret.json', result);
-    await save('roots.json', [result.root]);
-  } else if (command === 'importer-create') {
+    if (positional.length) throw new Error('root-create takes only --name=');
+    const secret = randomSecret(), pubkey = nostrPublicKey(secret);
+    const root = { pubkey: hex(pubkey), roles: ['attest', 'import'], maxDepth: 2, enabled: true, name: option(flags, '--name', 'Mosimo BSAF trust root') };
+    await save('root-secret.json', { secretKey: hex(secret), pubkey: hex(pubkey) });
+    await save('roots.json', [root]);
+    return { status: 'written', command, rootPubkey: root.pubkey };
+  }
+  if (command === 'ca-create') {
+    if (!argument || !/^[a-z0-9.-]+$/.test(argument)) throw new Error('ca-create needs the lowercase issuer DNS domain');
+    const { secretKey } = await load('root-secret.json');
+    const [root] = await load('roots.json');
+    const sources = presetSelection(flags);
+    const caSecret = randomSecret(), ca = nostrPublicKey(caSecret);
+    const attestation = createAttestation(unhex(secretKey), unhex(root.pubkey), {
+      subject: ca, owner: { id: option(flags, '--owner-id', 'oriom-mosimo-ca'), name: option(flags, '--owner-name', 'Oriom Mosimo CA') },
+      roles: ['attest', 'import'],
+      blocks: [{ $type: BLOCK.delegation, maxDepth: 1 }, { $type: BLOCK.issuerDomain, domain: argument }, { $type: IMPORTER, sources }],
+    });
+    // Pre-issued notice: the CA can revoke itself later without the offline root (revocation §3).
+    const notice = createNotice(unhex(secretKey), unhex(root.pubkey), { subject: ca, issuedAt: timestamp(now) });
+    await save('ca-secret.json', { secretKey: hex(caSecret), pubkey: hex(ca), domain: argument });
+    await save('ca-attestation.json', { attestation: encodeSigned(attestation), domain: argument, ...summary(attestation) });
+    await save('ca-revocation-notice.json', { notice: encodeSigned(notice), subject: hex(ca), form: 'pre-issued' });
+    return { status: 'written', command, caPubkey: hex(ca), attestationId: attestationId(attestation) };
+  }
+  if (command === 'importer-create') {
     const importer = createImporter({ endpoint: argument ?? 'https://pds.invalid' });
     await save('importer-secret.json', importer);
-    // Offline public request is the only file that needs to cross to the root environment.
-    await save('importer-request.json', { genesis: importer.genesis, binding: importer.binding, plcPubkey: keyPublic(importer.plcSecret) });
-  } else if (command === 'issue-genesis') {
-    // Explicit experimental genesis-only issuance, not PLC Directory authentication.
-    if (argument !== 'I-reviewed-organization-and-genesis') throw new Error('Explicit out-of-band organization/genesis review required');
-    const { secretKey, root } = await load('root-secret.json');
+    await save('importer-request.json', { did: importer.did, nostrPubkey: importer.nostrPubkey, atprotoPubkey: importer.atprotoPubkey, genesis: importer.genesis });
+    return { status: 'written', command, did: importer.did, nostrPubkey: importer.nostrPubkey };
+  }
+  if (command === 'issue') {
+    const { secretKey, pubkey } = await load('ca-secret.json');
+    const ca = await load('ca-attestation.json');
     const request = await load('importer-request.json');
-    const verified = verifyImporterGenesis(request);
-    const certificate = issueCertificate(secretKey, { subjectPubkey: verified.atprotoPubkey, subjectDid: verified.did,
-      orgId, orgName: 'Mosimo BSAF importer (not JMA)', scope, notBefore: timestamp(now), notAfter: timestamp(now + 30 * 86400) });
-    checkChain(certificate, [root], now, selection);
-    await save('certificate.json', certificate);
-    await save('issuance.json', { certId: certId(certificate), subjectDid: verified.did,
-      identityStatus: verified.status, organizationReview: 'operator-confirmed-out-of-band', issuedAt: timestamp(now) });
-  } else if (command === 'assemble') {
+    const sources = presetSelection(flags);
+    const days = Number(option(flags, '--days', String(DEFAULT_DAYS)));
+    if (!Number.isInteger(days) || days < 1 || days > 3660) throw new Error('--days must be 1..3660');
+    const subject = unhex(request.nostrPubkey);
+    const attestation = createAttestation(unhex(secretKey), unhex(pubkey), {
+      subject, owner: { id: option(flags, '--owner-id', request.did), name: option(flags, '--owner-name', 'Mosimo BSAF importer') },
+      roles: ['import'],
+      blocks: [
+        { $type: BLOCK.keyValidity, from: timestamp(now - 300), until: timestamp(now + days * 86400) },
+        { $type: BLOCK.organization, orgId: option(flags, '--org-id', DEFAULT_ORG.orgId), orgName: option(flags, '--org-name', DEFAULT_ORG.orgName) },
+        { $type: IMPORTER, sources },
+        { $type: BLOCK.trustLevel, level: 2, method: 'manual' },
+      ],
+    });
+    const roots = await load('roots.json');
+    const verified = verifyChain([decodeSigned(ca.attestation), attestation], { roots, at: now, now });
+    if (verified.status !== 'verified') throw new Error(`Issued chain does not verify: ${verified.status} ${verified.reason}`);
+    const notice = createNotice(unhex(secretKey), unhex(pubkey), { subject, issuedAt: timestamp(now) });
+    await save('leaf-attestation.json', { attestation: encodeSigned(attestation), validUntil: timestamp(now + days * 86400), ...summary(attestation) }, { replace: true });
+    await save('leaf-revocation-notice.json', { notice: encodeSigned(notice), subject: hex(subject), form: 'pre-issued' }, { replace: true });
+    return { status: 'written', command, attestationId: attestationId(attestation), validUntil: timestamp(now + days * 86400) };
+  }
+  if (command === 'assemble') {
     const importer = await load('importer-secret.json');
-    const certificate = await load('certificate.json');
+    const ca = decodeSigned((await load('ca-attestation.json')).attestation);
+    const leaf = decodeSigned((await load('leaf-attestation.json')).attestation);
     const roots = await load('roots.json');
-    const b = certificate.body;
-    if (b.subjectDid !== importer.did || b.subjectPubkey !== keyPublic(importer.atprotoSecret)) throw new Error('Leaf mismatch');
-    verifyBinding(importer.binding, { did: importer.did, atprotoPubkey: b.subjectPubkey, nostrPubkey: importer.binding.declaration.nostrPubkey });
-    checkChain(certificate, roots, now, b.scope.bsaf);
-    // Online worker gets neither PLC rotation secret nor root secret.
-    await save('credentials.json', { importer: { did: importer.did, atprotoSecret: importer.atprotoSecret,
-      nostrSecret: importer.nostrSecret, binding: importer.binding }, chain: [certificate] });
-  } else if (command === 'snapshot') {
-    const { secretKey, root } = await load('root-secret.json');
-    let previous = null;
-    try { previous = await load('snapshot-state.json'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    let revokedCertIds = previous?.body.revokedCertIds ?? [];
-    let revokedPubkeys = previous?.body.revokedPubkeys ?? [];
-    if (argument) {
-      // A complete explicit CRL file; verifySnapshot forbids forgetting old revocations.
-      const crl = JSON.parse(await readFile(resolve(argument), 'utf8'));
-      revokedCertIds = crl.revokedCertIds; revokedPubkeys = crl.revokedPubkeys;
+    const verified = verifyChain([ca, leaf], { roots, at: now, now });
+    if (verified.status !== 'verified' || verified.nowStatus !== 'valid') throw new Error(`Chain does not verify: ${verified.status} ${verified.reason}`);
+    if (hex(leaf.body.subject) !== importer.nostrPubkey) throw new Error('Leaf subject is not this importer');
+    // Online worker gets neither the PLC rotation secret, the CA secret nor the root secret.
+    const credentials = { importer: { did: importer.did, atprotoSecret: importer.atprotoSecret, nostrSecret: importer.nostrSecret }, chain: encodeChain([ca, leaf]) };
+    loadCredentials(credentials);
+    await save('credentials.json', credentials, { replace: true });
+    return { status: 'written', command, did: importer.did };
+  }
+  if (command === 'revoke') {
+    if (!argument || !/^[0-9a-f]{64,66}$/.test(argument)) throw new Error('revoke needs the subject public key (hex)');
+    const code = option(flags, '--reason', 'unspecified');
+    const ca = await load('ca-secret.json');
+    const root = await loadOptional('root-secret.json');
+    // The CA revokes its leaves; only the root can revoke the CA.
+    const issuer = argument === ca.pubkey ? root : ca;
+    if (!issuer) throw new Error('Revoking the CA requires root-secret.json');
+    const notice = createNotice(unhex(issuer.secretKey), unhex(issuer.pubkey), { subject: unhex(argument), issuedAt: timestamp(now), effectiveAt: timestamp(now), reason: { code } });
+    const revocation = { $type: REVOCATION, notice };
+    const facts = validateRevocation(revocation);
+    const list = (await loadOptional('revocations.json')) ?? [];
+    list.push({ revocation: encodeSigned(revocation), ...facts, effectiveAt: timestamp(now) });
+    await save('revocations.json', list, { replace: true });
+    return { status: 'written', command, revocationId: facts.id, next: 'run revocation-list and publish revocations.cbor' };
+  }
+  if (command === 'revocation-list') {
+    const ca = await load('ca-secret.json');
+    const entries = (await loadOptional('revocations.json')) ?? [];
+    const list = createRevocationList(unhex(ca.secretKey), unhex(ca.pubkey), { generatedAt: timestamp(now),
+      revocations: entries.map(entry => decodeSigned(entry.revocation)) });
+    const bytes = canonical(list, { maxBytes: 1048576 });
+    const decoded = decodeRevocationList(bytes);
+    if (!decoded.listSignatureValid || decoded.rejected.length) throw new Error('Generated list does not verify');
+    await save('revocations.cbor', bytes, { replace: true });
+    return { status: 'written', command, notices: entries.length, publishAt: `https://${ca.domain}/.well-known/mosimo/attest/revocations` };
+  }
+  if (command === 'receiver-export') {
+    const [root] = await load('roots.json');
+    const ca = await load('ca-attestation.json');
+    const selection = presetSelection(flags);
+    const caSources = blockOf(decodeSigned(ca.attestation), IMPORTER)?.sources ?? [];
+    for (const entry of selection) for (const type of entry.types) {
+      if (!caSources.some(s => s.botDid === entry.botDid && s.types.includes(type))) throw new Error(`CA scope does not permit ${entry.botDid} ${type}`);
     }
-    const sequence = Math.max(root.minSequence, (previous?.body.sequence ?? 0) + 1);
-    const snapshot = createSnapshot(secretKey, { sequence, issuedAt: timestamp(now), validUntil: timestamp(now + 3600), revokedCertIds, revokedPubkeys });
-    await verifySnapshot(snapshot, { root, nowSeconds: now, previous });
-    // Exclusive lock prevents two scheduled CLI jobs from reusing sequence.
-    const lock = join(directory, 'snapshot.lock');
-    await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
-    try {
-      const current = await load('snapshot-state.json').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-      if ((current?.body.sequence ?? 0) !== (previous?.body.sequence ?? 0)) throw new Error('Concurrent snapshot update; retry');
-      await writeDurable(join(directory, 'snapshot-state.tmp'), JSON.stringify(snapshot), 'w');
-      await rename(join(directory, 'snapshot-state.tmp'), join(directory, 'snapshot-state.json'));
-      await syncDirectory();
-      await writeDurable(join(directory, 'snapshot.cbor.tmp'), canonical(snapshot), 'w');
-      await rename(join(directory, 'snapshot.cbor.tmp'), join(directory, 'snapshot.cbor'));
-      await syncDirectory();
-    } finally { await unlink(lock); }
-  } else if (command === 'receiver-export') {
+    const files = receiverConfigurations(root, ca.domain, selection);
+    await save('pds-public-information.json', files.pds, { replace: true });
+    await save('mosimo-public-trust.json', files.android, { replace: true });
+    return { status: 'written', command, pairs: files.android.selected.length };
+  }
+  if (command === 'verify') {
+    const credentials = loadCredentials(await load('credentials.json'));
     const roots = await load('roots.json');
-    if (!Array.isArray(roots) || roots.length !== 1) throw new Error('One provisioned root required');
-    const snapshot = await load('snapshot-state.json');
-    await verifySnapshot(snapshot, { root: roots[0], nowSeconds: now });
-    const files = receiverConfigurations(roots[0], snapshot.body.sequence, selection);
-    await save('mosimo-public-trust.json', files.android);
-    await save('pds-public-information.json', files.pds);
-    await writeDurable(join(directory, 'IngressTrust.generated.h'), files.esp32);
-    await syncDirectory();
-  } else throw new Error('Use root-create HTTPS_URL | importer-create HTTPS_PDS | issue-genesis I-reviewed-organization-and-genesis | assemble | snapshot [COMPLETE_CRL_JSON] | receiver-export; root-create, issue-genesis and receiver-export accept --jma and/or --kikikuru (no flags = historical JMA only)');
-  return { status: 'written-to-private-directory', command };
+    const verified = verifyChain(credentials.attestations, { roots, at: now, now });
+    const leaf = credentials.attestations[credentials.attestations.length - 1];
+    return { status: verified.status, nowStatus: verified.nowStatus, reason: verified.reason, leaf: summary(leaf),
+      validUntil: blockOf(leaf, BLOCK.keyValidity)?.until ?? null };
+  }
+  throw new Error('Commands: root-create [--name=] | ca-create DOMAIN [--jma] [--kikikuru] | importer-create HTTPS_PDS | issue [--jma] [--kikikuru] [--days=N] [--org-id=] [--org-name=] | assemble | revoke PUBKEY_HEX [--reason=code] | revocation-list | receiver-export [--jma] [--kikikuru] | verify');
 }
-if (import.meta.main) run(process.argv.slice(2)).then(result => console.error(JSON.stringify(result))).catch(() => {
-  console.error('{"status":"identity-cli-failed","hint":"Check command, private files, review acknowledgement, and permissions; existing keys are never overwritten"}');
+if (import.meta.main) run(process.argv.slice(2)).then(result => console.log(JSON.stringify(result))).catch(error => {
+  console.error(JSON.stringify({ status: 'identity-cli-failed', reason: error.message }));
   process.exitCode = 1;
 });

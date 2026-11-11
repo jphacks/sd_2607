@@ -6,10 +6,13 @@ import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { createPriorityPolicy } from './network.mjs';
 import { parseNetworkJson } from './identity.mjs';
+import { TAG } from './repository.mjs';
+import { CONTROL_KIND } from './attest.mjs';
 
 const defaults = { maxEventBytes: 131072, maxSubscriptions: 20, maxResults: 500, maxBufferedBytes: 4194304 };
 const hex = /^[0-9a-f]{64}$/;
-const visible = '(e.kind = 5 OR NOT EXISTS (SELECT 1 FROM deletions d WHERE d.event_id = e.id AND d.pubkey = e.pubkey))';
+const relayKinds = `(1, 5, ${CONTROL_KIND})`;
+const visible = '(e.kind <> 1 OR NOT EXISTS (SELECT 1 FROM deletions d WHERE d.event_id = e.id AND d.pubkey = e.pubkey))';
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 class RequestError extends Error {
@@ -178,7 +181,8 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       res.writeHead(200, { 'content-type': 'application/nostr+json', 'access-control-allow-origin': '*' });
       return res.end(JSON.stringify({ name: 'mosimo', supported_nips: [1, 9, 11],
         limitation: { max_message_length: options.maxEventBytes, max_subscriptions: options.maxSubscriptions, max_limit: options.maxResults },
-        mosimo: { version: 1, wire: 1, priority_order: ['priority-v1'], kinds: [1, 5], publicTextOnly: true, blobs: false,
+        mosimo: { protocol: 'dev.jisaku.mosimo', v: '1', tag: TAG, priority_order: ['priority-v1'], kinds: [1, 5, CONTROL_KIND],
+                  control: [`${TAG}/revocation`], publicTextOnly: true, blobs: false,
                   groups: (options.groups ?? []).map(({ id, endpoint }) => ({ id, endpoint })) } }));
     }
     if (url.pathname === '/.well-known/did.json') {
@@ -358,7 +362,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         const params = [sub.cursor.toString()];
         const where = filterSql(filter, params, sqlite);
         params.push(limit);
-        const rows = await query(`SELECT e.id, e.event FROM events e WHERE e.arrival <= $1 AND e.kind IN (1, 5) AND ${visible} AND (${where}) ORDER BY e.created_at DESC, e.id ASC LIMIT $${params.length}`, params);
+        const rows = await query(`SELECT e.id, e.event FROM events e WHERE e.arrival <= $1 AND e.kind IN ${relayKinds} AND ${visible} AND (${where}) ORDER BY e.created_at DESC, e.id ASC LIMIT $${params.length}`, params);
         for (const row of rows) found.set(row.id, row.event);
       }
       const events = [...found.values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id)).slice(0, options.maxResults);
@@ -376,7 +380,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         if (value.length !== 3 || typeof value[1] !== 'string' || !/^[\x20-\x7e]{1,64}$/.test(value[1]) || !isObject(request)
           || Object.keys(request).sort().join(',') !== 'filter,order' || request.order !== 'priority-v1') throw invalid('Invalid priority request');
         const filter = filterValue(request.filter, options.maxResults);
-        if (filter.kinds?.length !== 1 || filter.kinds[0] !== 1 || !filter['#t']?.includes('mosimo.oriom.dev')
+        if (filter.kinds?.length !== 1 || filter.kinds[0] !== 1 || !filter['#t']?.includes(TAG)
           || !Number.isInteger(filter.limit) || filter.limit < 1 || filter.limit > Math.min(100, options.maxResults)
           || Object.keys(filter).some(key => !['ids', 'authors', 'kinds', 'since', 'until', 'limit'].includes(key) && !/^#[a-zA-Z]$/.test(key))) throw invalid('Invalid priority filter');
         if (subscriptions.has(id) || subscriptions.size >= options.maxSubscriptions || priorityBusy) throw invalid('Priority request capacity or ID conflict');
@@ -403,15 +407,13 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         }
         if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
         ranked.sort((a, b) => b.priority - a.priority || b.event.created_at - a.event.created_at || a.event.id.localeCompare(b.event.id));
-        // Later candidates can expose sticky conflicts in earlier ones. Recheck the entire
-        // ordering against current durable trust, not just the selected/newest prefix.
+        // A revocation stored during the scan must not leave a now-revoked import ranked first.
         const recheck = await priorityPolicy.capture();
         for (const { event, priority } of ranked) {
           if (stopped || finite.cancelled) return;
           if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
           if (await recheck(event) !== priority) throw invalid('Priority authorization changed during scan');
         }
-        recheck.assertFresh();
         if (performance.now() > deadline) throw invalid('Priority computation budget exceeded');
         if (stopped || finite.cancelled) return;
         for (const { event } of ranked.slice(0, filter.limit)) if (!sendJson(['EVENT', id, event])) return;
@@ -437,8 +439,8 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         }
         if (value[0] === 'EVENT' && value.length === 2) {
           const event = value[1];
-          if (!isObject(event) || !hex.test(event.id) || ![1, 5].includes(event.kind)) {
-            return sendJson(['OK', typeof event?.id === 'string' ? event.id.slice(0, 64) : '', false, 'invalid: expected kind 1 or 5 event']);
+          if (!isObject(event) || !hex.test(event.id) || ![1, 5, CONTROL_KIND].includes(event.kind)) {
+            return sendJson(['OK', typeof event?.id === 'string' ? event.id.slice(0, 64) : '', false, `invalid: expected kind 1, 5 or ${CONTROL_KIND} event`]);
           }
           try {
             const result = await ingest(event);
@@ -480,7 +482,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         const rows = await query(`SELECT e.id, e.event, CAST(e.arrival AS text) AS arrival, ${visible} AS visible FROM events e WHERE e.arrival > $1 ORDER BY e.arrival LIMIT $2`, [sub.cursor.toString(), options.maxResults]);
         for (const row of rows) {
           sub.cursor = BigInt(row.arrival);
-          if (row.visible && [1, 5].includes(row.event.kind) && sub.filters.some(filter => matches(row.event, filter))) {
+          if (row.visible && [1, 5, CONTROL_KIND].includes(row.event.kind) && sub.filters.some(filter => matches(row.event, filter))) {
             if (!sendJson(['EVENT', id, row.event])) return;
           }
         }
@@ -556,7 +558,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
   }
 
   let closePromise;
-  return { server, close() {
+  return { server, priorityDomains: priorityPolicy.domains, close() {
     closePromise ??= (async () => {
       closing = true;
       for (const ws of connections) ws.terminate();

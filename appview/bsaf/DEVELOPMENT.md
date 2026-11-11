@@ -19,7 +19,7 @@ services.mosimo-bsaf = {
 
 ## 署名付き再配信の個別有効化
 
-collectorは既存BSAF原投稿の収集・表示を担当し、投稿の変換・再配信は行いません。別プロセスのpublisherが、同じHappyViewのSQLite DBから選択した原投稿を読み、[wire-v1共有実装](../../pds/public-information.mjs)に基づく署名付きNostr `EVENT` を設定先PDSへ送ります。BSAF転載イベントはNostr経路のみで扱い、atprotoのrepo・firehoseへは公開しません。
+collectorは既存BSAF原投稿の収集・表示を担当し、投稿の変換・再配信は行いません。別プロセスのpublisherが、同じHappyViewのSQLite DBから選択した原投稿を読み、[鍵署名チェーン共有実装](../../pds/attest.mjs)に基づく署名付きNostr `EVENT` を設定先PDSへ送ります。BSAF転載イベントはNostr経路のみで扱い、atprotoのrepo・firehoseへは公開しません。
 
 収集元の設定例は次のとおりです。この例はデプロイ結果を示すものではありません。
 

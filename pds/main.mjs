@@ -4,7 +4,7 @@ import { openStore } from './store.mjs';
 import { createIdentityResolver } from './identity.mjs';
 import { createIngestion } from './ingest.mjs';
 import { createServer } from './server.mjs';
-import { startNetwork } from './network.mjs';
+import { startNetwork, createRevocationRefresher } from './network.mjs';
 
 const config = validateConfig(JSON.parse(await readFile(process.env.CONFIG_FILE, 'utf8')));
 if (!process.env.DATABASE_PATH && !process.env.DATABASE_URL) throw new Error('DATABASE_PATH or DATABASE_URL is required');
@@ -15,6 +15,11 @@ const resolveIdentity = createIdentityResolver(config);
 const { ingest, processOne } = createIngestion({ config, store, resolveIdentity });
 const network = startNetwork({ config, store, ingest });
 const app = createServer({ config, store, ingest, resolveIdentity, onNotify: network.onNotify });
+// Revocation lists of every issuer domain seen in authorized chains (plus configured domains).
+const refresher = createRevocationRefresher({ store, domains: app.priorityDomains });
+const refreshTimer = setInterval(() => refresher.refresh().catch(error => console.error('Revocation refresh:', error.message)), 60000);
+refreshTimer.unref();
+refresher.refresh().catch(error => console.error('Revocation refresh:', error.message));
 let stopping = false;
 let worker;
 async function runWorker() {
@@ -32,6 +37,7 @@ async function shutdown() {
   stopping = true;
   const deadline = setTimeout(() => process.exit(1), 30000);
   deadline.unref();
+  clearInterval(refreshTimer);
   await app.close();
   await network.close();
   await worker;
