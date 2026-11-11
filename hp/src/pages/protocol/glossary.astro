@@ -1,0 +1,32 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { glossaryDoc } from '../../lib/specs';
+import '../../styles/protocol.scss';
+
+export const prerender = true;
+
+const { Content } = glossaryDoc();
+---
+<Layout title="用語集 — Mosimo Protocol" description="もしもプロトコルの仕様で用いる用語の定義。発信者、発信地点、影響範囲、有効期間、配送期限、信頼の起点、鍵署名、失効通知など。">
+  <main class="spec">
+    <header class="spec-head">
+      <div class="wrap">
+        <nav class="crumbs" aria-label="パンくず"><a href="/protocol/">PROTOCOL</a><span aria-hidden="true">/</span><span aria-current="page">用語集</span></nav>
+        <div class="head-grid">
+          <div>
+            <span class="nsid">GLOSSARY</span>
+            <h1>用語集<small>Terminology</small></h1>
+            <p class="summary">仕様の全文書が共有する用語の定義である。各項目は定義と、同一視を避けるべき概念を示す。</p>
+          </div>
+        </div>
+      </div>
+    </header>
+    <div class="spec-body">
+      <div class="wrap" style="grid-template-columns: 1fr">
+        <article class="main doc glossary-doc">
+          <Content />
+        </article>
+      </div>
+    </div>
+  </main>
+</Layout>

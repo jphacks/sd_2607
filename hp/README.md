@@ -8,6 +8,17 @@ npm run dev
 npm run check
 ```
 
+## プロトコル仕様ページ
+
+`/protocol/` 以下は `../protocol/mosimo/**/README.md` をビルド時に `import.meta.glob` で直接読み込んで生成します（`src/lib/specs.ts`）。仕様の本文はリポジトリの README が唯一のソースであり、`hp/` 側には複製を置きません。
+
+- `src/lib/remark-protocol.mjs` が、先頭の見出しと「識別子:」行、「未確定事項」の節を除き、mermaid を SVG に変換し（`beautiful-mermaid`）、README 間の相対リンクをサイト内 URL に書き換えます。
+- 各ページの要約・要点・前提関係・分類は `src/data/protocols.ts` に置きます。仕様を追加したらここにも項目を加えてください。
+- Lexicon JSON（`lexicon.json`、`post.json`、`getFeed.json`）は `src/pages/protocol/[...path].json.ts` が同じパスでそのまま配信します。
+- 用語集 `/protocol/glossary/` はリポジトリ直下の `CONTEXT.md` から生成します。
+
+Cloudflare Workers 向けの `npm run build` は、仕様ページを事前生成するため workerd を起動します。NixOS では npm が配る workerd がそのままでは動かないため、`patchelf` で interpreter を書き換えた複製を用意し、`MINIFLARE_WORKERD_PATH` で指定してください。GitHub Pages 向けの `npm run build:pages` と `npm run check` には不要です。
+
 ## GitHub Pages
 
 `npm run build:pages` で `dist/` に静的サイトを生成します。`.github/workflows/hp.yml` は `main` へのプッシュ時に `hp/` またはワークフローに変更があれば、サイトをビルドして GitHub Pages にデプロイします。手動実行もできます。
