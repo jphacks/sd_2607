@@ -15,7 +15,7 @@ SwiftUI port of the Android app (`apps/android`, 0.2.2 feature set) for iOS 17+,
 ```sh
 mise run test      # MosimoCore unit tests on the Mac (Android/ESP32 fixtures read in place)
 mise run generate  # Mosimo.xcodeproj from project.yml (XcodeGen; the project is not committed)
-mise run build     # device build (automatic signing, team 9GCZ395FHV)
+mise run build     # device build (automatic signing, team 356F93V4HL, bundle dev.jisaku.mosimo.dev)
 mise run install   # build + install on every paired iPhone/iPad
 ```
 
@@ -24,7 +24,7 @@ The trust roots ship from `apps/android/mesh-android/src/main/assets/mosimo-publ
 ### Device test loop (DEBUG builds only)
 
 ```sh
-xcrun devicectl device process launch --console --terminate-existing --device <udid> dev.jisaku.mosimo -- \
+xcrun devicectl device process launch --console --terminate-existing --device <udid> dev.jisaku.mosimo.dev -- \
   -mosimo.test.relays wss://pds.oriom.dev -mosimo.test.post "テスト"
 ```
 

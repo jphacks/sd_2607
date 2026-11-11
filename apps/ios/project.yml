@@ -9,7 +9,7 @@ packages:
     path: MosimoCore
 settings:
   base:
-    DEVELOPMENT_TEAM: 9GCZ395FHV
+    DEVELOPMENT_TEAM: 356F93V4HL
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: 0.1.0
@@ -27,7 +27,7 @@ targets:
       - package: MosimoCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.jisaku.mosimo
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jisaku.mosimo.dev
         PRODUCT_NAME: Mosimo
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
