@@ -25,11 +25,11 @@ class RelaySubscriptionTest {
         val session = RelaySubscription()
         val req = json.readTree(session.open(7))
         assertEquals("REQ", req[0].textValue())
-        assertEquals("mndt-7", req[1].textValue())
+        assertEquals("mosimo-7", req[1].textValue())
         assertEquals(1, req[2]["kinds"][0].intValue())
         assertEquals(RelaySubscription.TAG, req[2]["#t"][0].textValue())
         assertEquals(32, req[2]["limit"].intValue())
-        assertEquals("[\"CLOSE\",\"mndt-7\"]", session.close())
+        assertEquals("[\"CLOSE\",\"mosimo-7\"]", session.close())
         assertNull(session.close())
     }
 
@@ -66,24 +66,24 @@ class RelaySubscriptionTest {
     @Test fun wrongSubscriptionOrGenerationCannotDisplayOrEndLiveSession() {
         val session = opened()
         val first = frame(session, event())
-        assertNull(session.receive(1, first.replace("mndt-1", "other"), 0))
+        assertNull(session.receive(1, first.replace("mosimo-1", "other"), 0))
         session.disconnect()
         session.open(2)
         assertNull(session.receive(1, first, 0))
         assertNull(session.receive(2, first, 0))
-        assertNull(session.receive(1, "[\"CLOSED\",\"mndt-2\",\"old\"]", 0))
-        assertEquals("mndt-2", session.subscriptionId)
+        assertNull(session.receive(1, "[\"CLOSED\",\"mosimo-2\",\"old\"]", 0))
+        assertEquals("mosimo-2", session.subscriptionId)
         assertTrue(session.events().isEmpty())
     }
 
     @Test fun eoseKeepsLiveEventsAndClosedStopsOnlyMatchingSubscription() {
         val session = opened()
-        assertEquals(RelayReply.Eose, session.receive(1, "[\"EOSE\",\"mndt-1\"]", 0))
+        assertEquals(RelayReply.Eose, session.receive(1, "[\"EOSE\",\"mosimo-1\"]", 0))
         assertTrue(session.eose)
         assertNotNull(session.receive(1, frame(session, event()), 0))
         assertNull(session.receive(1, "[\"CLOSED\",\"other\",\"blocked\"]", 0))
         val old = frame(session, event(1))
-        assertEquals(RelayReply.Closed, session.receive(1, "[\"CLOSED\",\"mndt-1\",\"blocked\"]", 0))
+        assertEquals(RelayReply.Closed, session.receive(1, "[\"CLOSED\",\"mosimo-1\",\"blocked\"]", 0))
         assertNull(session.subscriptionId)
         assertNull(session.receive(1, old, 0))
         assertEquals(RelayReply.Ok("id", true), session.receive(1, "[\"OK\",\"id\",true,\"saved\"]", 0))
@@ -106,7 +106,7 @@ class RelaySubscriptionTest {
         assertFalse(online.relayAccepted)
         // Hide-expired filter input: online events get the same signed-deadline verdict; tagless ones stay UNKNOWN.
         val clock = MeshEngine(ClockConfidence.TRUSTED)
-        assertEquals(DeliveryDeadline.EXPIRED, mergePostViews(emptyList(), session.events(), "ws://relay") { clock.deadline(it, Long.MAX_VALUE) }.single().deliveryDeadline)
+        assertEquals(DeliveryDeadline.EXPIRED, mergePostViews(emptyList(), session.events(), "ws://relay", deadline = { clock.deadline(it, Long.MAX_VALUE) }).single().deliveryDeadline)
         assertEquals(DeliveryDeadline.UNKNOWN, clock.deadline(a.copy(tags = emptyList()), Long.MAX_VALUE))
     }
 
@@ -116,7 +116,7 @@ class RelaySubscriptionTest {
         assertTrue(runCatching { session.receive(1, "日".repeat(90_000), 0) }.isFailure)
         val original = event(large = true)
         val text = frame(session, original)
-        assertTrue(text.toByteArray().size > Wire.MAX_BYTES)
+        assertTrue(text.toByteArray().size > 32_768)
         assertNotNull(session.receive(1, text, 0))
     }
 
@@ -124,11 +124,11 @@ class RelaySubscriptionTest {
         val session = opened()
         // One prolific author's backlog is history, not a flood.
         repeat(20) { assertNotNull(session.receive(1, frame(session, event(100 + it)), 0)) }
-        session.receive(1, "[\"EOSE\",\"mndt-1\"]", 0)
+        session.receive(1, "[\"EOSE\",\"mosimo-1\"]", 0)
         repeat(12) { assertNotNull(session.receive(1, frame(session, event(it)), 0)) }
         assertNull(session.receive(1, frame(session, event(12)), 0))
         session.disconnect(); session.open(2)
-        session.receive(2, "[\"EOSE\",\"mndt-2\"]", 0)
+        session.receive(2, "[\"EOSE\",\"mosimo-2\"]", 0)
         assertNull(session.receive(2, frame(session, event(12)), 0))
         assertNotNull(session.receive(2, frame(session, event(12)), 60_000))
         val flood = opened()
@@ -146,7 +146,7 @@ class RelaySubscriptionTest {
             session.disconnect()
             assertNotNull(session.open(generation))
             backlog.forEach { assertNull(session.receive(generation, frame(session, it), 0, setOf(event(99).id))) }
-            assertEquals(RelayReply.Eose, session.receive(generation, "[\"EOSE\",\"mndt-$generation\"]", 0))
+            assertEquals(RelayReply.Eose, session.receive(generation, "[\"EOSE\",\"mosimo-$generation\"]", 0))
         }
         assertEquals(backlog, session.events())
         assertNotNull(session.receive(60, frame(session, event(8)), 0))
@@ -157,12 +157,6 @@ class RelaySubscriptionTest {
         val ok = "[\"OK\",\"${"a".repeat(64)}\",true,\"\"]"
         repeat(RelaySubscription.MAX_FRAMES_PER_MINUTE * 2) { assertEquals(RelayReply.Ok("a".repeat(64), true), session.receive(1, ok, 0)) }
         assertNull(session.receive(1, "[\"NOTICE\",\"still within window\"]", 0))
-    }
-
-    @Test fun onlyUntouchedOldDefaultRelaysMigrate() {
-        assertEquals("wss://pds.oriom.dev", migrateDefaultRelays(listOf("wss://relay.damus.io", "wss://nos.lol"), migrated = false).first())
-        assertEquals(listOf("wss://nos.lol"), migrateDefaultRelays(listOf("wss://nos.lol"), migrated = false))
-        assertEquals(listOf("wss://nos.lol", "wss://relay.damus.io"), migrateDefaultRelays(listOf("wss://nos.lol", "wss://relay.damus.io"), migrated = false))
     }
 
     @Test fun eventCountCapClosesRetrievalWithoutEvictionOrMeshInsertion() {
@@ -226,7 +220,7 @@ class RelaySubscriptionTest {
             assertEquals(RelayReply.Eose, replies.poll(5, TimeUnit.SECONDS))
             assertEquals(RelayReply.Event(live), replies.poll(5, TimeUnit.SECONDS))
             ws.send(checkNotNull(session.close()))
-            assertEquals("[\"CLOSE\",\"mndt-42\"]", serverFrames.poll(5, TimeUnit.SECONDS))
+            assertEquals("[\"CLOSE\",\"mosimo-42\"]", serverFrames.poll(5, TimeUnit.SECONDS))
             session.disconnect()
             ws.close(1000, null)
         } finally {
@@ -262,7 +256,7 @@ class RelaySubscriptionTest {
                     override fun onOpen(webSocket: WebSocket, response: Response) { webSocket.send(checkNotNull(session.open(generation))) }
                     override fun onMessage(webSocket: WebSocket, text: String) { session.receive(generation, text, 0)?.let(replies::add) }
                 })
-                assertEquals("mndt-$generation", json.readTree(serverFrames.poll(5, TimeUnit.SECONDS))[1].textValue())
+                assertEquals("mosimo-$generation", json.readTree(serverFrames.poll(5, TimeUnit.SECONDS))[1].textValue())
                 assertEquals(RelayReply.Closed, replies.poll(5, TimeUnit.SECONDS))
                 assertEquals(RelayReply.Ok("posted-id", false), replies.poll(5, TimeUnit.SECONDS))
                 assertNull(session.subscriptionId)

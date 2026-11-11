@@ -31,7 +31,7 @@ class PublicDownloadTest {
         assertEquals("REQ", f[0].textValue())
         assertEquals(p[2]["filter"], f[2])
         assertEquals(32, f[2]["limit"].intValue())
-        assertEquals("mosimo.oriom.dev", f[2]["#t"][0].textValue())
+        assertEquals("mosimo.jisaku.dev", f[2]["#t"][0].textValue())
     }
 
     private fun fetch(mode: String): Pair<PublicDownload.Batch, List<String>> = runBlocking {
@@ -75,7 +75,7 @@ class PublicDownloadTest {
         assertEquals(listOf(event), batch.events)
         assertNull(PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
         assertEquals(Instant.ofEpochMilli(1792368000000), PublicDownload.ingressClock(ClockConfidence.TRUSTED, 1792368000000))
-        val decision = PublicIngress.verify(event, PublicIngress.Config(), PublicIngress.Memory(), PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
+        val decision = PublicIngress.verify(event, PublicIngress.Config(), PublicIngress.RevocationStore(), PublicDownload.ingressClock(ClockConfidence.UNKNOWN, 1792368000000))
         assertNull(decision.receipt)
     }
 
@@ -146,7 +146,7 @@ class PublicDownloadTest {
         assertNull(pages.failure)
         assertEquals(events.drop(32), pages.events)
         assertEquals(listOf(base - 31, base - 130), filters.map { it["until"].longValue() })
-        assertTrue(filters.all { it["limit"].intValue() == 100 && it["#t"][0].textValue() == "mosimo.oriom.dev" })
+        assertTrue(filters.all { it["limit"].intValue() == 100 && it["#t"][0].textValue() == "mosimo.jisaku.dev" })
     }
 
     @Test fun priorityBatchDoesNotSeedCursorAndShortFirstBatchStops() {
@@ -178,32 +178,4 @@ class PublicDownloadTest {
         assertEquals(history.subList(32, 131), pages.events)
     }
 
-    @Test fun snapshotTransportRequiresCborSuccessHttpsAndBoundedBody() {
-        val root = PublicIngress.Root("00".repeat(32), "", true, PublicIngress.Scope(emptySet(), emptySet()), "https://trust.example.invalid/snapshot.cbor", 1)
-        fun client(status: Int, contentType: String, bytes: ByteArray) = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-            .addInterceptor { chain -> Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("test")
-                .body(bytes.toResponseBody(contentType.toMediaType())).build() }.build()
-        assertArrayEquals(byteArrayOf(1, 2), PublicDownload.snapshot(client(200, "application/cbor", byteArrayOf(1, 2)), root))
-        for ((status, type, bytes) in listOf(Triple(302, "application/cbor", byteArrayOf(1)), Triple(200, "application/json", byteArrayOf(1)),
-            Triple(200, "application/cbor", ByteArray(32769))))
-            assertThrows(Exception::class.java) { PublicDownload.snapshot(client(status, type, bytes), root) }
-        assertThrows(Exception::class.java) { PublicDownload.snapshot(client(200, "application/cbor", byteArrayOf(1)), root.copy(snapshotUrl = "http://trust.example.invalid/snapshot.cbor")) }
-    }
-
-    @Test fun encryptedStateHistoryIsOptionalButMalformedHistoryNeverResetsIt() {
-        assertEquals(PublicIngress.Memory(), readPublicTrust(null))
-        val n = json.createObjectNode()
-        val id = "ab".repeat(32)
-        n.putObject("snapshots").put(id, Base64.getEncoder().encodeToString(byteArrayOf(1, 2)))
-        val serial = "02" + "ab".repeat(32) + ":" + "cd".repeat(16)
-        n.putObject("serials").put(serial, "ef".repeat(32))
-        val old = readPublicTrust(n)
-        val roundTrip = readPublicTrust(json.readTree(json.writeValueAsBytes(n)))
-        assertArrayEquals(old.snapshots[id], roundTrip.snapshots[id])
-        assertEquals(old.serials, roundTrip.serials)
-        n.withObject("serials").put(serial, "equivocation")
-        assertEquals("equivocation", readPublicTrust(n).serials[serial])
-        n.withObject("serials").put(serial, "bad")
-        assertThrows(Exception::class.java) { readPublicTrust(n) }
-    }
 }

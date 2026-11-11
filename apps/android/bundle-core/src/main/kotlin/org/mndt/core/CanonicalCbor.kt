@@ -53,7 +53,12 @@ object CanonicalCbor {
         return out.toByteArray()
     }
 
-    fun decode(bytes: ByteArray): Any? {
+    /**
+     * [canonical] (the default) additionally requires the bytes to be the deterministic re-encoding of the value,
+     * which signed objects and mesh payloads must satisfy. Exchange messages from other implementations are
+     * decoded leniently (definite lengths only; floats, tags other than CID and duplicate keys still rejected).
+     */
+    fun decode(bytes: ByteArray, canonical: Boolean = true): Any? {
         require(bytes.size <= MAX_BYTES) { "CBOR size limit" }
         var pos = 0
         var items = 0
@@ -102,8 +107,54 @@ object CanonicalCbor {
             }
         }
         val value = read(0)
-        require(pos == bytes.size && encode(value).contentEquals(bytes)) { "Non-canonical/trailing CBOR" }
+        require(pos == bytes.size) { "Trailing CBOR" }
+        require(!canonical || encode(value).contentEquals(bytes)) { "Non-canonical CBOR" }
         return value
+    }
+
+    /**
+     * Length of the first complete CBOR data item in [bytes] starting at [from], or null while it is still incomplete.
+     * Used to cut CBOR sequences (RFC 8742) on byte streams. Throws when the head is malformed, indefinite, or claims
+     * more than [limit] bytes, so the link can close rather than resynchronize.
+     */
+    fun itemLength(bytes: ByteArray, from: Int, end: Int, limit: Int): Int? {
+        var at = from
+        var depth = 0
+        fun need(n: Int): Boolean = at + n <= end
+        // Each pending container contributes its remaining item count; -1 marks a map value pair count already doubled.
+        val pending = ArrayDeque<Long>()
+        pending.addLast(1)
+        while (pending.isNotEmpty()) {
+            require(at - from <= limit) { "Message exceeds limit" }
+            if (!need(1)) return null
+            val head = bytes[at].toInt() and 255
+            val major = head ushr 5
+            val ai = head and 31
+            require(ai != 31) { "Indefinite CBOR" }
+            val width = when (ai) { in 0..23 -> 0; 24 -> 1; 25 -> 2; 26 -> 4; 27 -> 8; else -> error("Reserved CBOR") }
+            if (!need(1 + width)) return null
+            var n = 0L
+            for (i in 0 until width) {
+                val b = bytes[at + 1 + i].toLong() and 255
+                require(n <= (Long.MAX_VALUE - b) / 256) { "CBOR integer overflow" }
+                n = n * 256 + b
+            }
+            if (width == 0) n = ai.toLong()
+            at += 1 + width
+            val top = pending.removeLast() - 1
+            if (top > 0) pending.addLast(top)
+            when (major) {
+                0, 1 -> Unit
+                2, 3 -> { require(n <= limit) { "Message exceeds limit" }; if (!need(n.toInt())) return null; at += n.toInt() }
+                4 -> { require(n <= limit) { "CBOR container limit" }; if (n > 0) pending.addLast(n) }
+                5 -> { require(n <= limit / 2) { "CBOR container limit" }; if (n > 0) pending.addLast(n * 2) }
+                6 -> pending.addLast(1)
+                7 -> require(ai in 20..23 || ai == 24) { "Unsupported CBOR simple value" }
+            }
+            require(++depth <= 1_000_000) { "CBOR resource limit" }
+        }
+        require(at - from <= limit) { "Message exceeds limit" }
+        return at - from
     }
 }
 

@@ -4,8 +4,9 @@ import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.StreamReadConstraints
 import com.fasterxml.jackson.core.StreamReadFeature
 import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.mndt.core.AtRepository
+import org.mndt.core.NostrEvent
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
@@ -14,13 +15,6 @@ internal val json = ObjectMapper(JsonFactory.builder()
     .streamReadConstraints(StreamReadConstraints.builder().maxNestingDepth(32).maxStringLength(8_000_000).build())
     .build()).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
 
-/**
- * Contact control message (mndt §3). [node]/[max]/[didCap] are HELLO capability fields; [ids] are Nostr event IDs.
- * [dids] is an optional inventory hint parallel to [ids] (author DID or ""), unverified.
- */
-internal data class Control(val type: String, val ids: List<String> = emptyList(), val node: String = "", val max: Int = 0,
-    val dids: List<String> = emptyList(), val didCap: Boolean = false)
-
 /** Lab-only node override; normal installs keep per-process randomness. Not an identity or authentication. */
 internal fun meshNode(configured: String?, randomNode: () -> String): String =
     configured?.takeIf { it.isNotEmpty() }?.also {
@@ -28,7 +22,7 @@ internal fun meshNode(configured: String?, randomNode: () -> String): String =
     } ?: randomNode()
 
 internal fun relayEventFrame(eventJson: String): String = "[\"EVENT\",$eventJson]".also {
-    // JSON escaping can expand a compact 24 KB event well beyond a Nearby frame.
+    // JSON escaping can expand a 64 KiB bundle event well beyond its CBOR size.
     require(it.toByteArray(Charsets.UTF_8).size <= 262144) { "Relay event size limit" }
 }
 
@@ -49,58 +43,18 @@ internal fun nextRelayIndex(relays: List<String>, start: Int, pending: (String) 
         now >= (retryAt[relay] ?: 0L) && nextRelayId(pending(relay), null, deferred[relay].orEmpty(), now) != null
     }
 
-internal fun migrateDefaultRelays(relays: List<String>, migrated: Boolean,
-    maxRelays: Int = DiskState.MAX_RELAYS): List<String> =
-    if (!migrated && relays == DiskState.LEGACY_DEFAULT_RELAYS && relays.size < maxRelays)
-        listOf(DiskState.PDS_RELAY) + relays else relays
-
-/** The PDS accepts kinds 1 and 5 only; other kinds (DMs, profiles) still go to general relays. */
-internal fun relayWants(relay: String, kind: Int) = relay != DiskState.PDS_RELAY || kind == 1 || kind == 5
+/**
+ * PDS §4.2 / §6 and DM §5: PLC genesis control events stay in the mesh; the PDS relay takes posts, deletions and
+ * revocation notices; general relays take everything else (DMs, profiles) too.
+ */
+internal fun relayWants(relay: String, event: NostrEvent): Boolean {
+    val topic = AtRepository.controlTopic(event)
+    if (event.kind == AtRepository.CONTROL_KIND && topic != AtRepository.REVOCATION_TOPIC) return false
+    return relay != DiskState.PDS_RELAY || event.kind == 1 || event.kind == 5 || topic == AtRepository.REVOCATION_TOPIC
+}
 
 internal fun onlineRelayAllowed(enabled: Boolean, foreground: Boolean, fatal: Boolean, hasRelay: Boolean,
     serviceRunning: Boolean = false): Boolean = enabled && (foreground || serviceRunning) && !fatal && hasRelay
-
-/** Provisional JSON control messages (protocol/mndt.md §9); bundles travel as raw BPv7 CBOR frames. */
-internal object Wire {
-    const val MAX_BYTES = 32768
-    private val idPattern = Regex("[0-9a-f]{64}")
-    private val nodePattern = Regex("[0-9a-f]{16}")
-    private val didPattern = Regex("did:plc:[a-z2-7]{24}")
-    fun encode(control: Control): ByteArray {
-        val root = json.createObjectNode().put("v", 1).put("type", control.type)
-        if (control.type == "hello") root.put("node", control.node).put("max", control.max).put("dids", 1)
-        else root.putArray("ids").also { a -> control.ids.forEach(a::add) }
-        if (control.dids.isNotEmpty()) root.putArray("dids").also { a -> control.dids.forEach(a::add) }
-        return json.writeValueAsBytes(root).also { decode(it) }
-    }
-    fun decode(bytes: ByteArray): Control {
-        require(bytes.isNotEmpty() && bytes.size <= MAX_BYTES && bytes[0] == '{'.code.toByte())
-        val node = json.readTree(bytes)
-        require(node.isObject && node["v"]?.isIntegralNumber == true && node["v"].canConvertToInt() && node["v"].intValue() == 1)
-        val type = node["type"]?.takeIf(JsonNode::isTextual)?.textValue()
-        require(type in listOf("hello", "inventory", "want", "ack"))
-        if (type == "hello") {
-            // Later capability fields are ignored so peers can add them without a version bump.
-            val id = node["node"]?.textValue()
-            val max = node["max"]
-            require(id != null && nodePattern.matches(id) && max != null && max.isIntegralNumber && max.canConvertToInt() && max.intValue() in 1..MAX_BYTES)
-            val dids = node["dids"]
-            return Control(type, node = id, max = max.intValue(), didCap = dids != null && dids.isIntegralNumber && dids.canConvertToInt() && dids.intValue() == 1)
-        }
-        val fields = node.fieldNames().asSequence().toSet()
-        require(fields == setOf("v", "type", "ids") || type == "inventory" && fields == setOf("v", "type", "ids", "dids"))
-        val ids = node["ids"]
-        require(ids != null && ids.isArray && ids.size() <= 128)
-        val values = ids.map { require(it.isTextual && idPattern.matches(it.textValue())); it.textValue() }
-        require(values.distinct().size == values.size)
-        require(type != "ack" || values.size == 1)
-        val dids = node["dids"]?.let { array ->
-            require(array.isArray && array.size() == values.size)
-            array.map { require(it.isTextual && (it.textValue().isEmpty() || didPattern.matches(it.textValue()))); it.textValue() }
-        }.orEmpty()
-        return Control(type!!, values, dids = dids)
-    }
-}
 
 internal fun InputStream.readBounded(limit: Int): ByteArray {
     require(limit in 0 until Int.MAX_VALUE)

@@ -28,6 +28,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.koin.compose.koinInject
 import org.mndt.app.ui.post.bsafLabel
+import org.mndt.app.ui.post.dateTime
 import org.mndt.app.ui.startRelay
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.core.ClockConfidence
@@ -35,36 +36,66 @@ import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 
-/** One trusted Bot DID under an enabled root, with the BSAF types selected for it. */
-internal class TrustSource(val org: String, val botDid: String, val types: List<String>)
+/** One selected (Bot DID, BSAF type) pair from the local trust config. */
+internal class TrustSource(val botDid: String, val types: List<String>)
+/** A locally configured root key: the only place trust can start (attest §3). */
+internal class TrustRoot(val name: String, val pubkey: String, val roles: List<String>, val enabled: Boolean)
 
 private fun JSONArray?.objects() = if (this == null) emptyList() else (0 until length()).map(::getJSONObject)
 private fun JSONArray?.strings() = if (this == null) emptyList() else (0 until length()).map(::getString)
 
-internal fun trustSources(context: Context): List<TrustSource> = runCatching {
-    val json = JSONObject(context.assets.open("mosimo-public-trust.json").bufferedReader().use { it.readText() })
-    val selected = json.optJSONArray("selected").objects().groupBy({ it.getString("botDid") }, { it.getString("type") })
-    json.getJSONArray("roots").objects().filter { it.optBoolean("enabled") }.flatMap { root ->
-        val scope = root.getJSONObject("scope")
-        val org = scope.optJSONArray("orgIds").strings().joinToString(" / ")
-        scope.optJSONArray("bsaf").objects().map { bot ->
-            val did = bot.getString("botDid")
-            TrustSource(org, did, bot.optJSONArray("types").strings().filter { it in selected[did].orEmpty() })
-        }
+private fun trustConfig(context: Context): JSONObject? =
+    runCatching { JSONObject(context.assets.open("mosimo-public-trust.json").bufferedReader().use { it.readText() }) }.getOrNull()
+
+internal fun trustRoots(context: Context): List<TrustRoot> = runCatching {
+    trustConfig(context)!!.getJSONArray("roots").objects().map {
+        TrustRoot(it.getString("name"), it.getString("pubkey"), it.optJSONArray("roles").strings(), it.optBoolean("enabled"))
     }
+}.getOrDefault(emptyList())
+
+internal fun trustSources(context: Context): List<TrustSource> = runCatching {
+    trustConfig(context)!!.optJSONArray("selected").objects()
+        .groupBy({ it.getString("botDid") }, { it.getString("type") })
+        .map { (did, types) -> TrustSource(did, types) }
 }.getOrDefault(emptyList())
 
 @Composable
 internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす発信元", nav) {
     val context = LocalContext.current
+    val mesh = koinInject<MeshCoordinator>()
+    val state by mesh.state.collectAsStateWithLifecycle()
+    val roots = remember { trustRoots(context) }
     val sources = remember { trustSources(context) }
-    if (sources.isEmpty()) Text("なし", style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
+    Text("信頼の起点はこの端末の設定だけで決まります。受信したデータから追加されることはありません。",
+        style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+    Header("信頼する root 鍵 ${roots.count { it.enabled }}")
+    if (roots.isEmpty()) Group { Text("なし（公的情報の投入は無効）", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
+    roots.forEach { root ->
+        Group {
+            SettingRow(Icons.Outlined.VerifiedUser, if (root.enabled) Mosimo.safe else Mosimo.textTertiary, root.name,
+                "鍵 ${root.pubkey.take(16)}…", value = if (root.enabled) "有効" else "無効")
+            Line()
+            Text("許可する役割: ${root.roles.joinToString("・").ifEmpty { "なし" }}", Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
+        }
+    }
+    Header("取り込みを選択した Bot と種別")
+    if (sources.isEmpty()) Group { Text("なし", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
     sources.forEach { source ->
         Group {
-            SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, source.org.ifEmpty { "発信元" }, source.botDid)
+            SettingRow(Icons.Outlined.Download, Mosimo.info, source.botDid, value = "${source.types.size}種別")
             Line()
-            Text(source.types.joinToString("・") { bsafLabel(it) }.ifEmpty { "選択なし" }, Modifier.padding(16.dp),
+            Text(source.types.joinToString("・") { bsafLabel(it) }, Modifier.padding(16.dp),
                 style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
+        }
+    }
+    Header("失効情報")
+    Group {
+        SettingRow(Icons.Outlined.Block, Mosimo.textSecondary, "保持している失効通知", value = "${state.revocationCount}件")
+        if (state.revocationChecked.isNotEmpty()) {
+            Line()
+            Text(state.revocationChecked.entries.joinToString("\n") { (domain, at) -> "$domain: ${dateTime(at)} に確認" },
+                Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
         }
     }
 }
@@ -118,7 +149,7 @@ internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
     }
     Header("表示")
     Group {
-        SwitchRow(Icons.Outlined.VisibilityOff, Mosimo.info, "失効した Nostr イベントを非表示", "配信期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
+        SwitchRow(Icons.Outlined.VisibilityOff, Mosimo.info, "配送期限を過ぎた投稿を非表示", "配送期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
             state.hideExpired) { mesh.setHideExpired(it) }
     }
     Header("近隣端末 ${state.neighbors.size}")
@@ -137,6 +168,16 @@ internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
                 style = MaterialTheme.typography.bodySmall, color = Mosimo.warning)
             Text(state.publicStatus, style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
             state.publicResults.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary) }
+        }
+    }
+    if (state.clockSkews.isNotEmpty()) {
+        Header("近隣端末の時刻ヒント（未検証）")
+        Group {
+            Text(state.clockSkews.joinToString("\n") { "${it.peer.take(12)}: ${if (it.deltaSeconds >= 0) "+" else ""}${it.deltaSeconds}秒（申告 confidence ${it.confidence}）" },
+                Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+            Line()
+            Text("相手の自己申告であり、時計の同期・証明には使いません。", Modifier.padding(16.dp),
+                style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
         }
     }
     Header("診断")
@@ -167,14 +208,15 @@ internal fun IdentityScreen(nav: Navigator) = SubScreen("署名鍵とID", nav) {
 internal fun BlockedScreen(nav: Navigator) = SubScreen("ブロックリスト", nav) {
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
-    Text("投稿者 DID 単位で非表示にします。端末・中継は遮断しません。", style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
-    if (state.blockedDids.isEmpty()) Text("ブロック中の投稿者はいません", Modifier.padding(vertical = 24.dp).fillMaxWidth(),
+    Text("発信鍵（Nostr 公開鍵）単位で非表示にし、中継もしません。相手の端末との通信は遮断しません。",
+        style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+    if (state.blockedPubkeys.isEmpty()) Text("ブロック中の投稿者はいません", Modifier.padding(vertical = 24.dp).fillMaxWidth(),
         style = MaterialTheme.typography.bodyMedium, color = Mosimo.textTertiary)
     else Group {
-        state.blockedDids.forEachIndexed { i, did ->
+        state.blockedPubkeys.forEachIndexed { i, pubkey ->
             if (i > 0) Line()
-            SettingRow(Icons.Outlined.Block, Mosimo.danger, did, trailing = {
-                TextButton(enabled = state.ready, onClick = { mesh.unblock(did) }) { Text("解除") }
+            SettingRow(Icons.Outlined.Block, Mosimo.danger, "鍵 ${pubkey.take(16)}…", trailing = {
+                TextButton(enabled = state.ready, onClick = { mesh.unblock(pubkey) }) { Text("解除") }
             })
         }
     }

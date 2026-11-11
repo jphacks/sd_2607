@@ -22,10 +22,14 @@ private val prefix = Regex("^\\s*[［\\[]([^］\\]]{1,8})[］\\]]\\s*")
 fun PostView.category(): Category? = prefix.find(content)?.groupValues?.get(1)?.let { l -> Category.entries.firstOrNull { it.label == l } }
 fun PostView.body(): String = if (category() != null) content.replaceFirst(prefix, "") else content
 
-val PostView.isPublic get() = ext.bsaf != null
+/** A re-posted BSAF alert (`original` present); native BSAF posts of our own are ordinary posts. */
+val PostView.isPublic get() = ext.bsaf?.imported == true
 
-/** Authorized at import time by a trusted importer certificate; volatile fetches were never checked. */
+/** Authorized at import time by a trusted importer attestation; volatile fetches were never checked. */
 val PostView.importerAuthorized get() = publicAuthorization != null
+
+/** attest.chain §4.1: the sender may be shown by organization name only with the `identity` role. */
+val PostView.senderName: String? get() = chain?.takeIf { it.identity && it.confirmedNow }?.name
 
 /** BSAF `type:` → short Japanese label; unknown types show the raw value. */
 private val bsafLabels = mapOf(
@@ -58,7 +62,9 @@ fun dateTime(epochSeconds: Long): String = DateTimeFormatter.ofPattern("M/d HH:m
 /** `did:plc:4k…9a`; falls back to the Nostr key when the commit carried no DID. */
 fun shortDid(did: String?, pubkey: String): String = did?.let { "did:plc:${it.removePrefix("did:plc:").take(2)}…${it.takeLast(2)}" } ?: "鍵 ${pubkey.take(6)}…"
 
-fun PostView.latLng(): Pair<Double, Double>? = ext.origin?.let { it.latitudeMicrodegrees / 1e6 to it.longitudeMicrodegrees / 1e6 }
+/** The sender's own position (#origin), else the center of the first circular #area (a point picked on the map). */
+fun PostView.latLng(): Pair<Double, Double>? = ext.origin?.let { it.lat / 1e6 to it.lon / 1e6 }
+    ?: ext.regions.filterIsInstance<org.mndt.mesh.Region.Circle>().firstOrNull()?.let { it.lat / 1e6 to it.lon / 1e6 }
 
 /** Meters from [here], or null when either side has no position. */
 fun PostView.distanceFrom(here: Location?): Float? {

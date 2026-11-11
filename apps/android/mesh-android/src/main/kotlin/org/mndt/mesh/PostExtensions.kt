@@ -1,40 +1,65 @@
 package org.mndt.mesh
 
 import org.mndt.core.AtRepository
-import org.mndt.core.CanonicalCbor
+import org.mndt.core.Attest
 import org.mndt.core.NostrEvent
 import org.mndt.core.PublicIngress
-import java.util.Base64
 
-/** Known protocol/0011 extensions decoded for display. Unknown or malformed ones are ignored, never rewritten. */
-data class Origin(val latitudeMicrodegrees: Long, val longitudeMicrodegrees: Long, val accuracyMillimeters: Long? = null)
+/** Known official extensions decoded for display. Unknown or malformed ones are ignored, never rewritten. */
+data class Origin(val lat: Long, val lon: Long, val acc: Long? = null, val at: String? = null)
 sealed interface Region {
-    data class Circle(val latitudeMicrodegrees: Long, val longitudeMicrodegrees: Long, val radiusMillimeters: Long) : Region
+    data class Circle(val lat: Long, val lon: Long, val r: Long) : Region
     data class Geohash(val hash: String) : Region
 }
+/** geo#area: the union of [regions]; [approximation] marks a covering approximation of an original area. */
+data class Area(val regions: List<Region>, val approximation: Boolean)
+/** validity: `from <= t < until`; an absent bound is unknown, never inferred. */
+data class Validity(val from: String?, val until: String?)
 /** BSAF original tags; `time:` is the source event time, not the import time. */
-data class Bsaf(val type: String?, val time: String?, val target: String?, val tags: List<String>)
+data class Bsaf(val type: String?, val time: String?, val target: String?, val source: String?, val tags: List<String>, val imported: Boolean,
+    /** The re-posted Bot's DID, from `original.uri`. */
+    val botDid: String? = null)
 enum class Relation(val wire: String) { CORRECTION("correction"), SUPPLEMENT("supplement"), ENDORSEMENT("endorsement") }
-data class Annotation(val relation: Relation, val targetEventId: String)
+/** [targetEventId] is the Nostr target (hex); atproto references are kept as [targetUri]. */
+data class Annotation(val relation: Relation, val targetEventId: String?, val targetUri: String? = null)
 data class PostExtensions(
-    val origin: Origin? = null, val regions: List<Region> = emptyList(), val validityEndsAt: String? = null,
+    val origin: Origin? = null, val areas: List<Area> = emptyList(), val validity: Validity? = null,
     val priority: Int = 1, val bsaf: Bsaf? = null, val annotation: Annotation? = null,
-)
+    /** An `attest.chain` extension is present (verification is the coordinator's, see [PostView.chain]). */
+    val hasChain: Boolean = false,
+) {
+    val regions: List<Region> get() = areas.flatMap { it.regions }
+}
 
 object Extensions {
-    const val ORIGIN = "dev.oriom.mosimo.defs#origin"
-    const val AREA = "dev.oriom.mosimo.defs#area"
-    const val VALIDITY = "dev.oriom.mosimo.defs#validity"
-    const val ANNOTATION = "dev.oriom.mosimo.defs#annotation"
+    const val ORIGIN = "dev.jisaku.mosimo.geo#origin"
+    const val AREA = "dev.jisaku.mosimo.geo#area"
+    const val VALIDITY = "dev.jisaku.mosimo.validity"
+    const val ANNOTATION = "dev.jisaku.mosimo.annotation"
+    const val PRIORITY = PublicIngress.PRIORITY
 
-    fun origin(o: Origin): Map<String, Any?> = mapOf("\$type" to ORIGIN, "latitudeMicrodegrees" to o.latitudeMicrodegrees,
-        "longitudeMicrodegrees" to o.longitudeMicrodegrees) + (o.accuracyMillimeters?.let { mapOf("accuracyMillimeters" to it) } ?: emptyMap())
-    fun circle(c: Region.Circle): Map<String, Any?> = mapOf("\$type" to AREA, "regions" to listOf(mapOf("shape" to "circle",
-        "latitudeMicrodegrees" to c.latitudeMicrodegrees, "longitudeMicrodegrees" to c.longitudeMicrodegrees, "radiusMillimeters" to c.radiusMillimeters)))
-    fun validity(endsAt: String): Map<String, Any?> = mapOf("\$type" to VALIDITY, "endsAt" to endsAt)
-    // ponytail: nostr eventId only; follow 0011 §7 once the reference form is fixed.
+    fun origin(o: Origin): Map<String, Any?> = buildMap {
+        put("\$type", ORIGIN); put("lat", o.lat); put("lon", o.lon)
+        o.acc?.let { put("acc", it) }; o.at?.let { put("at", it) }
+    }
+    fun area(regions: List<Region>, approximation: Boolean = false): Map<String, Any?> = buildMap {
+        put("\$type", AREA)
+        put("regions", regions.map { r -> when (r) {
+            is Region.Circle -> mapOf("shape" to "circle", "lat" to r.lat, "lon" to r.lon, "r" to r.r)
+            is Region.Geohash -> mapOf("shape" to "geohash", "hash" to r.hash)
+        } })
+        if (approximation) put("approximation", true)
+    }
+    fun circle(c: Region.Circle): Map<String, Any?> = area(listOf(c))
+    /** At least one bound is required (validity §3). */
+    fun validity(from: String? = null, until: String? = null): Map<String, Any?> {
+        require(from != null || until != null) { "validity needs from or until" }
+        return buildMap { put("\$type", VALIDITY); from?.let { put("from", it) }; until?.let { put("until", it) } }
+    }
+    /** Nostr target reference; the event ID travels as 32 bytes inside the CBOR (annotation §2). */
     fun annotation(relation: Relation, targetEventId: String): Map<String, Any?> = mapOf("\$type" to ANNOTATION,
-        "relation" to relation.wire, "target" to mapOf("network" to "nostr", "eventId" to targetEventId))
+        "relation" to relation.wire, "target" to mapOf("network" to "nostr", "eventId" to unhex(targetEventId)))
+    fun priority(level: Int): Map<String, Any?> = mapOf("\$type" to PRIORITY, "level" to level.toLong().also { require(it in 0..3) })
 
     private val cache = object : LinkedHashMap<String, PostExtensions>(256, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PostExtensions>) = size > 1024
@@ -43,34 +68,46 @@ object Extensions {
     fun of(event: NostrEvent): PostExtensions = synchronized(cache) { cache.getOrPut(event.id) { decode(event) } }
 
     fun decode(event: NostrEvent): PostExtensions {
-        val ext = event.tags.filter { it.size == 2 && it[0].startsWith(AtRepository.EXT_PREFIX) }.mapNotNull { tag ->
-            runCatching { tag[0].removePrefix(AtRepository.EXT_PREFIX) to (CanonicalCbor.decode(Base64.getDecoder().decode(tag[1])) as Map<*, *>) }.getOrNull()
+        val ext = runCatching { AtRepository.extensions(event) }.getOrElse {
+            // One malformed extension must not hide the others: decode tag by tag, skipping the bad one.
+            event.tags.filter { it.size == 2 && it[0].startsWith(AtRepository.EXT_PREFIX) }.mapNotNull { tag ->
+                runCatching { AtRepository.extensions(event.copy(tags = listOf(tag))).single() }.getOrNull()
+            }
         }
-        fun first(type: String) = ext.firstOrNull { it.first == type }?.second
+        fun first(type: String) = ext.firstOrNull { it["\$type"] == type }
         return PostExtensions(
-            origin = first(ORIGIN)?.let { m -> runCatching { Origin(m.long("latitudeMicrodegrees"), m.long("longitudeMicrodegrees"), m["accuracyMillimeters"] as? Long) }.getOrNull() },
-            regions = ext.filter { it.first == AREA }.flatMap { (_, m) -> (m["regions"] as? List<*>).orEmpty().mapNotNull { r -> region(r as? Map<*, *>) } },
-            validityEndsAt = first(VALIDITY)?.get("endsAt") as? String,
+            origin = first(ORIGIN)?.let { m -> runCatching { Origin(m.long("lat"), m.long("lon"), m["acc"] as? Long, m["at"] as? String) }.getOrNull() },
+            areas = ext.filter { it["\$type"] == AREA }.map { m ->
+                Area((m["regions"] as? List<*>).orEmpty().mapNotNull { r -> region(r as? Map<*, *>) }, m["approximation"] == true)
+            },
+            validity = first(VALIDITY)?.let { m -> Validity(m["from"] as? String, m["until"] as? String).takeIf { it.from != null || it.until != null } },
             priority = PublicIngress.priority(event),
             bsaf = first(PublicIngress.BSAF)?.let { m ->
                 val tags = (m["tags"] as? List<*>).orEmpty().filterIsInstance<String>()
-                fun tag(name: String) = tags.firstOrNull { it.startsWith("$name:") }?.removePrefix("$name:")
-                Bsaf(tag("type"), tag("time"), tag("target"), tags)
+                fun tag(name: String) = tags.filter { it.startsWith("$name:") }.singleOrNull()?.removePrefix("$name:")
+                val uri = (m["original"] as? Map<*, *>)?.get("uri") as? String
+                Bsaf(tag("type"), tag("time"), tag("target"), tag("source"), tags, m["original"] != null,
+                    uri?.removePrefix("at://")?.substringBefore('/')?.takeIf { it.startsWith("did:") })
             },
             annotation = first(ANNOTATION)?.let { m ->
                 val relation = Relation.entries.firstOrNull { it.wire == m["relation"] }
-                val target = (m["target"] as? Map<*, *>)?.takeIf { it["network"] == "nostr" }?.get("eventId") as? String
-                if (relation != null && target != null) Annotation(relation, target) else null
+                val target = m["target"] as? Map<*, *>
+                val eventId = (target?.get("eventId") as? ByteArray)?.takeIf { target["network"] == "nostr" && it.size == 32 }?.let(::hex)
+                val uri = (target?.get("uri") as? String)?.takeIf { target["network"] == "atproto" }
+                if (relation != null && (eventId != null || uri != null)) Annotation(relation, eventId, uri) else null
             },
+            hasChain = ext.any { it["\$type"] == Attest.CHAIN },
         )
     }
 
     private fun region(m: Map<*, *>?): Region? = runCatching {
         when (m?.get("shape")) {
-            "circle" -> Region.Circle(m.long("latitudeMicrodegrees"), m.long("longitudeMicrodegrees"), m.long("radiusMillimeters"))
+            "circle" -> Region.Circle(m.long("lat"), m.long("lon"), m.long("r"))
             "geohash" -> Region.Geohash((m["hash"] as String).also { require(it.matches(Regex("[0-9b-hjkmnp-z]{1,12}"))) })
             else -> null
         }
     }.getOrNull()
     private fun Map<*, *>.long(key: String) = this[key] as Long
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it.toInt() and 255) }
+    private fun unhex(s: String): ByteArray { require(s.matches(Regex("[0-9a-f]{64}"))); return ByteArray(32) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() } }
 }

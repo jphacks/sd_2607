@@ -106,7 +106,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
             val color = (p.category()?.color ?: Mosimo.info).hex()
             p.ext.regions.mapNotNull { r ->
                 when (r) {
-                    is Region.Circle -> circleRing(r.latitudeMicrodegrees / 1e6, r.longitudeMicrodegrees / 1e6, r.radiusMillimeters / 1000.0)
+                    is Region.Circle -> circleRing(r.lat / 1e6, r.lon / 1e6, r.r / 1000.0)
                     is Region.Geohash -> runCatching { boundsRing(geohashBounds(r.hash)) }.getOrNull()
                 }?.let { polygonFeature(it, color) }
             }

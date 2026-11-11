@@ -30,7 +30,7 @@ import kotlin.math.roundToLong
 
 /** Annotation posts keyed by target event id. */
 fun annotationsByTarget(posts: List<PostView>): Map<String, List<PostView>> =
-    posts.filter { it.ext.annotation != null }.groupBy { it.ext.annotation!!.targetEventId }
+    posts.mapNotNull { p -> p.ext.annotation?.targetEventId?.let { it to p } }.groupBy({ it.first }, { it.second })
 
 /** Annotations whose target is present are nested under it, so they get no card of their own. */
 fun standalone(posts: List<PostView>): List<PostView> {

@@ -1,57 +1,58 @@
 package org.mndt.mesh
 
+import org.mndt.core.CanonicalCbor
 import java.io.ByteArrayOutputStream
 
 /** Link callbacks may arrive on any thread; the coordinator re-serializes them onto its actor. */
 internal interface LinkListener {
-    fun onConnected(link: Link, peer: String)
-    fun onFrame(link: Link, peer: String, frame: ByteArray)
+    /** [node] is the peer's advertised node ID when this side discovered it (central / dialer); null otherwise. */
+    fun onConnected(link: Link, peer: String, node: String?)
+    /** One complete common exchange message (mesh §5), cut from the link's CBOR sequence. */
+    fun onMessage(link: Link, peer: String, message: ByteArray)
+    /** The link's outbound queue for [peer] drained; the exchange may push the next fragments. */
+    fun onDrained(link: Link, peer: String)
     fun onDisconnected(link: Link, peer: String)
 }
 
 /**
- * One transport (BLE GATT, LAN TCP). It discovers and connects on its own and moves whole frames;
- * store-carry-forward stays in MeshCoordinator/MeshEngine. Peer IDs are link-local connection handles.
+ * One transport (BLE GATT, LAN TCP). It discovers and connects on its own and moves whole CBOR messages as an
+ * ordered byte stream (mesh §7); store-carry-forward stays in MeshCoordinator/MeshEngine. Peer IDs are link-local
+ * connection handles.
  */
 internal interface Link {
     val name: String
     /** [node] is this process's 16-hex node ID, used only to break ties so two nodes open one connection. */
     fun start(node: String, listener: LinkListener)
     fun stop()
-    /** Queues one whole frame of at most [Frames.MAX_FRAME] bytes; false when the peer is gone or backlogged. */
-    fun send(peer: String, frame: ByteArray): Boolean
+    /** Queues one whole message of at most [Messages.MAX_MESSAGE_BYTES] bytes; false when the peer is gone or backlogged. */
+    fun send(peer: String, message: ByteArray): Boolean
+    /** Number of queued messages not yet handed to the OS for [peer]; the exchange keeps this small so control messages get through. */
+    fun queued(peer: String): Int = 0
     fun disconnect(peer: String)
-    /** The peer's HELLO named [node]; a link may use it to avoid opening a second connection to the same node. */
-    fun identified(peer: String, node: String) {}
+    /** Reconciliation with [peer] completed; a link may remember the peer's advertised summary to skip idle reconnects (mesh.adv §4). */
+    fun synced(peer: String) {}
 }
 
-/** Provisional framing (protocol/mndt.md §9): 4-byte big-endian length, then the frame, on any byte stream. */
-internal object Frames {
-    const val MAX_FRAME = Wire.MAX_BYTES
-    fun encode(frame: ByteArray): ByteArray {
-        require(frame.isNotEmpty() && frame.size <= MAX_FRAME) { "Frame size" }
-        val n = frame.size
-        return byteArrayOf((n ushr 24).toByte(), (n ushr 16).toByte(), (n ushr 8).toByte(), n.toByte()) + frame
-    }
-}
-
-/** Reassembles frames from arbitrary chunk boundaries (GATT writes, TCP reads). Throws on a bad length. */
-internal class FrameReader {
+/**
+ * Cuts a CBOR sequence (RFC 8742) arriving in arbitrary chunks into complete items. Throws when an item is malformed
+ * or larger than [limit]; the stream is then out of sync and the link must close (mesh §7).
+ */
+internal class CborSequenceReader(private val limit: Int) {
     private val pending = ByteArrayOutputStream()
     fun feed(chunk: ByteArray): List<ByteArray> {
         pending.write(chunk)
         val bytes = pending.toByteArray()
-        val frames = mutableListOf<ByteArray>()
+        val items = mutableListOf<ByteArray>()
         var at = 0
-        while (bytes.size - at >= 4) {
-            val n = ((bytes[at].toInt() and 255) shl 24) or ((bytes[at + 1].toInt() and 255) shl 16) or
-                ((bytes[at + 2].toInt() and 255) shl 8) or (bytes[at + 3].toInt() and 255)
-            require(n in 1..Frames.MAX_FRAME) { "Frame size" }
-            if (bytes.size - at - 4 < n) break
-            frames += bytes.copyOfRange(at + 4, at + 4 + n)
-            at += 4 + n
+        while (at < bytes.size) {
+            val length = CanonicalCbor.itemLength(bytes, at, bytes.size, limit) ?: break
+            items += bytes.copyOfRange(at, at + length)
+            at += length
         }
+        require(bytes.size - at <= limit) { "Incomplete message exceeds limit" }
         pending.reset(); pending.write(bytes, at, bytes.size - at)
-        return frames
+        return items
     }
+    /** Bytes of an item still being assembled. */
+    val incomplete: Int get() = pending.size()
 }

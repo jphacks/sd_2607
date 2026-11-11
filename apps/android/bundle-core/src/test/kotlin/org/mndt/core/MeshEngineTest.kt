@@ -75,7 +75,7 @@ class MeshEngineTest {
         assertThrows(Exception::class.java) { MeshEngine().accept(entry.bytes + byteArrayOf(0), now, 0) }
         assertThrows(Exception::class.java) { MeshEngine().accept(byteArrayOf(0x5b, 0x7f, -1, -1, -1, -1, -1, -1, -1), now, 0) }
         val changed = cborUnmarshalBundle(entry.bytes)
-        changed.primaryBlock.destination = java.net.URI("dtn://mosimo.oriom.dev/~other")
+        changed.primaryBlock.destination = java.net.URI("dtn://mosimo.jisaku.dev/~other")
         assertThrows(Exception::class.java) { MeshEngine().accept(changed.cborMarshal(), now, 0) }
         val crcTamper = entry.bytes.copyOf().also { it[it.lastIndex - 2] = (it[it.lastIndex - 2].toInt() xor 1).toByte() }
         assertThrows(Exception::class.java) { MeshEngine().accept(crcTamper, now, 0) }

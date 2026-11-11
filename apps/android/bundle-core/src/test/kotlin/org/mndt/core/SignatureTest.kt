@@ -29,70 +29,64 @@ class SignatureTest {
         val a = author(); val b = Author(SecretKeys(key(6), key(7), key(8)), "https://pds.invalid")
         val dm = a.signEvent(4, listOf(listOf("p", b.nostrPubkey)), "x", now)
         assertEquals(listOf("p", b.nostrPubkey), dm.tags.first())
-        assertEquals(1, dm.tags.count { it[0] == p + "delivery-expires-at" })
+        assertEquals(1, dm.tags.count { it[0] == AtRepository.TAG_EXP })
         MeshEngine().originate(dm, now, 0)
         assertArrayEquals(a.sharedSecret(b.nostrPubkey), b.sharedSecret(a.nostrPubkey))
     }
 
-    @Test fun postUsesExactly0012BaseTags() {
+    @Test fun postUsesTheCoreFixedTagOrder() {
         val a = author()
         val created = a.createPost("本文", now)
         val e = created.event
         val change = AtRepository.restore(e, a.atprotoPubkey)
-        assertEquals(listOf("t", "mosimo.oriom.dev"), e.tags[0])
-        assertEquals(listOf(p + "version", "1"), e.tags[1])
-        assertEquals(listOf(p + "base", ""), e.tags.single { it[0] == p + "base" })
-        assertEquals(listOf(p + "created-at", "2026-10-17T00:00:00Z"), e.tags.single { it[0] == p + "created-at" })
-        assertEquals(listOf(p + "delivery-expires-at", "2026-10-18T00:00:00Z"), e.tags.single { it[0] == p + "delivery-expires-at" })
-        assertEquals(7, e.tags.size)
-        assertTrue(e.tags.all { it.size == 2 })
-        val commitTag = e.tags.single { it[0] == p + "commit" }[1]
-        assertFalse("0012 §3.5: no padding", commitTag.endsWith("="))
+        assertEquals(listOf("t", "mosimo.jisaku.dev"), e.tags[0])
+        assertEquals(listOf("mosimo:v", "1"), e.tags[1])
+        assertEquals(listOf("mosimo:commit", "mosimo:base", "mosimo:rkey", "mosimo:exp"), e.tags.subList(2, 6).map { it[0] })
+        assertEquals(listOf("mosimo:base", ""), e.tags[3])
+        assertEquals(listOf("mosimo:exp", "2026-10-18T00:00:00Z"), e.tags[5])
+        assertEquals(6, e.tags.size)
+        assertTrue(AtRepository.tidPattern.matches(e.tags[4][1]))
+        val commitTag = e.tags[2][1]
+        assertFalse("core §3.3: no padding", commitTag.endsWith("="))
         assertArrayEquals(Base64.getDecoder().decode(commitTag), change.commitBytes)
-        assertTrue(change.path.matches(Regex("dev\\.oriom\\.mosimo\\.post/[2-7a-z]{13}")))
+        assertEquals("dev.jisaku.mosimo.post/" + e.tags[4][1], change.path)
         assertNull(change.applyFromCommit)
         val record = CanonicalCbor.decode(change.recordBytes) as Map<*, *>
-        assertEquals(setOf("\$type", "text", "createdAt", "deliveryExpiresAt", "extensions"), record.keys)
-        assertEquals("dev.oriom.mosimo.post", record["\$type"])
+        assertEquals(setOf("\$type", "text", "exp", "ext"), record.keys)
+        assertEquals("dev.jisaku.mosimo.post", record["\$type"])
         assertEquals(created.repository.previousCommit, change.commitCid)
         assertEquals(CidLink(AtRepository.mstRoot(created.repository.records)), (CanonicalCbor.decode(change.commitBytes) as Map<*, *>)["data"])
+        // The second post names the first commit as its base.
+        val second = a.createPost("次", now + 1000, created.repository).event
+        assertEquals(created.repository.previousCommit, second.tags[3][1])
     }
 
     @Test fun extensionsAreSelfContainedTagsInArrayOrder() {
         val link = CidLink("b" + base32(byteArrayOf(1, 0x55, 0x12, 0x20) + sha256(byteArrayOf(7))))
         val unknown = mapOf("\$type" to "org.example.audit.defs#unknown", "bytes" to byteArrayOf(0, -1), "ref" to link,
             "values" to listOf(null, false, emptyList<Any>(), 9007199254740993L, Long.MIN_VALUE, Long.MAX_VALUE))
-        val area = mapOf("\$type" to "dev.oriom.mosimo.defs#area", "regions" to emptyList<Any>())
+        val area = mapOf("\$type" to "dev.jisaku.mosimo.geo#area", "regions" to emptyList<Any>())
         val e = author().createPost("本文", now, extensions = listOf(unknown, area, unknown)).event
         val tags = e.tags.filter { it[0].startsWith(AtRepository.EXT_PREFIX) }
-        assertEquals(listOf("org.example.audit.defs#unknown", "dev.oriom.mosimo.defs#area", "org.example.audit.defs#unknown"),
+        assertEquals(listOf("org.example.audit.defs#unknown", "dev.jisaku.mosimo.geo#area", "org.example.audit.defs#unknown"),
             tags.map { it[0].removePrefix(AtRepository.EXT_PREFIX) })
         assertArrayEquals(CanonicalCbor.encode(area - "\$type"), B64.decode(tags[1][1]))
         val record = CanonicalCbor.decode(AtRepository.restore(e).recordBytes) as Map<*, *>
-        assertArrayEquals(CanonicalCbor.encode(listOf(unknown, area, unknown)), CanonicalCbor.encode(record["extensions"]))
+        assertArrayEquals(CanonicalCbor.encode(listOf(unknown, area, unknown)), CanonicalCbor.encode(record["ext"]))
         val mesh = MeshEngine()
         mesh.originate(e, now, 0)
         assertEquals(e, MeshEngine().accept(mesh.forward(e.id, now, 0)!!, now, 0)!!.event)
     }
 
-    @Test fun meshCborV1TypesOnlyTheThreeKnownTagValues() {
+    @Test fun meshCborV1NeverGuessesTypedValues() {
         val e = author().createPost("本文", now, extensions = listOf(mapOf("\$type" to "org.example.a.defs#x", "n" to 1))).event
-        val tags = (CanonicalCbor.decode(EventCodec.encode(e)) as List<*>)[4] as List<*>
-        fun value(name: String) = (tags.single { (it as List<*>)[0] == name } as List<*>)[1]
-        assertTrue(value(p + "commit") is ByteArray)
-        assertTrue(value(AtRepository.EXT_PREFIX + "org.example.a.defs#x") is ByteArray)
-        assertEquals(1L, value(p + "version"))
-        assertEquals("", value(p + "base"))
-        assertEquals("mosimo.oriom.dev", value("t"))
-        assertEquals(e, EventCodec.decode(EventCodec.encode(e)))
         // A non-canonical spelling is carried as the original string, never normalized.
         val padded = replaceTag(e, p + "commit", listOf(p + "commit", e.tags.single { it[0] == p + "commit" }[1] + "="))
         assertEquals(padded, EventCodec.decode(EventCodec.encode(padded)))
-        val v2 = replaceTag(e, p + "version", listOf(p + "version", "01"))
-        assertEquals(v2, EventCodec.decode(EventCodec.encode(v2)))
+        assertTrue(((CanonicalCbor.decode(EventCodec.encode(padded)) as List<*>)[4] as List<*>).any { (it as List<*>)[1] is String && it[0] == p + "commit" })
         // bytes on a tag outside the v1 table must be rejected, not guessed back into a string.
         val raw = (CanonicalCbor.decode(EventCodec.encode(e)) as List<*>).toMutableList()
-        raw[4] = (raw[4] as List<*>).map { if ((it as List<*>)[0] == "t") listOf("t", byteArrayOf(1)) else it }
+        raw[4] = (raw[4] as List<*>).map { if ((it as List<*>)[0] == p + "rkey") listOf("x", byteArrayOf(1)) else it }
         assertThrows(Exception::class.java) { EventCodec.decode(CanonicalCbor.encode(raw)) }
     }
 
@@ -113,13 +107,12 @@ class SignatureTest {
             replaceTag(e, ext[0], listOf(ext[0], B64.encode(CanonicalCbor.encode(mapOf("\$type" to "org.example.audit.defs#unknown"))))),
             replaceTag(e, ext[0], listOf(AtRepository.EXT_PREFIX + "not-a-type", ext[1])),
             replaceTag(e, p + "commit", listOf(p + "commit", commit[1] + "=")),
-            replaceTag(e, p + "version", listOf(p + "version", "2")),
+            replaceTag(e, p + "v", listOf(p + "v", "2")),
             replaceTag(e, p + "base", null),
             replaceTag(e, "t", null),
-            replaceTag(e, p + "created-at", listOf(p + "created-at", "2026-10-17T00:00:00+00:00")),
-            replaceTag(e, p + "created-at", listOf(p + "created-at", "2026-10-17T00:00:01Z")),
-            replaceTag(e, p + "delivery-expires-at", listOf(p + "delivery-expires-at", "1792281600")),
-            replaceTag(e, p + "path", listOf(p + "path", "xxx.disaster.post/3jzfcijpj2z2a")),
+            replaceTag(e, p + "exp", listOf(p + "exp", "2026-10-18T00:00:00+00:00")),
+            replaceTag(e, p + "exp", listOf(p + "exp", "1792281600")),
+            replaceTag(e, p + "rkey", listOf(p + "rkey", "3JZFCIJPJ2Z2A")),
             resigned(e.copy(tags = e.tags + listOf(commit))),
         )
         bad.forEachIndexed { i, it -> assertFalse("case $i", AtRepository.verifyEnvelope(it)) }
@@ -175,7 +168,8 @@ class SignatureTest {
             "58a034351b44064679259d7bb9fc490f9ab0f23c59c66a40ee2da510d76409e85f237726d4c4b48e3502303a45c0998cacaa5b7c1695fcd9a86984f0937fbe99")
         assertTrue(event.verify())
         assertEquals(event, NostrEvent.fromJson(event.toJson()))
-        assertEquals(event, EventCodec.decode(EventCodec.encode(event)))
+        // Not a Mosimo event (tags outside the core order): the mesh refuses to carry it rather than guess.
+        assertThrows(Exception::class.java) { EventCodec.encode(event) }
         assertFalse(event.copy(tags = event.tags.reversed()).verify())
         assertFalse(event.copy(content = event.content + "!").verify())
     }
@@ -220,7 +214,8 @@ class SignatureTest {
         val a = author()
         val now = 1_792_195_200_000L
         val event = a.createPlcGenesisEvent(now)
-        assertEquals(AtRepository.PLC_GENESIS_KIND, event.kind)
+        assertEquals(AtRepository.CONTROL_KIND, event.kind)
+        assertEquals(listOf(listOf("t", "mosimo.jisaku.dev"), listOf("t", "mosimo.jisaku.dev/plc")), event.tags.take(2))
         assertEquals(a.initialOperationJson, event.content)
         assertEquals(a.did, AtRepository.plcDid(event.content))
         assertEquals(event, EventCodec.decode(EventCodec.encode(event)))
@@ -238,11 +233,12 @@ class SignatureTest {
         val signed = jsonMapper.convertValue(op, Map::class.java).entries.associate { it.key as String to it.value }
         assertEquals(a.did, "did:plc:" + base32(sha256(CanonicalCbor.encode(signed))).take(24))
         assertTrue(secp.verify(Base64.getUrlDecoder().decode(op["sig"].string()), sha256(CanonicalCbor.encode(signed.filterKeys { it != "sig" })), secp.pubkeyCreate(key(5))))
-        val binding = strictJson(a.bindingJson)
-        val body = jsonMapper.convertValue(binding["declaration"], Map::class.java)
+        @Suppress("UNCHECKED_CAST") val body = a.binding["declaration"] as Map<String, Any?>
+        assertEquals(Attest.BINDING_DECLARATION, body["\$type"])
+        assertEquals(a.did, body["did"])
         val digest = sha256(CanonicalCbor.encode(body))
-        assertTrue(secp.verify(Base64.getDecoder().decode(binding["atprotoSig"].string()), digest, secp.pubkeyCreate(key(4))))
-        assertTrue(secp.verifySchnorr(unhex(binding["nostrSig"].string(), 64), digest, unhex(a.nostrPubkey, 32)))
+        assertTrue(secp.verify(a.binding["atprotoSig"] as ByteArray, digest, secp.pubkeyCreate(key(4))))
+        assertTrue(secp.verifySchnorr(a.binding["nostrSig"] as ByteArray, digest, unhex(a.nostrPubkey, 32)))
         assertThrows(IllegalArgumentException::class.java) { SecretKeys(key(3), key(3), key(5)) }
         assertEquals("SecretKeys(nostr=<redacted>, atproto=<redacted>, plc=<redacted>)", SecretKeys.generate().toString())
         assertThrows(IllegalArgumentException::class.java) { Author(a.keys, "http://pds.invalid") }

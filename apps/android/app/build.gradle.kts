@@ -33,6 +33,11 @@ android {
         }
     }
     buildTypes {
+        // Installs next to a store/CI release build on the same phone without touching its keys and posts.
+        getByName("debug") {
+            applicationIdSuffix = providers.gradleProperty("mosimoDebugSuffix").orElse(".debug").get()
+            versionNameSuffix = "-debug"
+        }
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

@@ -22,12 +22,16 @@ class OnlineRelayTest {
         assertFalse(onlineRelayAllowed(true, true, false, false, serviceRunning = true))
     }
 
-    @Test fun pdsGetsOnlyPostsAndDeletions() {
-        assertTrue(relayWants(DiskState.PDS_RELAY, 1))
-        assertTrue(relayWants(DiskState.PDS_RELAY, 5))
-        assertFalse(relayWants(DiskState.PDS_RELAY, 4))
-        assertFalse(relayWants(DiskState.PDS_RELAY, 0))
-        assertTrue(relayWants("wss://nos.lol", 4))
+    @Test fun pdsGetsOnlyPostsDeletionsAndRevocations() {
+        val a = org.mndt.core.Author(org.mndt.core.SecretKeys.generate(), "https://pds.invalid")
+        val now = 1_800_000_000_000L
+        val post = a.createPost("x", now).event
+        val dm = a.signEvent(4, emptyList(), "x", now)
+        val plc = a.createPlcGenesisEvent(now)
+        assertTrue(relayWants(DiskState.PDS_RELAY, post))
+        assertFalse(relayWants(DiskState.PDS_RELAY, dm))
+        assertTrue(relayWants("wss://nos.lol", dm))
+        assertFalse("PLC genesis stays in the mesh", relayWants("wss://nos.lol", plc))
     }
 
     @Test fun rejectingRelayDoesNotStarvePdsOrAnotherRelay() {
@@ -83,25 +87,6 @@ class OnlineRelayTest {
         assertTrue(RELAY_REJECT_DEFER_MILLIS >= 10 * 60_000L)
         assertNull(nextRelayIndex(relays, 0, pending, deferred, emptyMap(), 1_000 + 61_000))
         assertEquals(1, nextRelayIndex(relays, 0, pending, deferred, emptyMap(), 1_000 + RELAY_REJECT_DEFER_MILLIS))
-    }
-
-    @Test fun oldDefaultsGainPdsFirstOnlyOnce() {
-        val old = listOf("wss://relay.damus.io", "wss://nos.lol")
-        val expected = listOf("wss://pds.oriom.dev", "wss://relay.damus.io", "wss://nos.lol")
-        assertEquals(expected, migrateDefaultRelays(old, migrated = false))
-        assertEquals(expected, DiskState.DEFAULT_RELAYS)
-        assertEquals(expected, migrateDefaultRelays(expected, migrated = true))
-        // Removing PDS after migration must survive the next load.
-        assertEquals(old, migrateDefaultRelays(old, migrated = true))
-    }
-
-    @Test fun relayMigrationPreservesCustomRemovedAndFullLists() {
-        val old = listOf("wss://relay.damus.io", "wss://nos.lol")
-        for (relays in listOf(emptyList(), old.take(1), old.reversed(), old + "wss://custom.invalid",
-                listOf("wss://pds.oriom.dev") + old, List(8) { "wss://custom$it.invalid" })) {
-            assertSame(relays, migrateDefaultRelays(relays, migrated = false))
-        }
-        assertSame(old, migrateDefaultRelays(old, migrated = false, maxRelays = 2))
     }
 
     @Test fun connectionCooldownAndEventDeferralAreRelayLocal() {

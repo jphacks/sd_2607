@@ -70,14 +70,15 @@ private fun SettingsScreen(nav: Navigator) {
     val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
-    val sources = remember { trustSources(context) }
+    val roots = remember { trustRoots(context) }
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)
         Header("通信（もしもプロトコル）")
         Group {
-            SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元", sources.map { it.org }.distinct().joinToString(" / ").ifEmpty { null },
-                "${sources.size}件") { nav.push(TrustKey) }
+            SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元",
+                roots.filter { it.enabled }.joinToString(" / ") { it.name }.ifEmpty { "信頼する root 鍵が未設定" },
+                "${roots.count { it.enabled }}件") { nav.push(TrustKey) }
             Line()
             SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "オフライン中継・端末時計・リレー・診断") { nav.push(AdvancedKey) }
         }
@@ -86,7 +87,7 @@ private fun SettingsScreen(nav: Navigator) {
             SettingRow(Icons.Outlined.Key, Mosimo.primary, "署名鍵とID",
                 if (state.ready) "${shortDid(state.did.ifEmpty { null }, state.publicKey)}・端末で安全に保管" else "準備中") { nav.push(IdentityKey) }
             Line()
-            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedDids.size}件") { nav.push(BlockedKey) }
+            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedPubkeys.size}件") { nav.push(BlockedKey) }
         }
         Header("このアプリについて")
         Group {
