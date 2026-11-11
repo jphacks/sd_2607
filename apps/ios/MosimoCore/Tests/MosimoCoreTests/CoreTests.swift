@@ -185,4 +185,22 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try sub.receive(7, #"["EOSE","mndt-7"]"#, 3), .eose)
         XCTAssertEqual(sub.events(), [event])
     }
+
+    func testContentFilterNormalizesWidthCaseAndKana() throws {
+        let filter = ContentFilter(base64: try JSONEncoder().encode(["テスト語", "abc"]).base64EncodedString())
+        XCTAssertTrue(filter.blocks("ＡＢＣ"))
+        XCTAssertTrue(filter.blocks("それは てすと語 です"))
+        XCTAssertTrue(filter.blocks("ﾃｽﾄ語"))
+        XCTAssertFalse(filter.blocks("テスト"))
+    }
+
+    func testShippedContentFilterDecodesAndSparesDisasterPosts() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../..").standardized
+        let filter = ContentFilter(base64: try String(contentsOf: root.appendingPathComponent("apps/ios/Mosimo/blocked-words.b64"), encoding: .utf8))
+        XCTAssertFalse(filter.words.isEmpty)
+        XCTAssertFalse(filter.blocks("パチンコ店の駐車場が冠水"))
+        XCTAssertFalse(filter.blocks("Mizu ga arimashita. Hanashite kudasai"))
+        XCTAssertFalse(filter.blocks("問い合わせが殺到しています"))
+        XCTAssertFalse(filter.blocks("［避難所］水がたりていません"))
+    }
 }

@@ -66,6 +66,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var lastSync: Int64 = 0
     private var blocked: [String] { disk?.blockedDids ?? [] }
     private var hideExpired: Bool { defaults.object(forKey: "hideExpired") as? Bool ?? true }
+    private let filter = ContentFilter(base64: Bundle.main.url(forResource: "blocked-words", withExtension: "b64").flatMap { try? String(contentsOf: $0, encoding: .utf8) })
     private let bootTime = MeshCoordinator.kernelBootTime()
     private var timer: Timer?
     private let pathMonitor = NWPathMonitor()
@@ -265,6 +266,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         do {
             guard !fatal, let author, var current = disk else { throw CoreError("not ready") }
             try requireText(text)
+            if filter.blocks(text) { issue("不適切な表現が含まれているため投稿できません"); return }
             let post = try author.createPost(text, nowMillis: Self.now(), previous: current.repository,
                                              deliveryExpiresAtSeconds: deliveryExpiresAtSeconds ?? Self.now() / 1000 + 86400, extensions: extensions)
             do { try engine.originate(post.event, nowMillis: Self.now(), elapsedMillis: Self.elapsed()) } catch {
@@ -473,7 +475,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
                          deliveryDeadline: engine.deadline($0, nowMillis: now), did: didOf($0), createdAt: $0.createdAt, ext: Extensions.of($0))
             }
             let hide = hideExpired
-            s.posts = posts.filter { !blocked.contains($0.did ?? "") && !(hide && $0.deliveryDeadline == .expired) }
+            s.posts = posts.filter { !blocked.contains($0.did ?? "") && !(hide && $0.deliveryDeadline == .expired) && !filter.blocks($0.content) }
         }
         s.publicBusy = publicBusy
         s.blockedDids = blocked
