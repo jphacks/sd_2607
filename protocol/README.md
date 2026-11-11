@@ -27,6 +27,7 @@ flowchart TD
   ext[.attest.external]
   imp[.attest.importer 転載サーバー]
   pub[.public 公的情報の取り込み]
+  dm[.dm 個別通信プロファイル]
   cap[.public.cap]
   edxl[.public.edxl]
   jma[.public.jma]
@@ -34,7 +35,7 @@ flowchart TD
   eq[.public.jma.earthquake]
   wx[.public.jma.weather]
   bsaf[.public.bsaf]
-  core --> geo & val & ann & pri & mesh & pds & pub
+  core --> geo & val & ann & pri & mesh & pds & pub & dm
   mesh --> madv & ml2 & mz & mt
   core --> chain
   att --> chain & rev & sign & ext
@@ -76,6 +77,7 @@ flowchart TD
 | `dev.jisaku.mosimo.public.jma.earthquake` | [mosimo/public/jma/earthquake/](mosimo/public/jma/earthquake/README.md) | 地震観測情報 |
 | `dev.jisaku.mosimo.public.jma.weather` | [mosimo/public/jma/weather/](mosimo/public/jma/weather/README.md) | 気象防災情報 |
 | `dev.jisaku.mosimo.public.bsaf` | [mosimo/public/bsaf/](mosimo/public/bsaf/README.md) | BSAF v1 互換 |
+| `dev.jisaku.mosimo.dm` | [mosimo/dm/](mosimo/dm/README.md) | 1 対 1 メッセージの相互運用プロファイル（NIP-04、配達通知、表示名） |
 
 ## 実装の入口
 
