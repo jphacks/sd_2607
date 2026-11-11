@@ -103,7 +103,7 @@ uv run python smoke_test.py COM3 --mesh --speech --received-speech --log .pio/tt
 
 診断版ではUART（115200 baud、末尾改行）へ `peers` に続けて現在のnodeを空白区切りで送ると、HELLO後の許可対象を制限できる。最大8件の小文字16桁hexで、除外peerは切断する。`peers *` で無制限へ戻す。設定は揮発性で、認証ではない。Androidのnodeはプロセス再起動で変わるため過去のIDを再利用しない。
 
-wire形式の変更時は [MNDT](../../protocol/mndt.md) とAndroidの `Wire.kt`・`GattLink.kt`・`Exchange.kt` を照合する。現行§9形式と新§3形式を同じ接続で混在させず、移行は協調して行う。仕様との差分・統合条件は [監査資料](AUDIT-2026-10-18.md) を参照。
+wire形式の変更時は [メッシュ配送](../../protocol/mosimo/mesh/README.md) とAndroidの `Wire.kt`・`GattLink.kt`・`Exchange.kt` を照合する。現行§9形式と新§3形式を同じ接続で混在させず、移行は協調して行う。仕様との差分・統合条件は [監査資料](AUDIT-2026-10-18.md) を参照。
 
 ## Optional Wi-Fi Internet gateway
 
@@ -117,7 +117,7 @@ wire形式の変更時は [MNDT](../../protocol/mndt.md) とAndroidの `Wire.kt`
 
 BLEコールバックは有界キューへのコピーを行い、通常のBLE受信の暗号検証・ファイル操作・表示はメインループで処理する。gatewayの取得・認可検証はworker、Relay/LittleFS/UIと最終保存はメインループが所有する。
 
-The **default `m5stack-basic` and diagnostic profiles remain offline**, even if a local gateway config exists. The gateway is public store-and-forward, not a phone tether, a new author, a PDS, or a PLC authority. It never generates keys or re-signs/edits posts. Protocol boundaries: [0001 §1.1.1](../../protocol/0001-repository-model.md), [0007](../../protocol/0007-nostr-relay-profile.md), [0012](../../protocol/0012-bindings.md), and provisional Android control kind 8173 in [mndt §9.5](../../protocol/mndt.md).
+The **default `m5stack-basic` and diagnostic profiles remain offline**, even if a local gateway config exists. The gateway is public store-and-forward, not a phone tether, a new author, a PDS, or a PLC authority. It never generates keys or re-signs/edits posts. Protocol boundaries: [core](../../protocol/mosimo/README.md), [PDS and relay](../../protocol/mosimo/pds/README.md), and control kind 8173 in [PDS §6](../../protocol/mosimo/pds/README.md#6-plc-初期操作の制御イベントと代理登録).
 
 ### Local configuration (explicit opt-in to public upload)
 
@@ -219,7 +219,7 @@ The original host-only gateway work did not validate hardware. See `VERIFICATION
 
 ### Optional wire-v1 Nostr → mesh ingress (A button)
 
-Implemented against [`protocol/0020-wire-v1.md`](../../protocol/0020-wire-v1.md), not the earlier deferred signer-list proposal. **Disabled by default; no production root or real JMA Bot DID is shipped.** No relay URL, NIP-11 capability, signer allowlist, `source:jma`, organization display name or priority hint is a trust anchor. Existing BLE receipt/forwarding and outgoing upload rules remain unchanged; these stricter checks apply to **new Internet→mesh admission**, not every ordinary mesh post.
+Implemented against the former wire-v1 contract; the current specification is the [importer protocol](../../protocol/mosimo/attest/importer/README.md), to which this implementation has not yet been migrated. **Disabled by default; no production root or real JMA Bot DID is shipped.** No relay URL, NIP-11 capability, signer allowlist, `source:jma`, organization display name or priority hint is a trust anchor. Existing BLE receipt/forwarding and outgoing upload rules remain unchanged; these stricter checks apply to **new Internet→mesh admission**, not every ordinary mesh post.
 
 #### Public root integration contract (parent/server worker)
 

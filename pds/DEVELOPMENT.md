@@ -38,7 +38,7 @@ Android・ESP32を含むローカルデータ相互運用試験の手順は [ESP
 | `network.mjs` | 外部リレー収集、peer通知・取得・再試行 |
 | `config.mjs` / `main.mjs` | 設定検証、起動・終了 |
 
-変更時の仕様根拠は [リポジトリモデル](../protocol/0001-repository-model.md)、[論理PDS](../protocol/0006-logical-pds.md)、[Nostrリレー](../protocol/0007-nostr-relay-profile.md)、[データ表現](../protocol/0012-bindings.md) を参照。peer APIやNIP-11の独自情報を標準仕様として扱わない。
+変更時の仕様根拠は [コアプロトコル](../protocol/mosimo/README.md)、[論理PDSとNostrリレー](../protocol/mosimo/pds/README.md) を参照。peer APIやNIP-11の独自情報を標準仕様として扱わない。
 
 ## BSAF転載イベントの経路
 

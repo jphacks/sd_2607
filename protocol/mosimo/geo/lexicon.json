@@ -1,0 +1,84 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.geo",
+  "defs": {
+    "origin": {
+      "type": "object",
+      "description": "The device location the author chose to publish at posting time. It is independent of the area the content concerns and is not evidence of presence.",
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": {
+          "type": "integer",
+          "description": "WGS 84 latitude in millionths of a degree.",
+          "minimum": -90000000,
+          "maximum": 90000000
+        },
+        "lon": {
+          "type": "integer",
+          "description": "WGS 84 longitude in millionths of a degree.",
+          "minimum": -180000000,
+          "maximum": 180000000
+        },
+        "acc": {
+          "type": "integer",
+          "description": "Positioning accuracy as a distance in millimeters. Omit when unknown.",
+          "minimum": 0
+        },
+        "at": {
+          "type": "string",
+          "format": "datetime",
+          "description": "When the position was measured. UTC with an uppercase Z suffix; preserve the original string. Omit when unknown."
+        }
+      }
+    },
+    "area": {
+      "type": "object",
+      "description": "The geographic area the content concerns, expressed as the union of circles and Geohash cells. A delivery and display hint, not an access boundary.",
+      "required": ["regions"],
+      "properties": {
+        "regions": {
+          "type": "array",
+          "description": "Regions whose union is the area. Circles and Geohash cells may be mixed. Preserve element order.",
+          "items": { "type": "ref", "ref": "#region" }
+        },
+        "approximation": {
+          "type": "boolean",
+          "description": "True when regions are a covering approximation of an original area (for example a polygon or administrative area code) resolved by the publisher; every point of the original area lies within the union. Omit or false when the author specified the regions directly."
+        }
+      }
+    },
+    "region": {
+      "type": "object",
+      "description": "One element of an area. The shape field selects which other fields are present: circle uses latitudeMicrodegrees, longitudeMicrodegrees and radiusMillimeters; geohash uses hash.",
+      "required": ["shape"],
+      "properties": {
+        "shape": {
+          "type": "string",
+          "description": "Region kind.",
+          "knownValues": ["circle", "geohash"]
+        },
+        "lat": {
+          "type": "integer",
+          "description": "Circle center WGS 84 latitude in millionths of a degree.",
+          "minimum": -90000000,
+          "maximum": 90000000
+        },
+        "lon": {
+          "type": "integer",
+          "description": "Circle center WGS 84 longitude in millionths of a degree.",
+          "minimum": -180000000,
+          "maximum": 180000000
+        },
+        "r": {
+          "type": "integer",
+          "description": "Circle radius in millimeters.",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string",
+          "description": "Geohash cell code (base32 Geohash alphabet). Cell size follows code length."
+        }
+      }
+    }
+  }
+}

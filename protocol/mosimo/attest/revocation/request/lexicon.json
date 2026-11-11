@@ -1,0 +1,152 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.revocation.request",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "body"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#requestBody"
+          ],
+          "closed": true
+        },
+        "signer": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Revocation request. Unsigned when signer and sig are absent."
+    },
+    "requestBody": {
+      "type": "object",
+      "required": [
+        "subject",
+        "requestedAt",
+        "blocks"
+      ],
+      "properties": {
+        "subject": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Request time."
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Optional blocks.",
+          "items": {
+            "type": "union",
+            "refs": [
+              "dev.jisaku.mosimo.attest.revocation#reason",
+              "#evidence",
+              "#subjectChain",
+              "#reporterChain"
+            ]
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32,
+            "description": "Nostr event ID."
+          },
+          "maxLength": 64
+        },
+        "uris": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "at-uri"
+          }
+        }
+      },
+      "description": "Messages the request refers to."
+    },
+    "subjectChain": {
+      "type": "object",
+      "required": [
+        "attestations"
+      ],
+      "properties": {
+        "attestations": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "dev.jisaku.mosimo.attest#keyAttestation"
+          }
+        }
+      },
+      "description": "Chain of the subject key."
+    },
+    "reporterChain": {
+      "type": "object",
+      "required": [
+        "attestations"
+      ],
+      "properties": {
+        "attestations": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "dev.jisaku.mosimo.attest#keyAttestation"
+          }
+        }
+      },
+      "description": "Chain of the signer."
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "knownValues": [
+            "revoked",
+            "received",
+            "rejected",
+            "not-ancestor"
+          ]
+        },
+        "revocationId": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    }
+  }
+}

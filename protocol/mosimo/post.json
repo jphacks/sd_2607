@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.post",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A public text post. Corrections, supplements, and endorsements are represented as new posts with extensions.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "text",
+          "exp",
+          "ext"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Human-readable text that remains useful without extension support. Do not normalize Unicode or line endings after signing."
+          },
+          "exp": {
+            "type": "string",
+            "format": "datetime",
+            "description": "The author-specified absolute deadline for mesh delivery, distinct from information validity and deletion. Canonical form YYYY-MM-DDTHH:mm:ssZ (UTC, seconds precision)."
+          },
+          "created": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Optional creation time with sub-second precision. Its seconds part must equal the Nostr created_at of the carrying event. Omit when seconds precision suffices."
+          },
+          "ext": {
+            "type": "array",
+            "description": "Optional author-signed extensions. Preserve each element's $type and unknown fields, array order, and multiple elements of the same type. Use an empty array when no extensions are present.",
+            "items": {
+              "type": "union",
+              "refs": [],
+              "closed": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

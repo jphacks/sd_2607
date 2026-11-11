@@ -131,7 +131,7 @@ SDKとして使う場合は `MeshCoordinator.get(context)` で初期化する。
 - `publish` で投稿し、`addRelay` / `removeRelay` / `setOnlineEnabled` で搬出先と有効状態を操作する。
 - Activityの `onStart` / `onStop` から `setOnlineForeground(true/false)` を通知し、UIは `state` を購読する。
 
-wire形式を変更する際は [MNDT §9](../../protocol/mndt.md#9-android-実装の暫定値提案未採用) とESP32実装を照合する。最新§3のCBOR交換とは接続内で混在させず、移行は両実装で協調して行う。タグ・データ表現は [0012](../../protocol/0012-bindings.md) を正とする。
+wire形式を変更する際は [メッシュ配送 §12](../../protocol/mosimo/mesh/README.md#12-実装の参考値) とESP32実装を照合する。最新§3のCBOR交換とは接続内で混在させず、移行は両実装で協調して行う。タグ・データ表現は [コアプロトコル](../../protocol/mosimo/README.md) を正とする。
 
 `AtRepository.restore(event, atprotoPubkey?)` はタグからレコードとcommitを復元する。公開鍵を渡した場合だけcommit署名も検証するため、認証用途では信頼できるDID documentから取得した鍵を使う。DID認証・MST包含検証を行うAPIではない。受信側はrecord keyと `rev` の一致を前提にしない。
 

@@ -1,0 +1,50 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.annotation",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Marks this post as a correction, supplement, or endorsement of a target post. The author of the annotation is the author of this post, not of the target. Anyone may annotate any post.",
+      "required": ["relation", "target"],
+      "properties": {
+        "relation": {
+          "type": "string",
+          "description": "How this post relates to the target.",
+          "knownValues": ["correction", "supplement", "endorsement"]
+        },
+        "target": {
+          "type": "ref",
+          "ref": "#postReference"
+        }
+      }
+    },
+    "postReference": {
+      "type": "object",
+      "description": "A reference to a post on one of the two networks. The network field selects which other fields are present: atproto uses uri and optionally cid; nostr uses eventId.",
+      "required": ["network"],
+      "properties": {
+        "network": {
+          "type": "string",
+          "description": "Network the reference is expressed on.",
+          "knownValues": ["atproto", "nostr"]
+        },
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "Location of the target record (at://did/collection/record-key)."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "Record CID pinning a specific version of the target. Omit to refer to the location only."
+        },
+        "eventId": {
+          "type": "bytes",
+          "description": "32-byte Nostr event ID of the target event.",
+          "minLength": 32,
+          "maxLength": 32
+        }
+      }
+    }
+  }
+}

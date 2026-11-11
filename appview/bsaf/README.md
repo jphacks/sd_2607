@@ -29,6 +29,6 @@ Bluesky上のBSAF形式の投稿を収集し、Mosimo投稿と同じタイムラ
 ## 関連資料
 
 - [AppView](../happyview/README.md) / [Webクライアント](../../apps/web/README.md)
-- [BSAFとの互換性・再配信の設計](../../protocol/0019-bsaf.md)
+- [BSAFとの互換性・再配信の設計](../../protocol/mosimo/public/bsaf/README.md)
 - [登録・運用・API詳細・テスト](DEVELOPMENT.md)
 - [署名付き再配信の設定・鍵・証明書](PUBLISHER.md) / [wire-v1共有実装](../../pds/public-information.mjs)

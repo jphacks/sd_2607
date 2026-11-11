@@ -1,108 +1,97 @@
-# 災害時情報共有プロトコル仕様群
+# Mosimo プロトコル仕様
 
-更新日: 2026-11-08
+正式名称は「もしもプロトコル」。災害時に、インターネットが使えない地域でも、異なるアプリの間で署名付きの投稿を共有するためのプロトコル群である。コアの識別子は `dev.jisaku.mosimo`、管理ドメインは `mosimo.jisaku.dev` とし、各拡張プロトコルはその下位の識別子を持つ。識別子とディレクトリは一対一に対応し、各プロトコルは一つの `README.md` と、型が確定していれば lexicon JSON を持つ。
 
-**状態: 設計草案。** 日本語の RFC 風文書として、基本モデル、拡張、データ表現、配送、外部情報との互換性を分けて記述します。公式名前空間は `mosimo.oriom.dev` を基点として割り当て済みです。基本プロトコル・拡張型・メッシュ符号化の独立した版管理も採用済みです。正式な表示名称は「もしもプロトコル」です。版の具体表記・一部の具体型は未確定であり、相互運用可能な wire 仕様の完成を宣言するものではありません。
-
-**BSAF importer 経路:** [0029: Importer プロファイル](0029-importer-profile.md) が、鍵署名の `import` 役割と `importScope`・`organization` ブロック、受信者の自動投入の認可を定義します。転載する情報の形式は [0019](0019-bsaf.md) に従います。旧 [0020: experimental wire-v1](0020-wire-v1.md) は superseded であり、履歴として残します。
-
-**発信者証明拡張群（draft）:** [0022: 鍵署名](0022-key-attestation.md) を基盤に、[0023](0023-attestation-chain-extension.md) が投稿への同梱、[0024](0024-revocation-notice.md) が失効通知、[0025](0025-revocation-list-endpoint.md) が認証局の失効リスト配信、[0026](0026-revocation-request.md) が失効要求、[0027](0027-signing-request.md) が署名要求と自動発行、[0028](0028-external-account-attestation.md) が外部アカウント証明、[0029](0029-importer-profile.md) が importer を、[0030](0030-revocation-subkey.md) が主鍵を失ったときの失効用サブ鍵を、それぞれ前提文書の拡張として定義します。ルート鍵は複数あってよくオフラインに置き、定期的な鮮度通知を要求せず、失効は事象として配送します。
-
-## 1. 最初に読む文書
-
-| 文書 | 役割 | 分かること |
-|---|---|---|
-| [0010: 基本プロトコル](0010-core.md) | 基本仕様 | 投稿単位、基本型、作成から配送・公開まで |
-| [0011: 著者署名付き拡張ブロック](0011-extensions.md) | 拡張仕様 | 位置・影響範囲・有効期間・注釈等の型と意味 |
-| [0012: atproto・Nostr・CBOR のデータ表現](0012-bindings.md) | 形式ごとの対応 | 本文・レコード・path・commit の配置とサイズ削減案 |
-| [BPv7 メッシュ配送](mndt.md) | 配送仕様 | BLE GATT・接続済み LAN の探索、任意の Nearby 切替、payload と配送状態、保存・中継・ゲートウェイ |
-| [0013: 公的情報の取り込みと出典](0013-public-information.md) | 外部形式との対応 | CAP・EDXL-DE・気象庁 XML のマッピングと具体例、BSAF の AppView 統合 |
-| [0014: 公式名前空間と識別子](0014-namespaces.md) | 名前の割り当て | `mosimo.oriom.dev` に基づく Lexicon・タグの正式な名前 |
-| [0015: CAP 1.2 著者拡張](0015-cap.md) | 形式別拡張 | CAPの型・本文への変換・共通領域と期間・更新取消・配送判断 |
-| [0016: EDXL-DE 1.0 著者拡張](0016-edxl-de.md) | 配布容器の拡張 | 内容選択・配布先・公開条件・容器と内包警報の分離 |
-| [0017: 気象庁緊急地震速報](0017-jma-eew.md) | 予測・警報の拡張 | 警報・予報、震源精度、地域別予測、PLUM法、続報・取消、遅着時の動作 |
-| [0018: 気象庁地震観測情報](0018-jma-earthquake.md) | 観測情報の拡張 | 震度速報・震源・震源震度・長周期地震動の型と変換 |
-| [0019: BSAF v1互換拡張](0019-bsaf.md) | BSAFとの相互運用 | タグ・言語・原投稿参照、AppView収集、取り込みと別途BSAF公開の境界 |
-| [0020: Experimental wire-v1](0020-wire-v1.md) | superseded。旧 BSAF importer 契約 | 0022〜0029・0011 §10・0007 §6 への対応表。canonical CBOR と binding 形式の原典 |
-| [0021: 気象庁気象防災情報](0021-jma-weather.md) | 気象XML拡張の具体的ドラフト | 警報・注意報、土砂・竜巻・記録雨・洪水・台風・線状降水帯・大雪・一般情報の部分集合、地域別状態・時刻・限界 |
-| [0022: 鍵署名](0022-key-attestation.md) | 発信者証明拡張群の基盤 | 鍵が鍵を署名する形式、所有者・スコープ・追加ブロック、stratum、オフラインのチェーン検証 |
-| [0023: 署名チェーン拡張ブロック](0023-attestation-chain-extension.md) | 投稿への同梱 | `attest#chain` の構造、末端鍵と Nostr 鍵の対応、検証と表示の状態 |
-| [0024: 失効通知](0024-revocation-notice.md) | 失効の事実 | 即時形・事前発行形、ルート鍵の自己失効、制御イベントとしての運び方 |
-| [0025: 失効リスト配信](0025-revocation-list-endpoint.md) | 認証局のエンドポイント | 失効リストの公開・購読・再掲、オンライン時の確認と拡散停止 |
-| [0026: 失効要求](0026-revocation-request.md) | 通報と自己失効 | 要求形式、対象鍵署名による即時失効、通報の判断 |
-| [0027: 署名要求と自動発行](0027-signing-request.md) | 認証局の発行経路 | 署名要求、鍵所持の証明、NIP-05 ドメイン検証プロファイル、手動審査 |
-| [0028: 外部アカウント証明](0028-external-account-attestation.md) | 個人向けプロファイル | NIP-39 の外部アカウント検証に基づく鍵署名 |
-| [0029: Importer プロファイル](0029-importer-profile.md) | 転載サーバーの認証と自動投入 | `import` 役割、`importScope`・`organization`、受信者の認可、重複抑止、表示 |
-| [0030: 失効用サブ鍵](0030-revocation-subkey.md) | 主鍵を失ったときの失効 | 副鍵の公開鍵を鍵署名に載せ、副鍵の署名で事前発行形を活性化 |
+## 構成
 
 ```mermaid
 flowchart TD
-  A[0010 基本投稿] --> B[0011 任意の著者拡張]
-  B --> C[0012 atproto・Nostr・CBORへの対応]
-  C --> D[メッシュ配送: BPv7による保存・中継]
-  C --> E[0006・0007 PDS・オンラインリレー]
-  F[0013 CAP・EDXL・気象庁XML] --> A
-  G[0013 既存BSAF投稿] --> H[対応AppViewで別入力として統合]
-  E --> H
-  I[0022 鍵署名] --> J[0023 署名チェーン拡張]
-  B --> J
-  I --> K[0024 失効通知] --> L[0025 失効リスト配信] --> M[0026 失効要求]
-  K --> R[0030 失効用サブ鍵]
-  I --> N[0027 署名要求] -.-> O[0028 外部アカウント証明]
-  I --> O
-  J --> P[0029 Importer プロファイル]
-  Q[0019 BSAF v1] --> P
+  core[dev.jisaku.mosimo<br/>コア: 投稿・拡張の構造・atproto/Nostr 表現]
+  geo[.geo 発信地点・影響範囲]
+  val[.validity 情報の有効期間]
+  ann[.annotation 訂正・補足・追認]
+  pri[.priority 配送優先度ヒント]
+  mesh[.mesh BPv7 メッシュ配送]
+  madv[.mesh.adv 広告要約]
+  ml2[.mesh.l2cap L2CAP CoC]
+  mz[.mesh.zstd 本文圧縮]
+  mt[.mesh.time 時刻ヒント]
+  pds[.pds 論理 PDS と Nostr リレー]
+  att[.attest 鍵署名]
+  chain[.attest.chain 投稿への同梱]
+  rev[.attest.revocation 失効通知]
+  list[.attest.revocation.list]
+  req[.attest.revocation.request]
+  sub[.attest.revocation.subkey]
+  sign[.attest.signing]
+  ext[.attest.external]
+  imp[.attest.importer 転載サーバー]
+  pub[.public 公的情報の取り込み]
+  cap[.public.cap]
+  edxl[.public.edxl]
+  jma[.public.jma]
+  eew[.public.jma.eew]
+  eq[.public.jma.earthquake]
+  wx[.public.jma.weather]
+  bsaf[.public.bsaf]
+  core --> geo & val & ann & pri & mesh & pds & pub
+  mesh --> madv & ml2 & mz & mt
+  core --> chain
+  att --> chain & rev & sign & ext
+  rev --> list --> req
+  rev --> sub
+  chain --> imp
+  bsaf --> imp
+  pub --> cap & edxl & jma & bsaf
+  jma --> eew & eq & wx
 ```
 
-### 実装の担当別の入口
+| 識別子 | 文書 | 内容 |
+|---|---|---|
+| `dev.jisaku.mosimo` | [mosimo/](mosimo/README.md) | 参加者、投稿単位、基本型、拡張の共通構造、atproto レコードと commit、Nostr イベントとタグ、版管理、名前空間 |
+| `dev.jisaku.mosimo.geo` | [mosimo/geo/](mosimo/geo/README.md) | 発信地点、影響範囲、Geohash、近似 |
+| `dev.jisaku.mosimo.validity` | [mosimo/validity/](mosimo/validity/README.md) | 情報の有効期間 |
+| `dev.jisaku.mosimo.annotation` | [mosimo/annotation/](mosimo/annotation/README.md) | 訂正・補足・追認と Label |
+| `dev.jisaku.mosimo.priority` | [mosimo/priority/](mosimo/priority/README.md) | 著者の配送優先度ヒントと実効優先度 |
+| `dev.jisaku.mosimo.mesh` | [mosimo/mesh/](mosimo/mesh/README.md) | BPv7 による保存・中継、BLE/LAN/Nearby、接触時交換、Negentropy による差分照合、メッシュ用 CBOR |
+| `dev.jisaku.mosimo.mesh.adv` | [mosimo/mesh/adv/](mosimo/mesh/adv/README.md) | 広告に載せる所持要約。接続前に接続の要否を判断する |
+| `dev.jisaku.mosimo.mesh.l2cap` | [mosimo/mesh/l2cap/](mosimo/mesh/l2cap/README.md) | L2CAP CoC への経路切替 |
+| `dev.jisaku.mosimo.mesh.zstd` | [mosimo/mesh/zstd/](mosimo/mesh/zstd/README.md) | payload の zstd 圧縮 |
+| `dev.jisaku.mosimo.mesh.time` | [mosimo/mesh/time/](mosimo/mesh/time/README.md) | HELLO の時刻ヒント |
+| `dev.jisaku.mosimo.pds` | [mosimo/pds/](mosimo/pds/README.md) | 論理 PDS グループ、復元と正規公開、Nostr リレープロファイル、priority 順取得 |
+| `dev.jisaku.mosimo.attest` | [mosimo/attest/](mosimo/attest/README.md) | 鍵署名、役割、stratum、チェーン検証 |
+| `dev.jisaku.mosimo.attest.chain` | [mosimo/attest/chain/](mosimo/attest/chain/README.md) | 投稿への署名チェーンの同梱と発信者の確認 |
+| `dev.jisaku.mosimo.attest.revocation` | [mosimo/attest/revocation/](mosimo/attest/revocation/README.md) | 失効通知、事前発行、制御イベント |
+| `dev.jisaku.mosimo.attest.revocation.list` | [mosimo/attest/revocation/list/](mosimo/attest/revocation/list/README.md) | 認証局の失効リスト配信 |
+| `dev.jisaku.mosimo.attest.revocation.request` | [mosimo/attest/revocation/request/](mosimo/attest/revocation/request/README.md) | 失効要求と通報 |
+| `dev.jisaku.mosimo.attest.revocation.subkey` | [mosimo/attest/revocation/subkey/](mosimo/attest/revocation/subkey/README.md) | 主鍵を失ったときの失効 |
+| `dev.jisaku.mosimo.attest.signing` | [mosimo/attest/signing/](mosimo/attest/signing/README.md) | 署名要求と自動発行、NIP-05 |
+| `dev.jisaku.mosimo.attest.external` | [mosimo/attest/external/](mosimo/attest/external/README.md) | NIP-39 外部アカウント証明 |
+| `dev.jisaku.mosimo.attest.importer` | [mosimo/attest/importer/](mosimo/attest/importer/README.md) | 転載サーバーの認証と自動投入の認可 |
+| `dev.jisaku.mosimo.public` | [mosimo/public/](mosimo/public/README.md) | 公的情報の取り込み、出典、配送同値、更新による置換 |
+| `dev.jisaku.mosimo.public.cap` | [mosimo/public/cap/](mosimo/public/cap/README.md) | CAP 1.2 |
+| `dev.jisaku.mosimo.public.edxl` | [mosimo/public/edxl/](mosimo/public/edxl/README.md) | EDXL-DE 1.0 |
+| `dev.jisaku.mosimo.public.jma` | [mosimo/public/jma/](mosimo/public/jma/README.md) | 気象庁 XML 共通 |
+| `dev.jisaku.mosimo.public.jma.eew` | [mosimo/public/jma/eew/](mosimo/public/jma/eew/README.md) | 緊急地震速報 |
+| `dev.jisaku.mosimo.public.jma.earthquake` | [mosimo/public/jma/earthquake/](mosimo/public/jma/earthquake/README.md) | 地震観測情報 |
+| `dev.jisaku.mosimo.public.jma.weather` | [mosimo/public/jma/weather/](mosimo/public/jma/weather/README.md) | 気象防災情報 |
+| `dev.jisaku.mosimo.public.bsaf` | [mosimo/public/bsaf/](mosimo/public/bsaf/README.md) | BSAF v1 互換 |
 
-- **発信アプリ**: 0010 → 0011 → 0012 → メッシュ配送。平時にアカウントを自動準備します。
-- **本文表示・中継のみのアプリ**: 0010 とメッシュ配送。未知の著者拡張は書き換えず保持し、DID 認証のための情報取得を本文表示の前提にしません。
-- **PDS・オンラインリレー**: 0012 → 0006・0007。
-- **公的情報の取り込み**: 0013 → 0011・0012、CAPの個別仕様草案は0015、EDXL-DEは0016、気象庁の緊急地震速報は0017、地震観測情報は0018、気象防災情報の構造化ドラフトは0021、信頼の方針は 0002。
-- **BSAF server importer・Android/ESP32 ingress・認可対応relay**: 0029 → 0023・0022・0019・0024。priority 順取得は 0007 §6。
-- **BSAF 対応 AppView・変換機能**: 0019 → 0013 §6.4。既存投稿の収集と、任意の取り込み・BSAF向け別途公開を区別します。
-- **発信者証明の検証（クライアント・PDS・リレー）**: 0022 → 0023 → 0024。オンライン時の確認は 0025 §5。
-- **認証局**: 0022 → 0024 → 0025 → 0026。自動発行を提供する場合は 0027、個人向けは 0028、importer への発行は 0029 §2、鍵喪失への備えは 0030。
+## 実装の入口
 
-## 2. 専門文書と既存の設計記録
-
-`protocol/` はプロトコル定義書の置き場とし、調査報告・技術比較・作業メモは置きません。調査資料は `docs/research/` に分離し、仕様の採用事項とは区別します。0010 以降は実装者向けの構造化した入口、以下は詳細方針と合意事項です。
-
-| 文書 | 内容 |
+| 実装 | 読む順序 |
 |---|---|
-| [0000: 全体概要](0000-overview.md) | 目的・全体像・保証の境界 |
-| [0001: リポジトリ正本モデル](0001-repository-model.md) | 合意した設計判断の記録 |
-| [0002: 公的情報の取り込みと信頼](0002-ingestion-and-trust.md) | 取り込みサーバーへの信頼と配送同値性 |
-| [0003: 未決事項](0003-open-questions.md) | 今後固定する項目と延期事項 |
-| [0004: 地理情報](0004-geography.md) | 円・Geohash の意味と部分実装 |
+| 発信アプリ | コア → geo・validity・annotation → mesh。身元を示す場合は attest.chain |
+| 表示・中継だけのアプリ | コア → mesh。未知の拡張は書き換えず保持する |
+| PDS・Nostr リレー | コア → pds → attest.revocation.list §5 |
+| 公的情報の取り込み | public → cap・edxl・jma → attest.importer |
+| 認証局 | attest → attest.revocation → attest.revocation.list → attest.revocation.request。自動発行は attest.signing、個人向けは attest.external、転載サーバーへの発行は attest.importer |
+| ゲートウェイ（Android・ESP32） | mesh → attest.chain → attest.importer |
 
-| [0006: 論理 PDS と分散公開](0006-logical-pds.md) | 複数物理 PDS の役割と正規公開 |
-| [0007: Nostr リレープロファイル](0007-nostr-relay-profile.md) | 直接投稿・取得・発見・保持 |
-| [0008: 投稿と注釈・Label](0008-posts-and-labels.md) | 本人の注釈とサービスの集約 Label |
-| [0009: 署名チェーンによる身元証明](0009-identity-attestations.md) | 公式発信者への帰属と信頼の起点 |
+## 文書の書き方
 
-| [用語集](../CONTEXT.md) | 発信者・影響範囲・訂正等の既存用語 |
-
-## 3. 要件と型案の読み分け
-
-- **要件・合意済み**: 既存の採用方針。1投稿＝1レコード追加・1 commit・1 Nostr イベント等は再選択しません。
-- **型案・配置案・提案**: 既存方針を実装可能な形にするための具体化。未決定のフィールド名・タグ名・NSID 等を採用済みとは扱いません。共通時刻型や独自タグの bytes 符号化など、個別に合意した事項は各文書で区別します。
-- **未決定**: 決定に必要な事項。仕様全体の整理を先に進め、互換性・責務・安全性を左右する判断が必要な場合に確認します。
-- **延期**: 初期仕様の対象外。個別通信・限定公開・メディア本体・欠落履歴の探索・全面的な逆変換・端末状態の巻き戻りへの対応。
-
-各文書の TypeScript 風の型は説明用であり、そのまま正式 Lexicon や登録済みの wire schema ではありません。基本投稿の実装済み Lexicon JSON は [`lexicons/dev/oriom/mosimo/post.json`](../lexicons/dev/oriom/mosimo/post.json)、利用方法と実装範囲は [`lexicons/README.md`](../lexicons/README.md) に置きます。個別拡張は未確定の型案を実装済みとは扱いません。明示的な合意と型案が食い違う場合は合意を優先します。0020 は superseded であり、その型を新規実装の契約として扱いません。テストベクトルの作成・実行や正式Lexicon公開の完了は宣言しません。署名等に関する既存要件は維持します。
-
-旧 MNDT draft-00 は現在の責務分離に合わせて改訂しました。旧案のタグ・EID・ブロック番号・数値を採用済みとして実装しないでください。
-
-## 4. BSAF 互換性の範囲
-
-独自 Lexicon と BSAF のタグ方式を比較し、本プロトコル本体には独自 Lexicon を採用済みです。BSAF の既存投稿は対応 AppView が別入力として収集し、著者・atURI・CID・本文・出典を残したまま、一覧・地図・絞り込みで併置します。
-
-独自 Lexicon の投稿が既存 Bluesky クライアントへ自動表示されることや、既存 BSAF 投稿をそのまま本プロトコルのメッシュへ投入できることは保証しません。独立拡張 `bsafV1` の型・タグ・言語・原投稿参照と、任意の取り込み・BSAF向け別途公開の経路案は [0019](0019-bsaf.md) に定義します。自動再配信は、各取り込み側の運用者・利用者が明示的に選んだBotと情報種別の組だけを対象とします。中央登録制ではなく、設定なしでは自動投入しません。収集・閲覧やBot定義の更新だけで再配信を有効にしません。BSAF向け自動公開と更新削除の連携等は未決定です。
-
-追加ソース `@bsaf-kikikuru-bot.bsky.social` の固定23種は [0019 §5.2.3](0019-bsaf.md#523-kikikuru-botの追加ソース固定した選択肢) に列挙します。既存JMA Botの5種の選択を維持し、Kikikuru Botは別途明示選択します。`importScope` の推奨上限は 0029 §5 に従います。原BSAFは `bsafV1`、実際に取得保存した気象XMLの構造化部分集合は0021の `jmaWeather` とし、両者を同一視しません。
-
-## 5. 更新方針
-
-既存の合意を重複して質問せず、仕様全体の構造とデータの流れを先に整えます。新しい具体案は提案と明示し、重要な未決事項だけを必要に応じて質問します。回答の反映・文書更新ごとに差分を確認します。コミット・pushは明示的な依頼がある場合のみ実施します。公開リポジトリのため、秘密鍵・認証情報・非公開の個人情報を含めません。
+- 一つのプロトコルに一つの `README.md`。冒頭に識別子、目的、前提とするプロトコルの表を置く。
+- 現時点の仕様だけを現在形で書く。決まっていない事項は末尾の「未確定事項」にまとめる。
+- 禁止・非推奨は理由を伴う「してはならない」「すべきではない」の形でだけ書く。
+- 型は TypeScript 風の記法で示し、確定した型は同じディレクトリの lexicon JSON に置く。
+- 用語は [用語集](../CONTEXT.md) に従う。

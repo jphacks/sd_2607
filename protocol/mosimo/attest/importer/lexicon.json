@@ -1,0 +1,47 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.importer",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "sources"
+      ],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "#source"
+          },
+          "maxLength": 16,
+          "description": "Sorted by botDid, no duplicates."
+        }
+      },
+      "description": "Block in a key attestation listing the (botDid, type) pairs an importer may re-publish."
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "botDid",
+        "types"
+      ],
+      "properties": {
+        "botDid": {
+          "type": "string",
+          "description": "Author DID of the original posts.",
+          "format": "did"
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Information type; the value of the bsaf type: tag without prefix."
+          },
+          "minLength": 1,
+          "maxLength": 32
+        }
+      }
+    }
+  }
+}

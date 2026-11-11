@@ -19,7 +19,7 @@ M5Stack Basic（ESP32）を使った、公開テキスト投稿のBluetooth中�
 
 ## 実装範囲・制限
 
-- Androidとの[暫定通信形式](../../protocol/mndt.md#9-android-実装の暫定値提案未採用)を使う実験実装です。接続相手は一度にAndroid 1台で、ESP32同士の接続、投稿作成には未対応です。通常版・診断版はオフライン専用で、Internet通信には明示設定したgateway版が必要です。
+- Androidとの[実装の参考値](../../protocol/mosimo/mesh/README.md#12-実装の参考値)を使う実験実装です。接続相手は一度にAndroid 1台で、ESP32同士の接続、投稿作成には未対応です。通常版・診断版はオフライン専用で、Internet通信には明示設定したgateway版が必要です。
 - **電源断・再起動前に保存した投稿は、再起動後にはメッシュ中継しません**。電源断中の経過時間を正しく測れず、配送期限を延ばさないための制約です。gateway版のオンライン搬出はcold投稿も再試行しますが、メッシュ中継の資格は復活しません。実電源断を挟む耐障害性や長時間耐久性は未検証です。
 - 公開投稿専用で、Bluetooth通信路自体の暗号化や相手の本人確認は行いません。gateway通信はTLS検証を行いますが、署名も内容の真実性を保証しません。リレー受理・PLC登録・PDS公開・Web表示は別の段階です。
 - **読み上げは評価専用**です。ナ行・マ行が「ヌ」になる制限があり、正確な防災放送や製品運用には使えません。音声SDK・辞書・それらを含むファームウェアは公開せず、利用・配布には[公式条件](https://www.a-quest.com/download.html)の確認が必要です。音声なしgateway版と、資源を時間分割するgateway＋音声版があります。
@@ -29,4 +29,4 @@ M5Stack Basic（ESP32）を使った、公開テキスト投稿のBluetooth中�
 - [プロジェクト全体](../../README.md) / [Androidアプリ](../android/README.md)
 - [セットアップ・実装詳細・バックアップ・実機試験](DEVELOPMENT.md)
 - [実機検証記録と検証範囲](VERIFICATION.md) / [gateway＋音声の実機記録・操作手順](GATEWAY-HANDOFF.md) / [ホストテスト](test_bundle/README.md)
-- [メッシュ転送仕様](../../protocol/mndt.md)
+- [メッシュ配送](../../protocol/mosimo/mesh/README.md)

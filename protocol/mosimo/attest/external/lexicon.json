@@ -1,0 +1,52 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.external",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "accounts"
+      ],
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "#account"
+          },
+          "minLength": 1,
+          "maxLength": 8
+        }
+      },
+      "description": "Block listing external accounts verified per NIP-39."
+    },
+    "account": {
+      "type": "object",
+      "required": [
+        "platform",
+        "identity",
+        "proof",
+        "verifiedAt"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "description": "NIP-39 platform."
+        },
+        "identity": {
+          "type": "string",
+          "description": "NIP-39 identity."
+        },
+        "proof": {
+          "type": "string",
+          "description": "NIP-39 proof."
+        },
+        "verifiedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Verification time."
+        }
+      }
+    }
+  }
+}
