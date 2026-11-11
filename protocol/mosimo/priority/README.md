@@ -44,7 +44,7 @@ hint = 有効な priority 拡張がちょうど 1 個 ? level : 1
 effectivePriority = 発信者が認可済み ? hint : min(hint, 1)
 ```
 
-「認可済み」とは、投稿の[署名チェーン](../attest/chain/README.md)の検証結果が `verified` であり末端の鍵が該当する役割を持つこと、または[転載サーバー](../attest/importer/README.md)の受信者認可を通ったことである。
+「認可済み」とは、投稿の[署名チェーン](../attest/chain/README.md)の検証結果が `verified` であること、または[転載サーバー](../attest/importer/README.md)の受信者認可を通ったことである。どの役割の鍵にヒントどおりの実効優先度を認めるかは実装の方針であり、`public-information` と `import` の役割に限る、といった絞り込みをしてよい。
 
 ```mermaid
 flowchart TD
@@ -73,10 +73,6 @@ flowchart TD
 ```
 
 `C` は atproto deterministic CBOR、`B64` は padding なしの通常 Base64 である。リレーが実効優先度順に保存済みイベントを返す任意機能は [PDS](../pds/README.md) の `MOSIMO-REQ` に従う。リレーは自身のルート鍵・失効状態・ローカル選択で実効優先度を評価し、受信者はリレーの順序を信用して自身の認可検証を省略してはならない。リレーの評価は受信者の信頼の起点と一致しないためである。
-
-## 未確定事項
-
-- 実効優先度の引き上げを認める末端鍵の役割の範囲。
 
 ## 参照
 

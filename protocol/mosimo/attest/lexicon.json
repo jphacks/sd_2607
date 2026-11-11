@@ -136,7 +136,7 @@
       "properties": {
         "orgId": {
           "type": "string",
-          "description": "Opaque stable organization identifier.",
+          "description": "Organization identifier of the form <prefix>:<id>. The prefix is the namer's domain name or a registered <country>-<name> such as jp-lg (Japanese local government code). Compared by exact match across certificate authorities.",
           "maxLength": 256
         },
         "orgName": {

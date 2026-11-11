@@ -111,7 +111,7 @@ type KeyAttestation = Signed<KeyAttestationBody>;
 
 - `keyValidity` の境界は `from <= t < until`。`Timestamp` はコアの共通時刻型であり、秒精度を推奨する。子の期間は親に含まれなければならないため、親より長い鍵は発行できず、有効期間の上限は階層を下るごとに自然に定まる。
 - `delegation.maxDepth` は subject の下に作れる鍵の階層数である。`0` は末端、`1` は末端だけを署名できる認証局を表す。チェーン長はルート鍵の運用者が各認証局へ与える値で定まる。
-- `organization` は鍵が代表する組織である。`orgId` は発行者の名前空間で安定した不透明な ID、`orgName` は表示名である。`identity` 役割の表示にはこのブロックがあれば `orgName` を、なければ `owner.name` を用いる。
+- `organization` は鍵が代表する組織である。`orgId` は `<接頭辞>:<識別子>` の形とし、接頭辞は命名者のドメイン名（例 `pref.tokyo.lg.jp`）または `<国コード>-<名前>` の登録名（例 `jp-lg`）である。`jp-lg` は地方公共団体コードを表す標準の接頭辞で、`jp-lg:131016` のように用いる。同じ `orgId` は認証局をまたいで同じ組織を指し、完全一致で比較する。`orgName` は表示名である。`identity` 役割の表示にはこのブロックがあれば `orgName` を、なければ `owner.name` を用いる。
 - `issuerDomain.domain` は発行者が運用するエンドポイントの発見に用いる（§2.3）。小文字に正規化した DNS 名とし、URL・パス・ポートを含めない。
 - `subjectDomain.method` は所有者のドメイン確認の方法で、初期値は `nip05`（[attest.signing §4](signing/README.md#4-nip-05-ドメイン検証プロファイル)）と `manual`。
 - `trustLevel.level` は発行者が所有者の確認過程について表明する序数で、§4 に定める。
@@ -224,7 +224,7 @@ sequenceDiagram
 
 ## 未確定事項
 
-- `orgId` の名前空間。現状は発行者ごとの不透明な ID であり、認証局をまたいだ同一組織の対応付けは定めていない。
+- `<国コード>-<名前>` 形式の接頭辞の登録簿の置き場所。
 - `trustLevel` を独立した拡張へ切り出すかどうか。
 
 ## 参照
