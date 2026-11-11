@@ -1,0 +1,131 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.signing",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "body",
+        "sig"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#requestBody"
+          ],
+          "closed": true
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Signing request, signed by the subject key to prove possession."
+    },
+    "requestBody": {
+      "type": "object",
+      "required": [
+        "issuer",
+        "subject",
+        "owner",
+        "roles",
+        "blocks",
+        "requestedAt"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "subject": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "owner": {
+          "type": "ref",
+          "ref": "dev.jisaku.mosimo.attest#owner"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Requested blocks and verification material.",
+          "items": {
+            "type": "union",
+            "refs": [
+              "dev.jisaku.mosimo.attest#keyValidity",
+              "dev.jisaku.mosimo.attest#delegation",
+              "dev.jisaku.mosimo.attest#organization",
+              "dev.jisaku.mosimo.attest#subjectDomain",
+              "#nip05",
+              "dev.jisaku.mosimo.attest.revocation.subkey",
+              "dev.jisaku.mosimo.attest.external",
+              "dev.jisaku.mosimo.attest.importer"
+            ]
+          }
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Request time."
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "knownValues": [
+            "issued",
+            "pending",
+            "rejected"
+          ]
+        },
+        "requestId": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32
+        },
+        "attestation": {
+          "type": "ref",
+          "ref": "dev.jisaku.mosimo.attest#keyAttestation"
+        },
+        "revocation": {
+          "type": "ref",
+          "ref": "dev.jisaku.mosimo.attest.revocation#notice"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "nip05": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "NIP-05 identifier: <local-part>@<domain> or _@<domain>."
+        }
+      }
+    }
+  }
+}

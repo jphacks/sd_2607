@@ -1,0 +1,21 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.revocation.subkey",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        }
+      },
+      "description": "Block in a key attestation naming a revocation-only subkey that may sign the activation of a pre-issued notice."
+    }
+  }
+}

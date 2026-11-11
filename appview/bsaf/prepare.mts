@@ -32,7 +32,8 @@ export function prepare(config: Config): void {
   try {
     writable.exec('PRAGMA busy_timeout = 3000; BEGIN IMMEDIATE;');
     writable.exec(`CREATE TABLE IF NOT EXISTS mosimo_bsaf_installation (id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL);
-          CREATE INDEX IF NOT EXISTS mosimo_bsaf_feed_order ON happyview_records(collection,indexed_at DESC,uri DESC);`);
+          DROP INDEX IF EXISTS mosimo_bsaf_feed_order;
+          CREATE INDEX IF NOT EXISTS mosimo_bsaf_feed_arrival ON happyview_records(collection,created_at DESC,uri DESC);`);
     const now = new Date().toISOString();
     writable.prepare(`INSERT INTO happyview_scripts(id,body,script_type,description,created_at,updated_at)
       VALUES(?,?,'lua',?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at`)

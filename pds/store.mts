@@ -15,18 +15,16 @@ export interface Store extends Session {
   close(): Promise<void>;
 }
 
+// Revocation notices are durable facts (attest.revocation §6); rows are never deleted or rolled
+// back. `revocation` holds the canonical CBOR of the Revocation as unpadded Base64.
 const trustSchema = `
-CREATE TABLE IF NOT EXISTS trust_snapshots (
-  root_id text PRIMARY KEY NOT NULL, snapshot text NOT NULL
+CREATE TABLE IF NOT EXISTS revocations (
+  id text PRIMARY KEY NOT NULL, subject text NOT NULL, issuer text NOT NULL,
+  effective_at bigint NOT NULL, seen_at bigint NOT NULL, revocation text NOT NULL
 );
-CREATE TABLE IF NOT EXISTS trust_serials (
-  issuer text NOT NULL, serial text NOT NULL, cert_id text NOT NULL,
-  PRIMARY KEY(issuer, serial)
-);
-CREATE TABLE IF NOT EXISTS trust_serial_conflicts (
-  issuer text NOT NULL, serial text NOT NULL,
-  PRIMARY KEY(issuer, serial),
-  FOREIGN KEY(issuer, serial) REFERENCES trust_serials(issuer, serial)
+CREATE INDEX IF NOT EXISTS revocations_subject ON revocations(subject);
+CREATE TABLE IF NOT EXISTS revocation_sources (
+  domain text PRIMARY KEY NOT NULL, fetched_at bigint, succeeded_at bigint, status text
 );
 `;
 

@@ -1,0 +1,19 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.priority",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "The author's delivery priority hint. Receivers derive an effective priority from local trust, area relevance, freshness and resources; the hint alone never raises priority above level 1 for unauthorized senders.",
+      "required": ["level"],
+      "properties": {
+        "level": {
+          "type": "integer",
+          "description": "0 = bulk, 1 = normal (default when absent), 2 = important, 3 = urgent.",
+          "minimum": 0,
+          "maximum": 3
+        }
+      }
+    }
+  }
+}

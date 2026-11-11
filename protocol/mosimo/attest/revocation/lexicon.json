@@ -1,0 +1,148 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.revocation",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "notice"
+      ],
+      "properties": {
+        "notice": {
+          "type": "ref",
+          "ref": "#notice"
+        },
+        "activation": {
+          "type": "ref",
+          "ref": "#activation"
+        }
+      },
+      "description": "Transport and storage unit of a revocation. Carried in a kind 9024 control event."
+    },
+    "notice": {
+      "type": "object",
+      "required": [
+        "body",
+        "sig"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#noticeBody"
+          ],
+          "closed": true
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Revocation notice signed by an ancestor key or the subject itself."
+    },
+    "noticeBody": {
+      "type": "object",
+      "required": [
+        "issuer",
+        "subject",
+        "issuedAt",
+        "blocks"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "subject": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Signing time."
+        },
+        "effectiveAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Start of effect. Required in the immediate form, absent in the pre-issued form."
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Optional blocks.",
+          "items": {
+            "type": "union",
+            "refs": [
+              "#reason"
+            ]
+          }
+        }
+      }
+    },
+    "activation": {
+      "type": "object",
+      "required": [
+        "body",
+        "sig"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#activationBody"
+          ],
+          "closed": true
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Activation of a pre-issued notice, signed by the subject key or the revocation subkey."
+    },
+    "activationBody": {
+      "type": "object",
+      "required": [
+        "noticeId",
+        "effectiveAt"
+      ],
+      "properties": {
+        "noticeId": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32,
+          "description": "SHA-256 of the canonical CBOR of notice.body."
+        },
+        "effectiveAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Start of effect; not earlier than notice.issuedAt."
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "compromise, superseded, ceased or unspecified."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    }
+  }
+}

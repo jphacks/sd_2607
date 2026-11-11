@@ -1,26 +1,20 @@
-# Mosimo Lexicons — アプリとサーバーで共有するデータ定義
+# Lexicon 検証ツール
 
-Mosimoの投稿とフィード取得APIを、AT Protocolのスキーマ言語 **Lexicon** で定義しています。端末・PDS・AppViewが同じデータ構造を扱うための共通の土台です。
+Mosimo の Lexicon 定義は、各プロトコルの文書と同じディレクトリに置く（[プロトコル仕様](../protocol/README.md)）。このディレクトリは、それらの定義を AT Protocol の Lexicon 言語として検証するためのツールだけを持つ。
 
-## 定義しているもの
-
-| 定義 | 役割 |
+| 定義 | 場所 |
 |---|---|
-| [投稿レコード](dev/oriom/mosimo/post.json) | 本文・作成時刻・配送期限・拡張情報を持つ投稿 |
-| [フィード取得API](dev/oriom/mosimo/getFeed.json) | AppViewに取り込まれた投稿の一覧や、指定した発信者・個別投稿の取得 |
+| 投稿レコード `dev.jisaku.mosimo.post` | [protocol/mosimo/post.json](../protocol/mosimo/post.json) |
+| フィード取得 API `dev.jisaku.mosimo.getFeed` | [protocol/mosimo/getFeed.json](../protocol/mosimo/getFeed.json) |
+| 各拡張の型 | 各プロトコルのディレクトリの `lexicon.json` |
 
-## 工夫した点
+## テスト
 
-- **通信手段とデータ構造を分離**：BLEやNostrなど、運ぶ経路に依存しない投稿形式を定義しています。
-- **未知の拡張も保持**：その用途に未対応のアプリでも、追加情報を捨てずに扱える開いた拡張構造を採用しています。
-- **配送期限と情報の意味を分離**：配送期限が過ぎたことだけを理由に、閲覧用のフィードから投稿を除外しません。
+Node.js 22 以降で、リポジトリ直下から実行する。
 
-## 現在の対応範囲
+```sh
+npm --prefix lexicons ci
+npm --prefix lexicons test
+```
 
-投稿とフィードAPIの基本定義を実装しています。位置・影響範囲・身元証明など、個別拡張のスキーマは設計段階です。Lexiconだけで電子署名や配送処理が成立するわけではなく、各実装とプロトコルの規則を組み合わせて利用します。
-
-## 関連資料
-
-- [基本プロトコル](../protocol/0010-core.md) / [拡張仕様](../protocol/0011-extensions.md)
-- [AppView](../appview/happyview/README.md) / [BSAF投稿の収集](../appview/bsaf/README.md)
-- [API登録・データ例・検証上の制約・テスト](DEVELOPMENT.md)
+投稿レコードのスキーマの読み込み、レコードの受理・拒否、未知拡張・文字列表記・配列順の保持を確認する。登録・運用上の注意は [DEVELOPMENT.md](DEVELOPMENT.md) に従う。

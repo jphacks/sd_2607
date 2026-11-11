@@ -3,126 +3,83 @@ import test from 'node:test';
 import { once } from 'node:events';
 import { setImmediate as immediate } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
-import { startNetwork, createPriorityPolicy } from './network.mjs';
+import { startNetwork, createPriorityPolicy, createRevocationRefresher } from './network.mjs';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PGlite } from '@electric-sql/pglite';
 import { openSqliteStore, schema } from './store.mjs';
-import { canonical, decodeCanonical, createSnapshot, createRoot, rootId, timestamp,
-  createImporter, issueCertificate, createImporterEvent, keyPublic, BSAF, NS, certId } from './public-information.mjs';
+import { canonical, timestamp, b64, PRIORITY, REVOCATION, createNotice, createRevocationList, validateRevocation, hex } from './attest.mjs';
+import { importFixture } from './fixture.test.mjs';
+import { finalizeEvent, generateSecretKey } from 'nostr-tools';
 
-for (const dialect of ['sqlite', 'postgres']) test(`${dialect}: priority trust highwater, cumulative root revocation and serial conflicts are durable`, async t => {
-  const fixture = JSON.parse(await readFile(new URL('../apps/android/bundle-core/src/test/resources/wire-v1.json', import.meta.url), 'utf8'));
-  const now = fixture.event.created_at;
+for (const dialect of ['sqlite', 'postgres']) test(`${dialect}: priority policy authorizes imports offline from durable revocations and collects issuer domains`, async t => {
+  const fixture = await importFixture();
   const directory = await mkdtemp(join(tmpdir(), 'mosimo-trust-'));
   const path = join(directory, dialect);
   const open = async () => {
     if (dialect === 'sqlite') return openSqliteStore(path);
     const db = new PGlite(path);
     await db.waitReady; await db.exec(schema);
-    const query = async (sql, values) => /^SELECT pg_advisory_xact_lock/.test(sql) ? { rows: [] } : db.query(sql, values);
-    return { dialect, query, transaction: fn => db.transaction(tx => fn({ query: (sql, values) => /^SELECT pg_advisory_xact_lock/.test(sql) ? Promise.resolve({ rows: [] }) : tx.query(sql, values) })), close: () => db.close() };
+    return { dialect, query: (sql, values) => db.query(sql, values), close: () => db.close() };
   };
   let store = await open();
   t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
-  const root = fixture.config.roots[0];
-  const second = createRoot({ scope: root.scope, snapshotUrl: 'https://second.invalid/snapshot.cbor' }).root;
-  const config = { publicInformation: { roots: [root, second], selection: fixture.config.selected.map(e => ({ botDid: e.botDid, types: [e.type] })) } };
-  let snapshot = decodeCanonical(Buffer.from(fixture.snapshotHex, 'hex'));
-  const policy = () => createPriorityPolicy({ config, store, now: () => now, getBytes: async (url, options) => {
-    assert.equal(options.maxBytes, 32768); assert.equal(options.contentType, 'application/cbor');
-    if (url === second.snapshotUrl) throw new Error('independent root offline');
-    return canonical(snapshot);
-  } });
-  assert.equal(await (await policy().capture())(fixture.event), 3);
-  // Simulate an existing pre-marker database: startup adds the sidecar without losing serials.
-  await store.query('DROP TABLE trust_serial_conflicts');
+  const config = { publicInformation: { roots: fixture.roots, selection: fixture.selection, revocationDomains: ['configured.example'] } };
+  const policy = createPriorityPolicy({ config, store, now: () => fixture.now });
+  const evaluate = await policy.capture();
+  assert.equal(await evaluate(fixture.event), 3);
+  assert.deepEqual([...policy.domains], ['configured.example', 'pds.example.org']);
+  const hinted = finalizeEvent({ kind: 1, content: 'self-declared urgent', created_at: fixture.now, tags: [['t', 'mosimo.jisaku.dev'], [`mosimo:ext:${PRIORITY}`, b64(canonical({ level: 3 }))]] }, generateSecretKey());
+  assert.equal(await evaluate(hinted), 1, 'hints alone never elevate');
+  assert.equal(await (await createPriorityPolicy({ config: { publicInformation: { roots: [], selection: fixture.selection } }, store, now: () => fixture.now }).capture())(fixture.event), 1);
+  assert.equal(await (await createPriorityPolicy({ config, store, now: () => fixture.exp }).capture())(fixture.event), 1, 'expired delivery deadline');
+  // Revocation by the CA (an ancestor) is durable and survives reopening.
+  const revocation = { $type: REVOCATION, notice: createNotice(fixture.caSecret, fixture.ca, { subject: fixture.leafKey, issuedAt: timestamp(fixture.now), effectiveAt: timestamp(fixture.now + 30) }) };
+  const facts = validateRevocation(revocation);
+  await store.query('INSERT INTO revocations(id,subject,issuer,effective_at,seen_at,revocation) VALUES($1,$2,$3,$4,$5,$6)', [facts.id, facts.subject, facts.issuer, facts.effectiveAt, fixture.now, 'x']);
+  assert.equal(await evaluate(fixture.event), 3, 'a capture is a fixed snapshot of trust state');
+  assert.equal(await (await policy.capture())(fixture.event), 1, 'revoked-later still blocks new authorization');
   await store.close(); store = await open();
-  assert.equal(await (await policy().capture())(fixture.event), 3);
-  let clock = now;
-  const expiration = Math.min(Date.parse(snapshot.body.validUntil), Date.parse(fixture.certificate.body.notAfter),
-    Date.parse(fixture.event.tags.find(tag => tag[0] === `${NS}:delivery-expires-at`)[1])) / 1000;
-  const livePolicy = createPriorityPolicy({ config, store, now: () => clock,
-    getBytes: async url => { if (url === second.snapshotUrl) throw new Error('offline'); return canonical(snapshot); } });
-  const liveEvaluate = await livePolicy.capture();
-  assert.equal(await liveEvaluate(fixture.event), 3);
-  clock = expiration;
-  assert.throws(() => liveEvaluate.assertFresh(), /expired\/clock changed/);
-  assert.equal(await liveEvaluate(fixture.event), 1, 'authorization clock must not freeze at capture time');
-  clock = now;
-  const delayed = createPriorityPolicy({ config: { publicInformation: { ...config.publicInformation, roots: [root] } }, store,
-    now: () => clock, getBytes: async () => { clock = expiration; return canonical(snapshot); } });
-  assert.equal(await (await delayed.capture())(fixture.event), 1, 'fetch latency cannot authorize an expired event');
-  const importer = createImporter();
-  const certificateA = issueCertificate('01'.padStart(64, '0'), { ...fixture.certificate.body,
-    serial: 'a'.repeat(32), subjectDid: importer.did, subjectPubkey: keyPublic(importer.atprotoSecret) });
-  const certificateB = issueCertificate('01'.padStart(64, '0'), { ...certificateA.body, orgName: 'Conflicting body' });
-  const bsafTag = fixture.event.tags.find(tag => tag[0] === `${NS}:ext:${BSAF}`);
-  const extension = { $type: BSAF, ...decodeCanonical(Buffer.from(bsafTag[1], 'base64')) };
-  const make = async certificate => (await createImporterEvent({ importer, chain: [certificate], text: 'Test sticky conflict',
-    extensions: [extension], nowSeconds: now, deliveryExpiresAt: timestamp(now + 600), priority: 3 })).event;
-  const eventA = await make(certificateA), eventB = await make(certificateB);
-  const evaluate = await policy().capture();
-  assert.equal(await evaluate(eventA), 3);
-  const failingStore = { ...store, transaction: fn => store.transaction(tx => fn({ query: (sql, values) => {
-    if (sql.startsWith('INSERT INTO trust_serial_conflicts')) throw new Error('marker disk failure');
-    return tx.query(sql, values);
-  } })) };
-  const brokenMarker = createPriorityPolicy({ config: { publicInformation: { ...config.publicInformation, roots: [root] } },
-    store: failingStore, now: () => now, getBytes: async () => canonical(snapshot) });
-  await assert.rejects((await brokenMarker.capture())(eventB), error => error.trustStorage === true);
-  assert.equal((await store.query('SELECT * FROM trust_serial_conflicts')).rows.length, 0);
-  assert.equal(await evaluate(eventA), 3);
-  assert.equal(await evaluate(eventB), 1);
-  assert.deepEqual((await store.query('SELECT * FROM trust_serial_conflicts')).rows,
-    [{ issuer: certificateA.body.issuerPubkey, serial: certificateA.body.serial }]);
-  assert.equal(await evaluate(eventA), 1, 'A must remain rejected after A→B conflict');
-  const serial = (await store.query('SELECT * FROM trust_serials WHERE serial=$1', [certificateA.body.serial])).rows[0];
-  assert.equal(serial.cert_id, certId(certificateA));
-  await store.close(); store = await open();
-  assert.equal(await (await policy().capture())(eventA), 1, 'A rejection survives restart');
-  assert.equal(await (await policy().capture())(eventB), 1, 'B rejection survives restart');
-  const secret = '01'.padStart(64, '0');
-  const signed = (sequence, extra = {}) => createSnapshot(secret, { sequence, issuedAt: timestamp(now), validUntil: timestamp(now + 600), ...extra });
-  snapshot = signed(8, { revokedPubkeys: [root.rootPubkey] });
-  assert.equal(await (await policy().capture())(fixture.event), 1);
-  await store.close(); store = await open();
-  assert.equal(JSON.parse((await store.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [rootId(root.rootPubkey)])).rows[0].snapshot).body.sequence, 8);
-  // Rollback, same-sequence equivocation, CRL removal and stale/future data cannot erase revocation.
-  for (const invalid of [signed(7), signed(8), signed(9), signed(9, { issuedAt: timestamp(now + 1), validUntil: timestamp(now + 601) }),
-    signed(9, { issuedAt: timestamp(now - 601), validUntil: timestamp(now - 1) })]) {
-    snapshot = invalid;
-    assert.equal(await (await policy().capture())(fixture.event), 1);
-    const saved = JSON.parse((await store.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [rootId(root.rootPubkey)])).rows[0].snapshot);
-    assert.equal(saved.body.sequence, 8); assert.deepEqual(saved.body.revokedPubkeys, [root.rootPubkey]);
-  }
-  let elapsed = 0;
-  const timer = t.mock.method(performance, 'now', () => elapsed);
+  assert.equal(await (await createPriorityPolicy({ config, store, now: () => fixture.now + 60 }).capture())(fixture.event), 1);
+});
+
+test('revocation refresher fetches each issuer domain list, persists verified notices, keeps state on failure and rate-limits', async t => {
+  const fixture = await importFixture();
+  const directory = await mkdtemp(join(tmpdir(), 'mosimo-refresh-'));
+  const store = await openSqliteStore(join(directory, 'db.sqlite'));
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
+  const revocation = { $type: REVOCATION, notice: createNotice(fixture.caSecret, fixture.ca, { subject: fixture.leafKey, issuedAt: timestamp(fixture.now), effectiveAt: timestamp(fixture.now) }) };
+  const list = createRevocationList(fixture.caSecret, fixture.ca, { generatedAt: timestamp(fixture.now), revocations: [revocation] });
   const fetched = [];
-  const refreshing = createPriorityPolicy({ config: { publicInformation: { ...config.publicInformation, roots: [second, root] } },
-    store, now: () => now, getBytes: async url => {
+  let body = () => canonical(list);
+  let clock = fixture.now;
+  const refresher = createRevocationRefresher({ store, domains: new Set(['pds.example.org', 'down.example']), now: () => clock, minIntervalSeconds: 600,
+    getBytes: async (url, options) => {
       fetched.push(url);
-      if (url === second.snapshotUrl) throw new Error('first root offline');
-      return canonical(snapshot);
+      assert.equal(options.contentType, 'application/cbor'); assert.equal(options.maxBytes, 1048576);
+      if (url.startsWith('https://down.example/')) throw new Error('offline');
+      return body();
     } });
-  snapshot = signed(9, { revokedPubkeys: [root.rootPubkey] });
-  await refreshing.capture();
-  for (let i = 1; i < 30; i++) { elapsed = i * 1000; await refreshing.capture(); }
-  assert.equal(fetched.length, 2, 'frequent captures neither refetch nor reset the per-root due time');
-  elapsed = 30000;
-  snapshot = signed(10, { revokedPubkeys: [root.rootPubkey] });
-  await refreshing.capture();
-  assert.deepEqual(fetched, [second.snapshotUrl, root.snapshotUrl, second.snapshotUrl, root.snapshotUrl]);
-  assert.equal(JSON.parse((await store.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [rootId(root.rootPubkey)])).rows[0].snapshot).body.sequence, 10);
-  timer.mock.restore();
-  const broken = createPriorityPolicy({ config, store: { ...store, transaction: async () => { throw new Error('disk failure'); } }, now: () => now,
-    getBytes: async () => canonical(signed(10, { revokedPubkeys: [root.rootPubkey] })) });
-  await assert.rejects(broken.capture(), /Trust state update failed/);
+  assert.deepEqual(await refresher.refresh(), { 'pds.example.org': true, 'down.example': false });
+  assert.deepEqual(fetched, ['https://pds.example.org/.well-known/mosimo/attest/revocations', 'https://down.example/.well-known/mosimo/attest/revocations']);
+  const rows = (await store.query('SELECT * FROM revocations')).rows;
+  assert.equal(rows.length, 1); assert.equal(rows[0].subject, hex(fixture.leafKey)); assert.equal(rows[0].issuer, hex(fixture.ca));
+  const sources = (await store.query('SELECT * FROM revocation_sources ORDER BY domain')).rows;
+  assert.match(sources.find(row => row.domain === 'down.example').status, /failed/);
+  assert.match(sources.find(row => row.domain === 'pds.example.org').status, /ok: 1/);
+  assert.deepEqual(await refresher.refresh(), {}, 'within the minimum interval nothing is refetched');
+  clock += 601;
+  body = () => Buffer.from('garbage');
+  assert.deepEqual(await refresher.refresh(), { 'pds.example.org': false, 'down.example': false });
+  assert.equal((await store.query('SELECT * FROM revocations')).rows.length, 1, 'a bad list never removes known notices');
+  // Policy sees the fetched notice.
+  const evaluate = await createPriorityPolicy({ config: { publicInformation: { roots: fixture.roots, selection: fixture.selection } }, store, now: () => clock }).capture();
+  assert.equal(await evaluate(fixture.event), 1);
 });
 
 const eventId = 'a'.repeat(64);
-const event = { id: eventId, kind: 1, created_at: 1, tags: [['t', 'mosimo.oriom.dev']], content: 'offline post' };
+const event = { id: eventId, kind: 1, created_at: 1, tags: [['t', 'mosimo.jisaku.dev']], content: 'offline post' };
 const peer = { url: 'https://trusted.example', tokenEnv: 'NETWORK_TEST_TOKEN' };
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const deferred = () => Promise.withResolvers();
@@ -206,7 +163,7 @@ test('relay subscribes without a timestamp watermark and ingests only matching t
     return { accepted: true };
   } });
   const { socket, request } = await server.connected;
-  assert.deepEqual(request, ['REQ', 'mosimo', { kinds: [1], '#t': ['mosimo.oriom.dev'] }, { kinds: [5] }]);
+  assert.deepEqual(request, ['REQ', 'mosimo', { kinds: [1, 8173], '#t': ['mosimo.jisaku.dev'] }, { kinds: [5] }]);
   socket.send('not json');
   socket.send(JSON.stringify(['EVENT', 'mosimo', { id: 'binary' }]), { binary: true });
   socket.send(JSON.stringify(['EVENT', 'other-subscription', event]));

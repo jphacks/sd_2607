@@ -2,15 +2,15 @@
 
 ## HappyViewへの登録
 
-1. **Lexicons → Add Lexicon → Local** から `getFeed.json` を登録します。
-2. **Target Collection** を `dev.oriom.mosimo.post` に設定します。これはHappyView側の設定であり、Lexicon JSONには含めません。
+1. **Lexicons → Add Lexicon → Local** から [`protocol/mosimo/getFeed.json`](../protocol/mosimo/getFeed.json) を登録します。
+2. **Target Collection** を `dev.jisaku.mosimo.post` に設定します。これはHappyView側の設定であり、Lexicon JSONには含めません。
 3. Mosimoのみの構成ではLuaスクリプトを付けず、標準query処理を使います。BSAFを併置する場合は [BSAF収集の登録手順](../appview/bsaf/DEVELOPMENT.md)に従います。
 
 クライアントキーを使う構成では、**Settings → API Clients** で発行します。APIの詳細は [HappyView Quickstart](https://happyview.dev/getting-started/quickstart) と [XRPC API](https://happyview.dev/api-reference/xrpc-api) を参照してください。
 
 ## レコードの扱い
 
-投稿は `dev.oriom.mosimo.post` collectionにTIDキーで格納します。commit・署名・Nostrタグ・BPv7の配送状態をレコードのフィールドに追加しません。
+投稿は `dev.jisaku.mosimo.post` collectionにTIDキーで格納します。commit・署名・Nostrタグ・BPv7の配送状態をレコードのフィールドに追加しません。
 
 Lexiconの検査とは別に、次のプロトコル制約を適用してください。
 
@@ -20,7 +20,7 @@ Lexiconの検査とは別に、次のプロトコル制約を適用してくだ�
 - メッシュのサイズ制限は署名などを含む配送用payload全体に適用します。本文長だけの制限で代用しません。
 - レコード本体の検査とは別に、保存先のキーがTIDであることを確認します。
 
-詳しい配置と署名の規則は [データ表現仕様](../protocol/0012-bindings.md)を参照してください。
+詳しい配置と署名の規則は [コアプロトコル](../protocol/mosimo/README.md)を参照してください。
 
 ## テスト
 

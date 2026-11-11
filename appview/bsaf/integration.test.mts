@@ -254,6 +254,10 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
     assert.deepEqual(single.record, combined.records[0]);
     assert.deepEqual(single.provenance, { [bsafUri]: combined.provenance[bsafUri] });
     assert.deepEqual((await feed({ uri: mosimoUri, did: author })).record, combined.records[1]);
+    // A HappyView backfill rewrites indexed_at only; arrival order must not change.
+    db.prepare('UPDATE happyview_records SET indexed_at = ? WHERE uri = ?').run('2099-01-01T00:00:00.000Z', mosimoUri);
+    assert.deepEqual((await feed()).records, combined.records);
+    db.prepare('UPDATE happyview_records SET indexed_at = ? WHERE uri = ?').run(mosimoRow!.indexed_at, mosimoUri);
 
     assert.equal(await store.ingest(await event(3, { ...original, tags: ['source:synthetic'] }, 'update')), 'deleted');
     await onlyMosimo();

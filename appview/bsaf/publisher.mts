@@ -6,8 +6,8 @@ import WebSocket from 'ws';
 import { cidForLex } from '@atproto/lex-cbor';
 import { parseCid } from '@atproto/lex-data';
 import { object } from './store.mts';
-import { createImporterEvent, verifyPublicInformation, verifySnapshot, decodeCanonical,
-  verifyBsaf, BSAF, JMA_SELECTION, rootId, timestamp, keyPublic } from '../../pds/public-information.mjs';
+import { createImportPost, authorizeImport, verifyBsaf, decodeCanonical, decodeRevocationList, unb64, rootConfig,
+  validateAttestation, issuerDomains, BSAF, JMA_SELECTION, timestamp, hex, nostrPublicKey, atprotoPublicKey, unhex, encodeBytes, canonical } from '../../pds/attest.mjs';
 
 export interface Selection { botDid: string; types: string[] }
 export interface PublisherConfig {
@@ -21,6 +21,10 @@ export interface PublisherConfig {
   priority?: 0 | 1 | 2 | 3 | null;
   jmaPriorityPolicy?: boolean;
 }
+/** Worker-only material: the importer's signing secrets and its signing chain (root-issued CA
+ * attestation first, importer leaf last). Never the root or CA secret. */
+export interface Credentials { importer: { did: string; atprotoSecret: string; nostrSecret: string }; attestations: any[] }
+
 // Local delivery hints only, never an interpretation of source:jma or original agency authority.
 const jmaPriorityRules: ReadonlyArray<{ type: string; value: string; level: 2 | 3 }> = [
   { type: 'tsunami', value: 'severe-warning', level: 3 },
@@ -65,6 +69,32 @@ export function validatePublisherConfig(value: unknown): asserts value is Publis
   const url = new URL(value.relayUrl);
   if (url.protocol !== 'wss:' || url.username || url.password || url.hash) throw new Error('Publisher requires wss relay');
 }
+/** credentials.json: {importer:{did,atprotoSecret,nostrSecret}, chain:<Base64 canonical CBOR of the attestation array>}. */
+export function loadCredentials(value: unknown): Credentials {
+  if (!object(value) || Object.keys(value).sort().join(',') !== 'chain,importer' || !object(value.importer)
+    || Object.keys(value.importer).sort().join(',') !== 'atprotoSecret,did,nostrSecret'
+    || typeof value.importer.did !== 'string' || !/^did:plc:[a-z2-7]{24}$/.test(value.importer.did)
+    || typeof value.importer.atprotoSecret !== 'string' || typeof value.importer.nostrSecret !== 'string'
+    || !/^[0-9a-f]{64}$/.test(value.importer.atprotoSecret) || !/^[0-9a-f]{64}$/.test(value.importer.nostrSecret)
+    || value.importer.atprotoSecret === value.importer.nostrSecret || typeof value.chain !== 'string') throw new Error('Importer-only credentials required');
+  const attestations = decodeCanonical(unb64(value.chain));
+  if (!Array.isArray(attestations) || attestations.length < 1 || attestations.length > 8) throw new Error('Credentials chain must hold 1..8 attestations');
+  attestations.forEach(validateAttestation);
+  const leaf = attestations[attestations.length - 1].body.subject as Uint8Array;
+  if (hex(leaf) !== hex(nostrPublicKey(unhex(value.importer.nostrSecret)))) throw new Error('Chain leaf is not the importer Nostr key');
+  return { importer: { did: value.importer.did, atprotoSecret: value.importer.atprotoSecret, nostrSecret: value.importer.nostrSecret }, attestations };
+}
+/** roots.json: array of receiver-local root settings {pubkey, roles, maxDepth, enabled?, name?}. */
+export function loadRoots(value: unknown) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) throw new Error('Public roots required');
+  for (const root of value) {
+    if (!object(root) || Object.keys(root).some(key => /secret/i.test(key))) throw new Error('Public roots must not carry secrets');
+    rootConfig(root);
+  }
+  return value;
+}
+export const encodeChain = (attestations: any[]) => encodeBytes(canonical(attestations, { maxBytes: 65536 }));
+
 // This connection is deliberately to the existing collector database, not a generic source hook.
 export function openPublicationStore(path: string) {
   if (!statSync(path).isFile()) throw new Error('Existing collector DB required');
@@ -78,87 +108,39 @@ export function openPublicationStore(path: string) {
     CREATE TABLE IF NOT EXISTS mosimo_bsaf_publications (
       seq INTEGER PRIMARY KEY, uri TEXT NOT NULL, cid TEXT NOT NULL, original_json TEXT NOT NULL,
       provenance_json TEXT NOT NULL, event_json TEXT, deadline TEXT, status TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0,
+      attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, hold_reason TEXT,
       UNIQUE(uri,cid)
     );
     CREATE TABLE IF NOT EXISTS mosimo_bsaf_repository (id INTEGER PRIMARY KEY CHECK(id=1), identity TEXT NOT NULL, state_json TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS mosimo_bsaf_snapshots (root_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS mosimo_bsaf_certificate_serials (issuer TEXT NOT NULL, serial TEXT NOT NULL, cert_id TEXT NOT NULL, PRIMARY KEY(issuer,serial));
-    CREATE TABLE IF NOT EXISTS mosimo_bsaf_certificate_equivocations (issuer TEXT NOT NULL, serial TEXT NOT NULL, PRIMARY KEY(issuer,serial));
+    CREATE TABLE IF NOT EXISTS mosimo_bsaf_revocations (
+      id TEXT PRIMARY KEY, subject TEXT NOT NULL, issuer TEXT NOT NULL, effective_at INTEGER NOT NULL, seen_at INTEGER NOT NULL, revocation TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mosimo_bsaf_revocation_sources (domain TEXT PRIMARY KEY, fetched_at INTEGER, status TEXT);
   `);
   if (!db.prepare('PRAGMA table_info(mosimo_bsaf_publications)').all().some(column => column.name === 'hold_reason')) {
     db.exec('ALTER TABLE mosimo_bsaf_publications ADD COLUMN hold_reason TEXT');
   }
   let busy = false;
-  // Security evidence must survive rollback of the publication that discovered it.
-  const equivocations = new Map<string, [string, string]>();
-  function flushEquivocations() {
-    for (const [key, [issuer, serial]] of equivocations) {
-      db.prepare('INSERT OR IGNORE INTO mosimo_bsaf_certificate_equivocations VALUES(?,?)').run(issuer, serial);
-      equivocations.delete(key);
-    }
-  }
   return {
     db,
-    recordCertificate(issuer: string, serial: string, certId: string) {
-      const standalone = !busy;
-      if (standalone) db.exec('BEGIN IMMEDIATE');
-      try {
-        const key = `${issuer}:${serial}`;
-        if (equivocations.has(key) || db.prepare('SELECT 1 FROM mosimo_bsaf_certificate_equivocations WHERE issuer=? AND serial=?').get(issuer, serial)) {
-          throw new Error('Certificate serial equivocation');
-        }
-        const previous = db.prepare('SELECT cert_id FROM mosimo_bsaf_certificate_serials WHERE issuer=? AND serial=?').get(issuer, serial);
-        if (previous && previous.cert_id !== certId) {
-          equivocations.set(key, [issuer, serial]);
-          throw new Error('Certificate serial equivocation');
-        }
-        db.prepare('INSERT OR IGNORE INTO mosimo_bsaf_certificate_serials VALUES(?,?,?)').run(issuer, serial, certId);
-        if (standalone) db.exec('COMMIT');
-      } catch (error) {
-        if (standalone) db.exec('ROLLBACK');
-        throw error;
-      } finally { if (standalone) flushEquivocations(); }
+    revocations() {
+      return db.prepare('SELECT subject, issuer, effective_at FROM mosimo_bsaf_revocations').all()
+        .map(row => ({ subject: String(row.subject), issuer: String(row.issuer), effectiveAt: Number(row.effective_at) }));
     },
     async transaction<T>(fn: () => Promise<T>): Promise<T> {
       if (busy) throw new Error('Overlapping publisher operation');
       busy = true;
       try {
-        flushEquivocations();
         db.exec('BEGIN IMMEDIATE');
         try { const result = await fn(); db.exec('COMMIT'); return result; }
         catch (error) { db.exec('ROLLBACK'); throw error; }
-      } finally {
-        try { flushEquivocations(); } finally { busy = false; }
-      }
+      } finally { busy = false; }
     },
     close() { db.close(); },
   };
 }
 export type PublicationStore = ReturnType<typeof openPublicationStore>;
-export function snapshotStore(store: PublicationStore, roots: any[], nowSeconds: number) {
-  const { db } = store;
-  return {
-    get(id: string) {
-      const row = db.prepare('SELECT snapshot_json FROM mosimo_bsaf_snapshots WHERE root_id=?').get(id);
-      if (!row) throw new Error('No fresh snapshot');
-      return JSON.parse(String(row.snapshot_json));
-    },
-    async accept(id: string, snapshot: any) {
-      const root = roots.find(r => rootId(r.rootPubkey) === id && r.enabled === true);
-      if (!root) throw new Error('Unknown root');
-      const previous = db.prepare('SELECT snapshot_json FROM mosimo_bsaf_snapshots WHERE root_id=?').get(id);
-      // The caller holds BEGIN IMMEDIATE across this read/verify/write.
-      await verifySnapshot(snapshot, { root, nowSeconds, previous: previous ? JSON.parse(String(previous.snapshot_json)) : null });
-      db.prepare(`INSERT INTO mosimo_bsaf_snapshots VALUES(?,?) ON CONFLICT(root_id) DO UPDATE SET snapshot_json=excluded.snapshot_json`)
-        .run(id, JSON.stringify(snapshot));
-    },
-    recordCertificate: store.recordCertificate,
-  };
-}
-export async function cacheSnapshot(store: PublicationStore, roots: any[], snapshot: any, nowSeconds: number) {
-  return store.transaction(() => snapshotStore(store, roots, nowSeconds).accept(snapshot.body.rootId, snapshot));
-}
+
 function lex(value: any): any {
   if (Array.isArray(value)) return value.map(lex);
   if (object(value)) {
@@ -190,7 +172,11 @@ function safePlainRecord(record: any) {
     }
   }
 }
-export async function stageNext(store: PublicationStore, config: PublisherConfig, credentials: any, roots: any[], nowSeconds: number) {
+/** Self-check with the same rules a receiving relay applies, using the publisher's own roots and known revocations. */
+function selfAuthorize(store: PublicationStore, event: any, config: PublisherConfig, roots: any[], nowSeconds: number) {
+  return authorizeImport(event, { roots, selection: config.selection, revocations: store.revocations(), now: nowSeconds });
+}
+export async function stageNext(store: PublicationStore, config: PublisherConfig, credentials: Credentials, roots: any[], nowSeconds: number) {
   validatePublisherConfig(config);
   if (!config.enabled || config.selection.length === 0) return null;
   return store.transaction(async () => {
@@ -237,15 +223,13 @@ export async function stageNext(store: PublicationStore, config: PublisherConfig
         continue;
       }
       const importer = credentials.importer;
-      const identity = `${importer.did}:${keyPublic(importer.atprotoSecret)}:${importer.binding.declaration.nostrPubkey}`;
+      const identity = `${importer.did}:${hex(atprotoPublicKey(unhex(importer.atprotoSecret)))}:${hex(nostrPublicKey(unhex(importer.nostrSecret)))}`;
       const previous = db.prepare('SELECT * FROM mosimo_bsaf_repository WHERE id=1').get();
       if (previous && previous.identity !== identity) throw new Error('Repository identity changed; explicit migration required');
-      const result = await createImporterEvent({ importer, chain: credentials.chain,
-        text: record.text,
-        extensions: [extension], nowSeconds, deliveryExpiresAt: deadline,
-        state: previous ? JSON.parse(String(previous.state_json)) : undefined,
-                priority: publicationPriority(config, String(row.did), record.tags) });
-      await verifyPublicInformation(result.event, { roots, snapshots: snapshotStore(store, roots, nowSeconds), nowSeconds, selection: config.selection });
+      const result = await createImportPost({ importer, attestations: credentials.attestations, text: record.text, ext: [extension],
+        createdAt: nowSeconds, exp: deadline, state: previous ? JSON.parse(String(previous.state_json)) : undefined,
+        priority: publicationPriority(config, String(row.did), record.tags) });
+      await selfAuthorize(store, result.event, config, roots, nowSeconds);
       db.prepare(`INSERT INTO mosimo_bsaf_publications(uri,cid,original_json,provenance_json,event_json,deadline,status) VALUES(?,?,?,?,?,?,'pending')`)
         .run(row.uri, row.cid, row.record, JSON.stringify(provenance), JSON.stringify(result.event), deadline);
       db.prepare(`INSERT INTO mosimo_bsaf_repository VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json`)
@@ -275,7 +259,7 @@ export function publishEvent(url: string, event: any, signal: AbortSignal, timeo
     if (signal.aborted) finish(false);
   });
 }
-export async function pushOnce(store: PublicationStore, config: PublisherConfig, credentials: any, roots: any[], nowSeconds: number,
+export async function pushOnce(store: PublicationStore, config: PublisherConfig, credentials: Credentials, roots: any[], nowSeconds: number,
   signal: AbortSignal, send = publishEvent) {
   const row = await stageNext(store, config, credentials, roots, nowSeconds);
   if (!row || Number(row.next_attempt) > nowSeconds) return false;
@@ -289,8 +273,8 @@ export async function pushOnce(store: PublicationStore, config: PublisherConfig,
     if (!row.hold_reason) console.error('{"status":"publisher-held","reason":"original-text-mismatch"}');
     return false;
   }
-  // Recheck freshness, revocation, selection and deadline at the actual send, including retries.
-  await store.transaction(() => verifyPublicInformation(event, { roots, snapshots: snapshotStore(store, roots, nowSeconds), nowSeconds, selection: config.selection }));
+  // Recheck validity, revocation, selection and deadline at the actual send, including retries.
+  await selfAuthorize(store, event, config, roots, nowSeconds);
   const accepted = await send(config.relayUrl, event, signal);
   await store.transaction(async () => {
     const attempts = Number(row.attempts) + 1;
@@ -299,23 +283,33 @@ export async function pushOnce(store: PublicationStore, config: PublisherConfig,
   });
   return accepted;
 }
-export async function refreshSnapshots(store: PublicationStore, roots: any[], nowSeconds: number) {
+/** attest.revocation.list §5: fetch the revocation list of every issuer domain in the chain. Failures
+ * keep the last known state; a fetched notice is applied by the next stage/send self-check. */
+export async function refreshRevocations(store: PublicationStore, credentials: Credentials, nowSeconds: number,
+  fetchImpl: typeof fetch = fetch) {
   let refreshed = 0, failed = 0;
-  for (const root of roots) {
-    if (!root.enabled) continue;
+  for (const domain of issuerDomains(credentials.attestations)) {
+    const url = `https://${domain}/.well-known/mosimo/attest/revocations`;
+    let status = 'failed';
     try {
-      const url = new URL(root.snapshotUrl);
-      if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Invalid snapshot URL');
-      const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10000) });
-      if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== 'application/cbor') throw new Error('Snapshot HTTP format');
+      const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(10000), headers: { accept: 'application/cbor' } });
+      if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== 'application/cbor') throw new Error('Revocation list HTTP format');
       let size = 0; const chunks: Uint8Array[] = [];
-      if (!response.body) throw new Error('Snapshot HTTP body');
-      for await (const chunk of response.body) { size += chunk.length; if (size > 32768) throw new Error('Snapshot size'); chunks.push(chunk); }
-      const snapshot = decodeCanonical(Buffer.concat(chunks));
-      if (snapshot.body.rootId !== rootId(root.rootPubkey)) throw new Error('Snapshot URL/root mismatch');
-      await cacheSnapshot(store, roots, snapshot, nowSeconds);
+      if (!response.body) throw new Error('Revocation list HTTP body');
+      for await (const chunk of response.body) { size += chunk.length; if (size > 1048576) throw new Error('Revocation list size'); chunks.push(chunk); }
+      const list = decodeRevocationList(Buffer.concat(chunks));
+      await store.transaction(async () => {
+        for (const entry of list.accepted) {
+          const { $type, ...fields } = entry.revocation;
+          store.db.prepare(`INSERT OR IGNORE INTO mosimo_bsaf_revocations VALUES(?,?,?,?,?,?)`)
+            .run(entry.id, entry.subject, entry.issuer, Math.floor(entry.effectiveAt), nowSeconds, encodeBytes(canonical(fields)));
+        }
+      });
+      status = `${list.listSignatureValid ? 'ok' : 'unsigned-list'}: ${list.accepted.length} notices`;
       refreshed++;
-    } catch { failed++; }
+    } catch (error) { status = `failed: ${(error as Error).message}`.slice(0, 200); failed++; }
+    store.db.prepare(`INSERT INTO mosimo_bsaf_revocation_sources VALUES(?,?,?) ON CONFLICT(domain) DO UPDATE SET fetched_at=excluded.fetched_at,status=excluded.status`)
+      .run(domain, nowSeconds, status);
   }
   return { refreshed, failed };
 }
@@ -325,31 +319,31 @@ export async function main() {
   validatePublisherConfig(config);
   if (!config.enabled || !config.selection.length) return;
   if (!(await stat(config.databasePath)).isFile()) throw new Error('Existing collector DB required');
-  const credentials = JSON.parse(await readFile(config.credentialsPath, 'utf8'));
-  if (!object(credentials) || Object.keys(credentials).sort().join(',') !== 'chain,importer'
-    || !object(credentials.importer) || Object.keys(credentials.importer).sort().join(',') !== 'atprotoSecret,binding,did,nostrSecret'
-    || typeof credentials.importer.atprotoSecret !== 'string' || typeof credentials.importer.nostrSecret !== 'string'
-    || credentials.importer.atprotoSecret === credentials.importer.nostrSecret || !Array.isArray(credentials.chain)) throw new Error('Importer-only credentials required');
-  const roots = JSON.parse(await readFile(config.trustPath, 'utf8'));
-  if (!Array.isArray(roots) || roots.length > 64 || roots.some(r => 'secretKey' in r)) throw new Error('Public roots required');
+  const credentials = loadCredentials(JSON.parse(await readFile(config.credentialsPath, 'utf8')));
+  const roots = loadRoots(JSON.parse(await readFile(config.trustPath, 'utf8')));
   const store = openPublicationStore(config.databasePath);
   const controller = new AbortController(); const stop = () => controller.abort();
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
   let refreshed = 0;
+  let lastHold = '';
   try {
     while (!controller.signal.aborted) {
       const nowSeconds = Math.floor(Date.now() / 1000);
-      if (nowSeconds - refreshed >= 60) {
-        const result = await refreshSnapshots(store, roots, nowSeconds);
+      if (nowSeconds - refreshed >= 600) {
+        const result = await refreshRevocations(store, credentials, nowSeconds);
         refreshed = nowSeconds;
-        if (result.failed) console.error('{"status":"snapshot-refresh-failed"}');
+        if (result.failed) console.error(JSON.stringify({ status: 'revocation-refresh-failed', ...result }));
       }
-      try { await pushOnce(store, config, credentials, roots, nowSeconds, controller.signal); }
-      catch { console.error('{"status":"publisher-held"}'); }
+      try { await pushOnce(store, config, credentials, roots, nowSeconds, controller.signal); lastHold = ''; }
+      catch (error) {
+        // Log a reason once per distinct failure instead of once per second.
+        const reason = (error as Error).message;
+        if (reason !== lastHold) { lastHold = reason; console.error(JSON.stringify({ status: 'publisher-held', reason })); }
+      }
       await delay(1000, undefined, { signal: controller.signal }).catch(() => {});
     }
   } finally {
     process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); store.close();
   }
 }
-if (import.meta.main) main().catch(() => { console.error('{"status":"publisher-fatal"}'); process.exitCode = 1; });
+if (import.meta.main) main().catch(error => { console.error(JSON.stringify({ status: 'publisher-fatal', reason: (error as Error).message })); process.exitCode = 1; });

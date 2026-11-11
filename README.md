@@ -48,8 +48,8 @@
 | [`pds/`](./pds/README.md) | Nostrリレー兼PDS。投稿を収集、蓄積する |
 | [`appview/happyview/`](./appview/happyview/README.md) | 投稿を索引化するAppView（HappyView）のコンテナー・NixOS設定 |
 | [`appview/bsaf/`](./appview/bsaf/README.md) | 既存のBSAF投稿をAppView（HappyView）へ収集する機能 |
-| [`lexicons/`](./lexicons/README.md) | 投稿レコードやフィード取得APIのLexicon定義 |
-| [`protocol/`](./protocol/README.md) | 基本プロトコル・拡張・配送などの仕様文書 |
+| [`protocol/`](./protocol/README.md) | プロトコル仕様。各プロトコルの文書とLexicon定義を識別子ごとのディレクトリに置く |
+| [`lexicons/`](./lexicons/README.md) | Lexicon定義の検証ツール |
 | [`third_party/`](./third_party/README.md) | Androidアプリで使う外部ライブラリの固定スナップショット |
 
 ## Live Demo
@@ -174,7 +174,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 **閲覧API: Mosimo投稿と収集済みBSAF投稿の取得**
 
-* 独自AppView API `dev.oriom.mosimo.getFeed`：Webクライアント向けにタイムラインの投稿を提供。
+* 独自AppView API `dev.jisaku.mosimo.getFeed`：Webクライアント向けにタイムラインの投稿を提供。
 
 #### フレームワーク・ライブラリ・モジュール
 
@@ -182,7 +182,7 @@ Mosimo Protocolは、既存のアプリに組み込むだけで、異なるア�
 
 * ![Nostrイベント JSON](https://img.shields.io/badge/Nostr%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88-JSON-blue?style=flat&logo=json&logoColor=white)：本文・タグ・署名を保持し、atprotoレコードと端末署名済みcommitの復元情報を格納。
 * [![CBOR](https://img.shields.io/badge/CBOR-blue?style=flat)](https://www.rfc-editor.org/rfc/rfc8949) / [![Bundle Protocol Version 7（BPv7）](https://img.shields.io/badge/Bundle%20Protocol-Version%207%EF%BC%88BPv7%EF%BC%89-blue?style=flat)](https://www.rfc-editor.org/rfc/rfc9171)：署名付きイベントをコンパクトに符号化し、オフライン中継用のBundleとして転送。
-* [![AT Protocol Lexicon](https://img.shields.io/badge/AT%20Protocol%20Lexicon-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/specs/lexicon)：独自投稿レコード `dev.oriom.mosimo.post` とフィードAPIを定義。
+* [![AT Protocol Lexicon](https://img.shields.io/badge/AT%20Protocol%20Lexicon-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/specs/lexicon)：独自投稿レコード `dev.jisaku.mosimo.post` とフィードAPIを定義。
 * [![DAG-CBOR](https://img.shields.io/badge/DAG--CBOR-blue?style=flat&logo=ipfs&logoColor=white)](https://ipld.io/specs/codecs/dag-cbor/spec/) / [![CID](https://img.shields.io/badge/CID-blue?style=flat&logo=ipfs&logoColor=white)](https://github.com/multiformats/cid) / [![MST](https://img.shields.io/badge/MST-blue?style=flat&logo=bluesky&logoColor=white)](https://atproto.com/specs/repository) / [![CAR](https://img.shields.io/badge/CAR-blue?style=flat&logo=ipfs&logoColor=white)](https://ipld.io/specs/transport/car/)：atprotoリポジトリの内容識別・整合性検証・同期。
 * [![BSAF bsaf:v1](https://img.shields.io/badge/BSAF-bsaf%3Av1-blue?style=flat&logo=bluesky&logoColor=white)](https://github.com/osprey74/bsaf-protocol)（Bluesky Structured Alert Feed）：防災情報などを構造化タグ付きのBluesky投稿として扱う規約。原投稿のレコード・タグ・CID・URIを保持して収集。
 
@@ -281,7 +281,7 @@ flowchart TD
 
 この拡張は著者の署名対象です。Nostrではタグに載せ、PDSは未知の拡張も専用コードなしに元のレコードへ復元します。基本プロトコル・拡張型・メッシュ符号化は独立して版管理し、拡張の非互換変更は新しい型として区別します。
 
-詳細：[拡張仕様](./protocol/0011-extensions.md)・[形式ごとの対応](./protocol/0012-bindings.md)。
+詳細：[コアプロトコル](./protocol/mosimo/README.md)。
 
 ##### 2. 投稿者のなりすましを防ぎ、網羅性を検証できる
 
@@ -318,7 +318,7 @@ flowchart TD
 
 署名の検証だけではそれが誰であるか、正しい情報であるかはわかりません。それについてはまた別の仕組みで解決しています。
 
-詳細：[データバンドルと署名のモデル](./protocol/0001-repository-model.md)・[データ表現](./protocol/0012-bindings.md)。
+詳細：[コアプロトコル](./protocol/mosimo/README.md)・[論理PDS](./protocol/mosimo/pds/README.md)。
 
 ##### 3. つながったときに、まだ知らない投稿だけを交換する
 
@@ -337,7 +337,7 @@ mosimoでは、BPv7の経由回数や経過時間の情報や投稿者が設定�
 
 **避難所にLoRaWANのゲートウェイを置くなど、超低速でも外部と通信ができる端末にmosimoを実装すれば、ここを通して完全にインターネットが不通の環境から情報を飛ばすこともできます。**
 
-詳細：[メッシュ配送仕様](./protocol/mndt.md)。
+詳細：[メッシュ配送](./protocol/mosimo/mesh/README.md)。
 
 ##### 4. サーバーが落ちたりネットワークが混雑しても動作する
 
@@ -380,7 +380,7 @@ flowchart TD
 
 図は複数物理ノードで一つの論理PDSを提供する構成例です。現実装では共通PostgreSQLと採番の直列化で公開状態を整合させます。論理PDSは運用グループごとに存在でき、DIDごとに正規公開先を指定します。
 
-詳細：[論理PDSと分散公開](./protocol/0006-logical-pds.md)・[Nostrリレーの役割](./protocol/0007-nostr-relay-profile.md)。
+詳細：[論理PDSとNostrリレー](./protocol/mosimo/pds/README.md)。
 
 ##### 5. 災害情報の「いつ・どこ・何の更新か」を保つ
 
@@ -396,7 +396,7 @@ flowchart TD
 
 **CAP・EDXL-DE・気象庁XMLなどの公的情報も、拡張によって同じ通信網で扱える設計です。** 人が読める本文とともに、原情報の出典・変換者・形式ごとの構造化情報を運びます。よく使うデータの種類は標準化することで、知らない拡張でもできる範囲で最大限解釈できるようになっています。
 
-詳細：[地理情報と配送優先度](./protocol/0004-geography.md)・[公的情報との対応](./protocol/0013-public-information.md)。
+詳細：[地理情報](./protocol/mosimo/geo/README.md)・[配送優先度](./protocol/mosimo/priority/README.md)・[公的情報の取り込み](./protocol/mosimo/public/README.md)。
 
 ##### 6. 「誰の発信か」を証明し、信頼の根拠を示す
 
@@ -415,7 +415,7 @@ flowchart TD
 
 証明は拡張ブロックとして運びます。あれば信頼性の判断に使えますし、なければ未確認の通常投稿として扱うだけです。
 
-詳細：[身元証明・アプリアカウントの証明](./protocol/0009-identity-attestations.md)・[身元証明拡張](./protocol/0011-extensions.md#8-身元証明-identity)。証明形式や失効方式は設計草案であり、証明の発行・検証は未実装です。
+詳細：[鍵署名](./protocol/mosimo/attest/README.md)・[署名チェーンの同梱](./protocol/mosimo/attest/chain/README.md)・[失効通知](./protocol/mosimo/attest/revocation/README.md)。証明の発行・検証は未実装です。
 
 #### デモ実装：プロトコルをAndroidアプリ・ESP32・Webで具体化
 

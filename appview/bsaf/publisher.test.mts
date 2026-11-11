@@ -8,9 +8,11 @@ import { cidForLex } from '@atproto/lex-cbor';
 import { WebSocketServer } from 'ws';
 import { openStore } from './store.mts';
 import { receiverConfigurations, presetSelection } from './identity-cli.mjs';
-import { openPublicationStore, cacheSnapshot, snapshotStore, stageNext, pushOnce, publishEvent, validatePublisherConfig, refreshSnapshots, publicationPriority, type PublisherConfig } from './publisher.mts';
-import { createRoot, createImporter, issueCertificate, createSnapshot, JMA_SELECTION, KIKIKURU_SELECTION, timestamp, keyPublic,
-  verifyPublicInformation, createImporterEvent, BSAF, rootId, certId, canonical, priorityHint, effectivePriority } from '../../pds/public-information.mjs';
+import { openPublicationStore, stageNext, pushOnce, publishEvent, validatePublisherConfig, refreshRevocations, publicationPriority,
+  loadCredentials, loadRoots, encodeChain, type PublisherConfig, type Credentials } from './publisher.mts';
+import { BLOCK, IMPORTER, BSAF, REVOCATION, JMA_SELECTION, KIKIKURU_SELECTION, timestamp, hex, unhex, canonical, randomSecret, nostrPublicKey,
+  createAttestation, createImporter, createImportPost, createNotice, createRevocationList, authorizeImport, priorityHintOf } from '../../pds/attest.mjs';
+import { decodePost } from '../../pds/repository.mjs';
 
 const now = 1792368000;
 const botDid = JMA_SELECTION[0]!.botDid;
@@ -23,16 +25,19 @@ async function fixture(t: any, selection: any = JMA_SELECTION) {
   const collector = openStore(databasePath, selection.map((e: any) => e.botDid), 'wss://jetstream.invalid/subscribe');
   const store = openPublicationStore(databasePath);
   t.after(async () => { collector.close(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  const scope = { orgIds: ['importer'], bsaf: selection };
-  const { secretKey, root } = createRoot({ scope, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
-  const importer = createImporter();
-  const certificate = issueCertificate(secretKey, { subjectDid: importer.did, subjectPubkey: keyPublic(importer.atprotoSecret),
-    orgId: 'importer', orgName: 'Test importer, not JMA', scope, notBefore: timestamp(now - 60), notAfter: timestamp(now + 86400) });
-  const credentials = { importer, chain: [certificate] };
-  const snapshot = createSnapshot(secretKey, { sequence: 1, issuedAt: timestamp(now - 60), validUntil: timestamp(now + 3540) });
-  const roots = [root]; await cacheSnapshot(store, roots, snapshot, now);
+  const sources = selection.map((e: any) => ({ botDid: e.botDid, types: [...e.types] }));
+  const rootSecret = randomSecret(), caSecret = randomSecret();
+  const root = nostrPublicKey(rootSecret), ca = nostrPublicKey(caSecret);
+  const importer = createImporter({ endpoint: 'https://pds.example.org' });
+  const caAttestation = createAttestation(rootSecret, root, { subject: ca, owner: { id: 'ca', name: 'Test CA' }, roles: ['attest', 'import'],
+    blocks: [{ $type: BLOCK.delegation, maxDepth: 1 }, { $type: BLOCK.issuerDomain, domain: 'pds.example.org' }, { $type: IMPORTER, sources }] });
+  const leaf = createAttestation(caSecret, ca, { subject: unhex(importer.nostrPubkey), owner: { id: importer.did, name: 'Test importer' }, roles: ['import'],
+    blocks: [{ $type: BLOCK.keyValidity, from: timestamp(now - 60), until: timestamp(now + 86400) },
+      { $type: BLOCK.organization, orgId: 'example.org:importer', orgName: 'Test importer, not JMA' }, { $type: IMPORTER, sources }] });
+  const credentials: Credentials = { importer: { did: importer.did, atprotoSecret: importer.atprotoSecret, nostrSecret: importer.nostrSecret }, attestations: [caAttestation, leaf] };
+  const roots = [{ pubkey: hex(root), roles: ['attest', 'import'], maxDepth: 2, enabled: true }];
   const config: PublisherConfig = { enabled: true, databasePath, credentialsPath: 'not-read-by-tests', trustPath: 'not-read-by-tests',
-    relayUrl: 'wss://relay.invalid', selection: selection.map((e: any) => ({ botDid: e.botDid, types: [...e.types] })), maxOriginalAgeSeconds: 600, priority: 3 };
+    relayUrl: 'wss://relay.invalid', selection: sources, maxOriginalAgeSeconds: 600, priority: 3 };
   let sequence = 0;
   async function ingest(overrides: Record<string, any> = {}, rkey = `test-${++sequence}`, did: string = botDid) {
     const record = { $type: 'app.bsky.feed.post', text: 'TEST ONLY — 地震情報（出典：気象庁）', createdAt: timestamp(now - 30),
@@ -43,44 +48,41 @@ async function fixture(t: any, selection: any = JMA_SELECTION) {
     const status = await collector.ingest(event);
     return { record, cid, event, status };
   }
-  return { databasePath, store, collector, config, credentials, roots, root, secretKey, snapshot, certificate, ingest };
+  const authorize = (event: any, at = now) => authorizeImport(event, { roots, selection: config.selection, revocations: store.revocations(), now: at });
+  return { databasePath, store, collector, config, credentials, roots, rootSecret, root, caSecret, ca, leaf, importer, ingest, authorize };
 }
 
-test('receiver exports match platform schemas, pin sequence, omit private fields and never enable ESP ingress/clock', () => {
-  const scope = { orgIds: ['mosimo-bsaf-importer'], bsaf: JMA_SELECTION };
-  const { root } = createRoot({ scope, snapshotUrl: 'https://pds.oriom.dev/.well-known/mosimo/trust/snapshot.cbor' });
-  const files = receiverConfigurations({ ...root, secretKey: 'must-never-appear', plcSecret: 'also-private' }, 7, JMA_SELECTION);
-  assert.deepEqual(Object.keys(files.android).sort(), ['roots', 'selected']);
-  assert.equal(files.android.roots[0]!.rootId, rootId(root.rootPubkey));
-  assert.deepEqual(files.android.selected, JMA_SELECTION.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))));
-  assert.equal(files.pds.publicInformation.roots[0]!.minSequence, 7);
-  assert.deepEqual(files.pds.publicInformation.selection, JMA_SELECTION);
-  const serialized = JSON.stringify(files);
-  assert.ok(!serialized.includes('must-never-appear') && !serialized.includes('also-private') && !serialized.includes('secretKey'));
-  assert.match(files.esp32, /^#define MESH_INGRESS_SNAPSHOT_CA R"PEM\(\)PEM"$/m);
-  assert.match(files.esp32, /^#define MESH_INGRESS_MIN_SEQUENCE 7ULL$/m);
-  assert.doesNotMatch(files.esp32, /^#define MESH_INGRESS_(ENABLED|TRUST_CLOCK)\b/m);
-  for (const [name, expected] of [['SCOPE', scope], ['SELECTED', JMA_SELECTION]] as const) {
-    const encoded = new RegExp(`#define MESH_INGRESS_${name}_CBOR_HEX "([0-9a-f]+)"`).exec(files.esp32)![1]!;
-    assert.deepEqual(Buffer.from(encoded, 'hex'), Buffer.from(canonical(expected)));
-  }
-  assert.throws(() => receiverConfigurations(root, 0, JMA_SELECTION));
-  assert.throws(() => receiverConfigurations({ ...root, snapshotUrl: 'http://unsafe.invalid' }, 7, JMA_SELECTION));
+test('receiver exports carry only public root settings, the selection and the revocation domain', () => {
+  const root = { pubkey: hex(nostrPublicKey(randomSecret())), roles: ['attest', 'import'], maxDepth: 2, enabled: true, name: 'r', secretKey: 'must-never-appear' };
+  const files = receiverConfigurations(root, 'pds.oriom.dev', presetSelection(['--jma', '--kikikuru']));
+  assert.deepEqual(Object.keys(files.pds.publicInformation).sort(), ['revocationDomains', 'roots', 'selection']);
+  assert.deepEqual(files.pds.publicInformation.revocationDomains, ['pds.oriom.dev']);
+  assert.equal(files.android.selected.length, 28); assert.equal(files.pds.publicInformation.selection.length, 2);
+  assert.ok(!JSON.stringify(files).includes('must-never-appear') && !JSON.stringify(files).includes('secretKey'));
+  assert.throws(() => receiverConfigurations(root, 'pds.oriom.dev', [{ botDid, types: ['b', 'a'] }]));
 });
 
-test('fixed presets are independent and receiver exports use explicit selected scope', () => {
-  assert.deepEqual(presetSelection(), JMA_SELECTION);
-  assert.deepEqual(presetSelection(['--jma']), JMA_SELECTION);
-  assert.deepEqual(presetSelection(['--kikikuru']), KIKIKURU_SELECTION);
-  assert.throws(() => presetSelection(['--all']));
+test('fixed presets are independent and never auto-expand', () => {
+  assert.deepEqual(presetSelection(), JMA_SELECTION.map(e => ({ botDid: e.botDid, types: [...e.types] })));
+  assert.deepEqual(presetSelection(['--jma']).length, 1);
+  assert.equal(presetSelection(['--kikikuru'])[0]!.types.length, 23);
+  assert.throws(() => presetSelection(['--jma', '--jma']));
   const both = presetSelection(['--jma', '--kikikuru']);
-  const { root } = createRoot({ scope: { orgIds: ['mosimo-bsaf-importer'], bsaf: both }, snapshotUrl: 'https://trust.invalid/snapshot.cbor' });
-  const files = receiverConfigurations(root, 8, both);
-  assert.equal(files.android.selected.length, 28);
-  assert.deepEqual(files.pds.publicInformation.selection, both);
-  assert.equal(receiverConfigurations(root, 8, JMA_SELECTION).android.selected.length, 5);
-  const limited = { ...root, scope: { ...root.scope, bsaf: JMA_SELECTION } };
-  assert.throws(() => receiverConfigurations(limited, 8, both));
+  assert.equal(both.length, 2); assert.ok(both[0]!.botDid < both[1]!.botDid);
+  assert.deepEqual(presetSelection(['--days=3']), presetSelection());
+});
+
+test('credentials and roots loaders reject secrets in the wrong file and chains that do not end in the importer key', async t => {
+  const f = await fixture(t);
+  const json = { importer: f.credentials.importer, chain: encodeChain(f.credentials.attestations) };
+  const loaded = loadCredentials(JSON.parse(JSON.stringify(json)));
+  assert.equal(loaded.attestations.length, 2); assert.equal(hex(loaded.attestations[1].body.subject), f.importer.nostrPubkey);
+  assert.throws(() => loadCredentials({ ...json, importer: { ...json.importer, nostrSecret: hex(randomSecret()) } }), /leaf is not the importer/);
+  assert.throws(() => loadCredentials({ ...json, importer: { ...json.importer, plcSecret: 'x' } }), /Importer-only/);
+  assert.throws(() => loadCredentials({ ...json, chain: 'AAAA' }));
+  assert.deepEqual(loadRoots(f.roots), f.roots);
+  assert.throws(() => loadRoots([{ ...f.roots[0], secretKey: 'x' }]), /secrets/);
+  assert.throws(() => loadRoots([]));
 });
 
 test('all 23 pinned weather types publish generically at normal priority, unknown/spoofed sources do not', async t => {
@@ -100,10 +102,10 @@ test('all 23 pinned weather types publish generically at normal priority, unknow
     const row = (await stageNext(f.store, config, f.credentials, f.roots, now))!;
     assert.ok(row);
     const event = JSON.parse(String(row.event_json));
-    const verified = await verifyPublicInformation(event, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: config.selection });
+    const verified = await f.authorize(event);
     assert.equal(verified.botDid, weather.botDid);
     assert.equal(verified.type, type);
-    assert.equal(priorityHint(event), 1);
+    assert.equal(priorityHintOf(event), 1);
     assert.equal(publicationPriority(config, weather.botDid, tags), 1);
     assert.deepEqual(JSON.parse(String(row.original_json)).tags, tags);
     f.store.db.prepare("UPDATE mosimo_bsaf_publications SET status='accepted' WHERE seq=?").run(row.seq!);
@@ -125,7 +127,7 @@ test('publisher opt-in validates pinned JMA pairs; collection does not enable pu
   }
 });
 
-test('direct collector DB conversion archives original/provenance, durable dedup and repository state', async t => {
+test('direct collector DB conversion archives original/provenance, durable dedup, repository state and the spec wire format', async t => {
   const f = await fixture(t); const source = await f.ingest(); assert.equal(source.status, 'stored');
   const row = await stageNext(f.store, f.config, f.credentials, f.roots, now); assert.ok(row);
   assert.deepEqual(JSON.parse(String(row.original_json)), source.record);
@@ -134,7 +136,13 @@ test('direct collector DB conversion archives original/provenance, durable dedup
   const event = JSON.parse(String(row.event_json));
   assert.equal(event.content, source.record.text);
   assert.equal(row.deadline, timestamp(now + 570));
-  assert.equal((await verifyPublicInformation(event, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: f.config.selection })).authorized, true);
+  assert.equal(event.pubkey, f.importer.nostrPubkey);
+  assert.deepEqual(event.tags.slice(0, 2), [['t', 'mosimo.jisaku.dev'], ['mosimo:v', '1']]);
+  assert.deepEqual(event.tags.slice(6).map((tag: string[]) => tag[0]), ['mosimo:ext:dev.jisaku.mosimo.public.bsaf', 'mosimo:ext:dev.jisaku.mosimo.attest.chain', 'mosimo:ext:dev.jisaku.mosimo.priority']);
+  const decoded = await decodePost(event);
+  assert.equal(decoded.commit.did, f.importer.did); assert.equal(decoded.record.exp, row.deadline);
+  assert.deepEqual(decoded.record.ext[0].original, { uri: row.uri, cid: row.cid, createdAt: source.record.createdAt });
+  assert.equal((await f.authorize(event)).authorized, true);
   const retry = await stageNext(f.store, f.config, f.credentials, f.roots, now + 20);
   assert.equal(retry!.event_json, row.event_json); assert.equal(retry!.deadline, row.deadline);
   const reopened = openPublicationStore(f.databasePath);
@@ -146,7 +154,7 @@ test('direct collector DB conversion archives original/provenance, durable dedup
 
 test('publication preserves exact Unicode source text, including any original DID, without attribution additions', async t => {
   const f = await fixture(t);
-  for (const text of ['地震\r\nか\u3099 🏠\n', `原文 did:plc:example / ${botDid} CID source:そのまま`]) {
+  for (const text of ['地震\r\nが 🏠\n', `原文 did:plc:example / ${botDid} CID source:そのまま`]) {
     await f.ingest({ text });
     const row = (await stageNext(f.store, f.config, f.credentials, f.roots, now))!;
     assert.equal(JSON.parse(String(row.event_json)).content, text);
@@ -154,23 +162,20 @@ test('publication preserves exact Unicode source text, including any original DI
   }
 });
 
-test('legacy signed pending with appended text is held unchanged and never sent or resigned', async t => {
+test('a signed pending event with appended text is held unchanged and never sent or resigned', async t => {
   const f = await fixture(t); await f.ingest();
   const row = (await stageNext(f.store, f.config, f.credentials, f.roots, now))!;
-  const { event: legacy } = await createImporterEvent({ importer: f.credentials.importer, chain: f.credentials.chain,
-    text: JSON.parse(String(row.original_json)).text + '\nlegacy attribution footer',
-    extensions: [{ $type: BSAF, tags: JSON.parse(String(row.original_json)).tags, langs: ['ja'],
-      original: { uri: row.uri, cid: row.cid, createdAt: JSON.parse(String(row.original_json)).createdAt } }],
-    nowSeconds: now, deliveryExpiresAt: String(row.deadline), priority: 3 });
-  assert.equal((await verifyPublicInformation(legacy, { roots: f.roots, snapshots: snapshotStore(f.store, f.roots, now),
-    nowSeconds: now, selection: f.config.selection })).authorized, true);
-  f.store.db.prepare('UPDATE mosimo_bsaf_publications SET event_json=? WHERE seq=?').run(JSON.stringify(legacy), row.seq!);
+  const original = JSON.parse(String(row.original_json));
+  const { event: altered } = await createImportPost({ importer: f.credentials.importer, attestations: f.credentials.attestations,
+    text: original.text + '\nattribution footer', ext: [{ $type: BSAF, tags: original.tags, langs: ['ja'], original: { uri: row.uri, cid: row.cid, createdAt: original.createdAt } }],
+    createdAt: now, exp: String(row.deadline), priority: 3 });
+  assert.equal((await f.authorize(altered)).authorized, true, 'the relay cannot know the text was altered; the publisher must hold it');
+  f.store.db.prepare('UPDATE mosimo_bsaf_publications SET event_json=? WHERE seq=?').run(JSON.stringify(altered), row.seq!);
   let sent = 0;
-  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now, new AbortController().signal,
-    async () => { sent++; return true; }), false);
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now, new AbortController().signal, async () => { sent++; return true; }), false);
   assert.equal(sent, 0);
   const saved = f.store.db.prepare('SELECT * FROM mosimo_bsaf_publications WHERE seq=?').get(row.seq!)!;
-  assert.equal(saved.event_json, JSON.stringify(legacy));
+  assert.equal(saved.event_json, JSON.stringify(altered));
   assert.equal(saved.status, 'pending');
   assert.equal(saved.hold_reason, 'Original text mismatch; operator review required; signed EVENT retained');
   assert.deepEqual(await stageNext(f.store, f.config, f.credentials, f.roots, now), saved);
@@ -219,121 +224,56 @@ test('unselected source/type and source:jma claim never authorize; original sele
   assert.deepEqual(JSON.parse(String(row.original_json)).tags, source.record.tags);
 });
 
-test('failed staging rolls repo/outbox back; stale snapshots and expired retries never renew', async t => {
+test('failed staging rolls repo/outbox back; unknown roots and expired retries never renew', async t => {
   const f = await fixture(t); await f.ingest();
-  await assert.rejects(stageNext(f.store, f.config, f.credentials, [], now));
+  await assert.rejects(stageNext(f.store, f.config, f.credentials, [{ ...f.roots[0], pubkey: hex(nostrPublicKey(randomSecret())) }], now), /unverifiable/);
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_repository').get()!.n, 0);
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_publications').get()!.n, 0);
   const row = await stageNext(f.store, f.config, f.credentials, f.roots, now); assert.ok(row);
   let sends = 0;
-  await assert.rejects(pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async () => { sends++; return true; }));
+  await assert.rejects(pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async () => { sends++; return true; }), /deadline/);
   assert.equal(sends, 0);
   assert.equal(f.store.db.prepare('SELECT event_json FROM mosimo_bsaf_publications').get()!.event_json, row.event_json);
 });
 
-test('snapshot rollback/equivocation/revocation removal survive SQLite restart, and root revocation is sticky', async t => {
-  const f = await fixture(t);
-  const revoked = createSnapshot(f.secretKey, { sequence: 2, issuedAt: timestamp(now), validUntil: timestamp(now + 3600), revokedCertIds: [certId(f.certificate)] });
-  await cacheSnapshot(f.store, f.roots, revoked, now);
-  const reopened = openPublicationStore(f.databasePath);
-  try {
-    await assert.rejects(cacheSnapshot(reopened, f.roots, f.snapshot, now));
-    const cleared = createSnapshot(f.secretKey, { sequence: 3, issuedAt: timestamp(now), validUntil: timestamp(now + 3600) });
-    await assert.rejects(cacheSnapshot(reopened, f.roots, cleared, now));
-    const rootRevoked = createSnapshot(f.secretKey, { sequence: 3, issuedAt: timestamp(now), validUntil: timestamp(now + 3600), revokedCertIds: [certId(f.certificate)], revokedPubkeys: [f.root.rootPubkey] });
-    await cacheSnapshot(reopened, f.roots, rootRevoked, now);
-    assert.ok(snapshotStore(reopened, f.roots, now).get(rootId(f.root.rootPubkey)).body.revokedPubkeys.includes(f.root.rootPubkey));
-    const resurrection = createSnapshot(f.secretKey, { sequence: 4, issuedAt: timestamp(now), validUntil: timestamp(now + 3600) });
-    await assert.rejects(cacheSnapshot(reopened, f.roots, resurrection, now));
-  } finally { reopened.close(); }
-});
-
-test('valid A then conflicting valid B poisons both across publication rollback and SQLite restart', async t => {
-  const f = await fixture(t);
-  await f.ingest();
+test('revocation lists from the issuer domain are fetched, persisted across restarts and stop publication; failures keep state', async t => {
+  const f = await fixture(t); await f.ingest();
   assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now, new AbortController().signal, async () => true), true);
-  const original = f.store.db.prepare('SELECT event_json FROM mosimo_bsaf_publications').get()!.event_json;
-  const conflicting = issueCertificate(f.secretKey, { ...f.certificate.body, orgName: 'Conflicting certificate B' });
-  assert.notEqual(certId(conflicting), certId(f.certificate));
+  const visited: string[] = [];
+  const respond = (body: Uint8Array | null, type = 'application/cbor', status = 200) => async (input: any) => {
+    visited.push(String(input));
+    return new Response(body as any, { status, headers: { 'content-type': type } });
+  };
+  // Failures: network, HTTP, wrong type, garbage. Nothing is stored, and the source status records it.
+  await assert.doesNotReject(refreshRevocations(f.store, f.credentials, now, async () => { throw new Error('offline'); }));
+  assert.deepEqual(await refreshRevocations(f.store, f.credentials, now, respond(null, 'application/cbor', 503)), { refreshed: 0, failed: 1 });
+  assert.deepEqual(await refreshRevocations(f.store, f.credentials, now, respond(Uint8Array.of(0xa0), 'text/plain')), { refreshed: 0, failed: 1 });
+  assert.deepEqual(await refreshRevocations(f.store, f.credentials, now, respond(Uint8Array.of(0xff))), { refreshed: 0, failed: 1 });
+  assert.deepEqual(visited, Array(3).fill('https://pds.example.org/.well-known/mosimo/attest/revocations'));
+  assert.equal(f.store.revocations().length, 0);
+  assert.match(String(f.store.db.prepare('SELECT status FROM mosimo_bsaf_revocation_sources').get()!.status), /failed/);
+  // An empty signed list succeeds and changes nothing.
+  const empty = createRevocationList(f.caSecret, f.ca, { generatedAt: timestamp(now), revocations: [] });
+  assert.deepEqual(await refreshRevocations(f.store, f.credentials, now, respond(canonical(empty))), { refreshed: 1, failed: 0 });
   await f.ingest();
-  await assert.rejects(stageNext(f.store, f.config, { ...f.credentials, chain: [conflicting] }, f.roots, now), /equivocation/);
-  assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_publications').get()!.n, 1);
-  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT state_json FROM mosimo_bsaf_repository').get()!.state_json)).entries.length, 1);
-  assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_certificate_equivocations').get()!.n, 1);
+  assert.ok(await stageNext(f.store, f.config, f.credentials, f.roots, now + 1));
+  // The CA revokes the importer leaf; from then on staging and sending fail closed, also after reopening.
+  const notice = createNotice(f.caSecret, f.ca, { subject: unhex(f.importer.nostrPubkey), issuedAt: timestamp(now + 2), effectiveAt: timestamp(now + 2), reason: { code: 'compromise' } });
+  const list = createRevocationList(f.caSecret, f.ca, { generatedAt: timestamp(now + 2), revocations: [{ $type: REVOCATION, notice }] });
+  assert.deepEqual(await refreshRevocations(f.store, f.credentials, now + 2, respond(canonical(list))), { refreshed: 1, failed: 0 });
+  assert.equal(f.store.revocations().length, 1);
+  let sends = 0;
+  await assert.rejects(pushOnce(f.store, f.config, f.credentials, f.roots, now + 3, new AbortController().signal, async () => { sends++; return true; }), /revoked/);
+  assert.equal(sends, 0);
   const reopened = openPublicationStore(f.databasePath);
   try {
-    const b = f.certificate.body;
-    for (const id of [certId(f.certificate), certId(conflicting)]) {
-      await assert.rejects(reopened.transaction(async () => snapshotStore(reopened, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, id)), /equivocation/);
-    }
-    await assert.rejects(reopened.transaction(() => verifyPublicInformation(JSON.parse(String(original)), {
-      roots: f.roots, snapshots: snapshotStore(reopened, f.roots, now), nowSeconds: now, selection: f.config.selection,
-    })), /equivocation/);
-    await assert.rejects(stageNext(reopened, f.config, f.credentials, f.roots, now), /equivocation/);
+    assert.equal(reopened.revocations().length, 1);
+    assert.ok(await stageNext(reopened, f.config, f.credentials, f.roots, now + 4), 'the staged row stays pending for operator review');
+    await assert.rejects(pushOnce(reopened, f.config, f.credentials, f.roots, now + 4, new AbortController().signal, async () => true), /revoked/);
+    // A later list that omits the notice does not un-revoke.
+    assert.deepEqual(await refreshRevocations(reopened, f.credentials, now + 5, respond(canonical(empty))), { refreshed: 1, failed: 0 });
+    assert.equal(reopened.revocations().length, 1);
   } finally { reopened.close(); }
-});
-
-test('a caught serial conflict stays poisoned even if its transaction later rolls back for another error', async t => {
-  const f = await fixture(t); const b = f.certificate.body;
-  await f.store.transaction(async () => {
-    snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate));
-  });
-  await assert.rejects(f.store.transaction(async () => {
-    assert.throws(() => snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, 'f'.repeat(64)), /equivocation/);
-    assert.throws(() => snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate)), /equivocation/);
-    throw new Error('Unrelated publication failure');
-  }), /Unrelated/);
-  assert.throws(() => snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate)), /equivocation/);
-});
-
-test('equivocation persistence failure rejects and retains evidence for the next durable write', async t => {
-  const f = await fixture(t); const b = f.certificate.body;
-  snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate));
-  f.store.db.exec(`CREATE TRIGGER deny_equivocation BEFORE INSERT ON mosimo_bsaf_certificate_equivocations
-    BEGIN SELECT RAISE(ABORT,'simulated disk failure'); END;`);
-  await assert.rejects(f.store.transaction(async () => {
-    snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, 'f'.repeat(64));
-  }), /simulated disk failure/);
-  assert.throws(() => snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate)), /simulated disk failure/);
-  f.store.db.exec('DROP TRIGGER deny_equivocation');
-  await assert.rejects(f.store.transaction(async () => {
-    snapshotStore(f.store, f.roots, now).recordCertificate(b.issuerPubkey, b.serial, certId(f.certificate));
-  }), /equivocation/);
-  assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_certificate_equivocations').get()!.n, 1);
-});
-
-test('snapshot refresh isolates earlier HTTP/validation failures and persists later root revocations', async t => {
-  const f = await fixture(t);
-  const scope = f.root.scope;
-  const first = createRoot({ scope, snapshotUrl: 'https://first.invalid/snapshot.cbor' });
-  const middle = createRoot({ scope, snapshotUrl: 'https://middle.invalid/snapshot.cbor' });
-  const roots = [first.root, middle.root, f.root];
-  const revoked = createSnapshot(f.secretKey, { sequence: 2, issuedAt: timestamp(now), validUntil: timestamp(now + 3600), revokedPubkeys: [f.root.rootPubkey] });
-  for (const mode of ['network', 'http', 'cbor', 'signature']) {
-    const visited: string[] = [];
-    const request = t.mock.method(globalThis, 'fetch', async (input: any) => {
-      const url = String(input); visited.push(url);
-      if (url === first.root.snapshotUrl) {
-        if (mode === 'network') throw new Error('First root unavailable');
-        if (mode === 'http') return new Response(null, { status: 503 });
-        if (mode === 'cbor') return new Response(Uint8Array.of(0xff), { headers: { 'content-type': 'application/cbor' } });
-        const invalid = createSnapshot(first.secretKey, { sequence: 1, issuedAt: timestamp(now), validUntil: timestamp(now + 3600) });
-        invalid.sig = '0'.repeat(128);
-        return new Response(Uint8Array.from(canonical(invalid)), { headers: { 'content-type': 'application/cbor' } });
-      }
-      if (url === middle.root.snapshotUrl) return new Response(Uint8Array.of(0xa0), { headers: { 'content-type': 'text/plain' } });
-      return new Response(Uint8Array.from(canonical(revoked)), { headers: { 'content-type': 'application/cbor' } });
-    });
-    try {
-      assert.deepEqual(await refreshSnapshots(f.store, roots, now), { refreshed: 1, failed: 2 });
-      assert.deepEqual(visited, roots.map(r => r.snapshotUrl));
-      const accepted = snapshotStore(f.store, roots, now).get(rootId(f.root.rootPubkey));
-      assert.equal(accepted.body.sequence, 2); assert.deepEqual(accepted.body.revokedPubkeys, [f.root.rootPubkey]);
-    } finally { request.mock.restore(); }
-  }
-  const reopened = openPublicationStore(f.databasePath);
-  try { assert.equal(snapshotStore(reopened, roots, now).get(rootId(f.root.rootPubkey)).body.sequence, 2); }
-  finally { reopened.close(); }
 });
 
 const priorityCases: [string, string, number][] = [
@@ -366,13 +306,10 @@ test('mapped priorities are signed without changing raw tags, and only authorize
     await f.ingest({ tags });
     const row = await stageNext(f.store, config, f.credentials, f.roots, now); assert.ok(row);
     const event = JSON.parse(String(row.event_json));
-    assert.equal(priorityHint(event), expected, `${type}/${value}`);
-    assert.equal(effectivePriority(event), 1);
+    assert.equal(priorityHintOf(event), expected, `${type}/${value}`);
     assert.deepEqual(JSON.parse(String(row.original_json)).tags, tags);
-    const checked = await f.store.transaction(() => verifyPublicInformation(event, { roots: f.roots,
-      snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: config.selection }));
-    assert.equal(checked.effectivePriority, expected);
-    await assert.rejects(verifyPublicInformation(event, { roots: [], snapshots: snapshotStore(f.store, f.roots, now), nowSeconds: now, selection: config.selection }));
+    assert.equal((await f.authorize(event)).effectivePriority, expected);
+    await assert.rejects(authorizeImport(event, { roots: [], selection: config.selection, revocations: [], now }));
     assert.equal(await pushOnce(f.store, config, f.credentials, f.roots, now, new AbortController().signal, async () => true), true);
   }
 });
@@ -382,10 +319,10 @@ test('highest priority stages before the candidate limit, but never overtakes a 
   for (let i = 0; i < 10; i++) await f.ingest({ tags: ['bsaf:v1', 'type:ashfall', 'value:warning', `time:${timestamp(now)}`, 'target:jp', 'source:jma'] });
   const urgent = await f.ingest({ tags: ['bsaf:v1', 'type:tsunami', 'value:special-warning', `time:${timestamp(now)}`, 'target:jp', 'source:jma'] });
   const row = await stageNext(f.store, config, f.credentials, f.roots, now); assert.ok(row); assert.equal(row.cid, urgent.cid);
-  assert.equal(priorityHint(JSON.parse(String(row.event_json))), 3);
+  assert.equal(priorityHintOf(JSON.parse(String(row.event_json))), 3);
   assert.equal(await pushOnce(f.store, config, f.credentials, f.roots, now, new AbortController().signal, async () => true), true);
   const low = await stageNext(f.store, config, f.credentials, f.roots, now); assert.ok(low);
-  assert.equal(priorityHint(JSON.parse(String(low.event_json))), 1);
+  assert.equal(priorityHintOf(JSON.parse(String(low.event_json))), 1);
   await f.ingest({ text: 'Another urgent original', tags: ['bsaf:v1', 'type:eruption', 'value:warning', `time:${timestamp(now)}`, 'target:jp', 'source:jma'] });
   assert.equal((await stageNext(f.store, config, f.credentials, f.roots, now))!.event_json, low.event_json);
 });

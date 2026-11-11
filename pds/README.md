@@ -33,4 +33,4 @@
 - [プロジェクト全体](../README.md) / [Androidアプリ](../apps/android/README.md)
 - [起動・テスト・実装詳細と運用制約](DEVELOPMENT.md) / [デプロイ・認証・バックアップ](deployment.md)
 - [本番動作検証報告](../docs/pds-production-verification-2026-10-18.md) / [Relay互換検証報告](../docs/research/pds-relay-fixes-2026-10-18.md)
-- 仕様：[リポジトリモデル](../protocol/0001-repository-model.md)、[論理PDS](../protocol/0006-logical-pds.md)、[Nostrリレー](../protocol/0007-nostr-relay-profile.md)、[データ表現](../protocol/0012-bindings.md)
+- 仕様：[コアプロトコル](../protocol/mosimo/README.md)、[論理PDSとNostrリレー](../protocol/mosimo/pds/README.md)

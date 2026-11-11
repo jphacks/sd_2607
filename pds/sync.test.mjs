@@ -8,7 +8,7 @@ import { decodeFirst } from 'cborg';
 import { commitFrame, futureRevisionDelay, MAX_COMMIT_BYTES, MAX_COMMIT_OPS, MAX_SYNC_BYTES } from './sync.mts';
 
 const repo = 'did:plc:abcdefghijklmnopqrstuvwx';
-const collection = 'dev.oriom.mosimo.post';
+const collection = 'dev.jisaku.mosimo.post';
 const key = await Secp256k1Keypair.create();
 const time = '2026-10-18T00:00:00.000Z';
 

@@ -1,105 +1,83 @@
 import { WebSocket, createWebSocketStream } from 'ws';
 import { fetchJson, fetchBytes, parseNetworkJson } from './identity.mjs';
-import { decodeCanonical, rootId, verifySnapshot, verifyPublicInformation, effectivePriority, NS, IDENTITY } from './public-information.mjs';
+import { authorizeImport, priorityHintOf, decodeRevocationList, canonical, encodeBytes, CONTROL_KIND } from './attest.mjs';
+import { TAG } from './repository.mjs';
 import { sqliteNow } from './store.mjs';
 
-// Security state is never evicted, even when a root is disabled or a snapshot expires.
-export function createPriorityPolicy({ config, store, getBytes = fetchBytes, now = () => Math.floor(Date.now() / 1000) }) {
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+/**
+ * Priority policy for MOSIMO-REQ (pds §7): effectivePriority is the author's hint only for posts
+ * this relay authorizes as imports from its own trust roots, local selection and known
+ * revocations; everything else is capped at 1. No network access: revocations come from the
+ * durable table, which the control-event ingestion and `createRevocationRefresher` fill.
+ */
+export function createPriorityPolicy({ config, store, now = nowSeconds }) {
   const { roots = [], selection = [] } = config.publicInformation ?? {};
-  const enabled = roots.filter(root => root.enabled);
-  const fetchedAt = new Map();
-  const durable = async fn => {
-    try { return await fn(); }
-    catch (cause) { if (cause.trustAuthorization) throw cause; throw Object.assign(new Error('Trust persistence failed', { cause }), { trustStorage: true }); }
-  };
-  const adapter = () => ({
-    async get(id) {
-      const row = await durable(async () => (await store.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [id])).rows[0]);
-      if (!row) throw new Error('Snapshot unavailable');
-      return JSON.parse(row.snapshot);
-    },
-    async accept(id, snapshot) {
-      const root = enabled.find(root => rootId(root.rootPubkey) === id);
-      if (!root) throw new Error('Unknown root');
-      await durable(() => store.transaction(async tx => {
-        // PostgreSQL needs a lock even before the first row exists; SQLite uses BEGIN IMMEDIATE.
-        if (store.dialect !== 'sqlite') await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
-        const row = (await tx.query('SELECT snapshot FROM trust_snapshots WHERE root_id=$1', [id])).rows[0];
-        if (!row && Number((await tx.query('SELECT COUNT(*) AS count FROM trust_snapshots')).rows[0].count) >= 64) throw new Error('Root state capacity reached');
-        try { await verifySnapshot(snapshot, { root, nowSeconds: now(), previous: row ? JSON.parse(row.snapshot) : null }); }
-        catch (error) { error.trustAuthorization = true; throw error; }
-        await tx.query('INSERT INTO trust_snapshots(root_id,snapshot) VALUES($1,$2) ON CONFLICT(root_id) DO UPDATE SET snapshot=excluded.snapshot', [id, JSON.stringify(snapshot)]);
-      }));
-    },
-    async recordCertificate(issuer, serial, certId) {
-      const accepted = await durable(() => store.transaction(async tx => {
-        if (store.dialect !== 'sqlite') await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
-        const row = (await tx.query(`SELECT s.cert_id, EXISTS (
-          SELECT 1 FROM trust_serial_conflicts c WHERE c.issuer=s.issuer AND c.serial=s.serial
-        ) AS conflicted FROM trust_serials s WHERE s.issuer=$1 AND s.serial=$2`, [issuer, serial])).rows[0];
-        if (row) {
-          if (row.conflicted) return false;
-          if (row.cert_id === certId) return true;
-          await tx.query('INSERT INTO trust_serial_conflicts(issuer,serial) VALUES($1,$2) ON CONFLICT(issuer,serial) DO NOTHING', [issuer, serial]);
-          return false;
-        }
-        const count = (await tx.query('SELECT COUNT(*) AS count FROM trust_serials')).rows[0];
-        if (Number(count.count) >= 100000) throw new Error('Certificate state capacity reached');
-        await tx.query('INSERT INTO trust_serials(issuer,serial,cert_id) VALUES($1,$2,$3)', [issuer, serial, certId]);
-        return true;
-      }));
-      // Commit security evidence first; rejecting the event must not roll back the marker.
-      if (!accepted) throw Object.assign(new Error('Certificate serial conflict'), { trustAuthorization: true });
-    },
-  });
+  const domains = new Set(config.publicInformation?.revocationDomains ?? []);
   return {
+    domains,
     async capture() {
-      const snapshots = adapter();
-      // Fetch each provisioned root independently; a failed root cannot suppress another's CRL.
-      const results = await Promise.allSettled(enabled.map(async root => {
-        const id = rootId(root.rootPubkey);
-        if (performance.now() - (fetchedAt.get(id) ?? -Infinity) < 30000) return;
-        fetchedAt.set(id, performance.now());
-        const snapshot = decodeCanonical(await getBytes(root.snapshotUrl, { maxBytes: 32768, contentType: 'application/cbor',
-          headers: { accept: 'application/cbor' } }));
-        await snapshots.accept(rootId(root.rootPubkey), snapshot);
-      }));
-      if (results.some(result => result.status === 'rejected' && result.reason.trustStorage)) throw new Error('Trust state update failed');
-      const captured = new Map();
-      for (const root of enabled) {
-        try { captured.set(rootId(root.rootPubkey), await snapshots.get(rootId(root.rootPubkey))); }
-        catch (error) { if (error.trustStorage) throw error; }
-      }
-      const frozen = { ...snapshots, async get(id) {
-        if (!captured.has(id)) throw new Error('Snapshot unavailable');
-        return captured.get(id);
-      } };
-      let checkedAt = 0;
-      let validUntil = Infinity;
-      const evaluate = async event => {
+      // Fix the evaluation time and the revocation set at acceptance (pds §7.2).
+      const at = now();
+      const rows = (await store.query('SELECT subject, issuer, effective_at FROM revocations')).rows;
+      const revocations = rows.map(row => ({ subject: row.subject, issuer: row.issuer, effectiveAt: Number(row.effective_at) }));
+      return async event => {
         try {
-          const result = await verifyPublicInformation(event, { roots, selection, snapshots: frozen, nowSeconds: now() });
-          if (result.effectivePriority > 1) {
-            // The shared verifier has validated these exact fields; retain their earliest send deadline.
-            const identity = decodeCanonical(Buffer.from(event.tags.find(tag => tag[0] === `${NS}:ext:${IDENTITY}`)[1], 'base64'));
-            const delivery = event.tags.find(tag => tag[0] === `${NS}:delivery-expires-at`)[1];
-            validUntil = Math.min(validUntil, Date.parse(result.snapshot.validUntil) / 1000,
-              Date.parse(identity.chain[0].body.notAfter) / 1000, Date.parse(delivery) / 1000);
-            checkedAt = Math.max(checkedAt, result.checkedAt);
-          }
+          const result = await authorizeImport(event, { roots, selection, revocations, now: at });
+          for (const domain of result.issuerDomains) domains.add(domain);
           return result.effectivePriority;
-        } catch (error) {
-          if (error.trustStorage) throw error;
-          return effectivePriority(event, false);
-        }
+        } catch { return Math.min(priorityHintOf(event), 1); }
       };
-      evaluate.assertFresh = () => {
-        const current = now();
-        if (!Number.isSafeInteger(current) || current < checkedAt || current >= validUntil) throw new Error('Priority authorization expired/clock changed');
-      };
-      return evaluate;
     },
   };
+}
+
+/**
+ * attest.revocation.list §5: when online, fetch each known issuer domain's revocation list,
+ * verify the inner notices and persist them. Failures keep the last state and never block relaying.
+ */
+export function createRevocationRefresher({ store, domains, getBytes = fetchBytes, now = nowSeconds, minIntervalSeconds = 600 }) {
+  const attempted = new Map();
+  async function refreshDomain(domain) {
+    const url = `https://${domain}/.well-known/mosimo/attest/revocations`;
+    let status = 'failed';
+    try {
+      const bytes = await getBytes(url, { maxBytes: 1048576, contentType: 'application/cbor', headers: { accept: 'application/cbor' } });
+      const list = decodeRevocationList(bytes);
+      const seen = now();
+      for (const entry of list.accepted) {
+        await store.query(`INSERT INTO revocations(id,subject,issuer,effective_at,seen_at,revocation) VALUES($1,$2,$3,$4,$5,$6)
+          ON CONFLICT(id) DO NOTHING`, [entry.id, entry.subject, entry.issuer, Math.floor(entry.effectiveAt), seen,
+          encodeRevocation(entry.revocation)]);
+      }
+      status = list.listSignatureValid ? `ok: ${list.accepted.length} notices` : `unsigned-list: ${list.accepted.length} notices`;
+      await store.query(`INSERT INTO revocation_sources(domain,fetched_at,succeeded_at,status) VALUES($1,$2,$2,$3)
+        ON CONFLICT(domain) DO UPDATE SET fetched_at=excluded.fetched_at,succeeded_at=excluded.succeeded_at,status=excluded.status`, [domain, now(), status]);
+      return true;
+    } catch (error) {
+      status = `failed: ${error.message}`.slice(0, 200);
+      await store.query(`INSERT INTO revocation_sources(domain,fetched_at,status) VALUES($1,$2,$3)
+        ON CONFLICT(domain) DO UPDATE SET fetched_at=excluded.fetched_at,status=excluded.status`, [domain, now(), status]).catch(() => {});
+      return false;
+    }
+  }
+  return {
+    async refresh(force = false) {
+      const results = {};
+      for (const domain of [...domains]) {
+        if (!force && now() - (attempted.get(domain) ?? -Infinity) < minIntervalSeconds) continue;
+        attempted.set(domain, now());
+        results[domain] = await refreshDomain(domain);
+      }
+      return results;
+    },
+  };
+}
+// Stored in the same form as the control-event tag value: canonical CBOR of the fields without $type.
+function encodeRevocation(revocation) {
+  const { $type, ...fields } = revocation;
+  return encodeBytes(canonical(fields));
 }
 
 export function startNetwork({ config, store, ingest }) {
@@ -132,7 +110,7 @@ export function startNetwork({ config, store, ingest }) {
     ws.on('open', () => {
       attempt = 0;
       // Do not use a created_at watermark: disaster/offline posts may be arbitrarily old.
-      ws.send(JSON.stringify(['REQ', 'mosimo', { kinds: [1], '#t': ['mosimo.oriom.dev'] }, { kinds: [5] }]));
+      ws.send(JSON.stringify(['REQ', 'mosimo', { kinds: [1, CONTROL_KIND], '#t': [TAG] }, { kinds: [5] }]));
     });
     const task = (async () => {
       try {

@@ -1,0 +1,57 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.revocation.list",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "body",
+        "sig"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#listBody"
+          ],
+          "closed": true
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Revocation list published by a certificate authority at its well-known endpoint."
+    },
+    "listBody": {
+      "type": "object",
+      "required": [
+        "publisher",
+        "generatedAt",
+        "revocations"
+      ],
+      "properties": {
+        "publisher": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Generation time."
+        },
+        "revocations": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "dev.jisaku.mosimo.attest.revocation"
+          }
+        }
+      }
+    }
+  }
+}

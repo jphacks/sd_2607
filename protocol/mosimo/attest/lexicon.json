@@ -1,0 +1,198 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest",
+  "defs": {
+    "keyAttestation": {
+      "type": "object",
+      "required": [
+        "body",
+        "sig"
+      ],
+      "properties": {
+        "body": {
+          "type": "union",
+          "refs": [
+            "#keyAttestationBody"
+          ],
+          "closed": true
+        },
+        "sig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "A key attestation: issuer-signed statement about a subject key."
+    },
+    "keyAttestationBody": {
+      "type": "object",
+      "required": [
+        "issuer",
+        "subject",
+        "owner",
+        "roles",
+        "blocks"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "subject": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 33,
+          "description": "Public key. 32 bytes: BIP-340 x-only; 33 bytes: SEC1 compressed secp256k1."
+        },
+        "owner": {
+          "type": "ref",
+          "ref": "#owner"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Role name, e.g. attest, identity, public-information, import."
+          },
+          "description": "Sorted by UTF-8 bytes, no duplicates."
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Additional blocks. At most one block per $type. Unknown blocks are preserved.",
+          "items": {
+            "type": "union",
+            "refs": [
+              "#keyValidity",
+              "#delegation",
+              "#organization",
+              "#issuerDomain",
+              "#subjectDomain",
+              "#trustLevel",
+              "dev.jisaku.mosimo.attest.revocation.subkey",
+              "dev.jisaku.mosimo.attest.importer"
+            ]
+          }
+        }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Opaque stable identifier in the issuer's namespace. Compared by exact match.",
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name only.",
+          "maxLength": 256
+        }
+      }
+    },
+    "keyValidity": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Inclusive start."
+        },
+        "until": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Exclusive end."
+        }
+      },
+      "description": "Validity period. Absent means unlimited; permitted only for keys issued directly by a root."
+    },
+    "delegation": {
+      "type": "object",
+      "required": [
+        "maxDepth"
+      ],
+      "properties": {
+        "maxDepth": {
+          "type": "integer",
+          "description": "Number of key levels the subject may create below itself. 0 means leaf.",
+          "minimum": 0
+        }
+      }
+    },
+    "organization": {
+      "type": "object",
+      "required": [
+        "orgId",
+        "orgName"
+      ],
+      "properties": {
+        "orgId": {
+          "type": "string",
+          "description": "Organization identifier of the form <prefix>:<id>. The prefix is the namer's domain name or a registered <country>-<name> such as jp-lg (Japanese local government code). Compared by exact match across certificate authorities.",
+          "maxLength": 256
+        },
+        "orgName": {
+          "type": "string",
+          "description": "Display name.",
+          "maxLength": 256
+        }
+      },
+      "description": "Organization the key acts for."
+    },
+    "issuerDomain": {
+      "type": "object",
+      "required": [
+        "domain"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Lowercase normalized DNS name used to discover the issuer's endpoints."
+        }
+      }
+    },
+    "subjectDomain": {
+      "type": "object",
+      "required": [
+        "domain",
+        "method"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Lowercase normalized DNS name of the owner."
+        },
+        "method": {
+          "type": "string",
+          "description": "Verification method, e.g. nip05 or manual."
+        }
+      }
+    },
+    "trustLevel": {
+      "type": "object",
+      "required": [
+        "level"
+      ],
+      "properties": {
+        "level": {
+          "type": "integer",
+          "description": "Ordinal 0..3 describing the strength of the owner verification process.",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "method": {
+          "type": "string",
+          "description": "Verification method."
+        }
+      }
+    }
+  }
+}

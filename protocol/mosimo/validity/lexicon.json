@@ -1,0 +1,22 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.validity",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "The period during which the post content is valid as a description of the situation or as an instruction. Distinct from the mesh delivery deadline. An omitted endpoint is unknown; do not infer it from delivery deadlines or receipt times.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Start of validity. UTC with an uppercase Z suffix; preserve the original string. Omit when unknown."
+        },
+        "until": {
+          "type": "string",
+          "format": "datetime",
+          "description": "End of validity. UTC with an uppercase Z suffix; preserve the original string. Omit when unknown. Expiry does not delete or retract the post."
+        }
+      }
+    }
+  }
+}

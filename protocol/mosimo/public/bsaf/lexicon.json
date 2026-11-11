@@ -1,0 +1,74 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.public.bsaf",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "BSAF v1 compatibility: the original tag and language arrays of a Bluesky Structured Alert Feed post, with optional references to the original post and the bot definition. Tags are preserved verbatim; parsed values are not duplicated.",
+      "required": ["tags", "langs"],
+      "properties": {
+        "tags": {
+          "type": "array",
+          "description": "Same order and strings as app.bsky.feed.post.tags, including bsaf:v1, the core tags and any unknown additional tags. Limits follow the official app.bsky.feed.post Lexicon.",
+          "maxLength": 8,
+          "items": { "type": "string", "maxLength": 640, "maxGraphemes": 64 }
+        },
+        "langs": {
+          "type": "array",
+          "description": "Languages of the BSAF text. For imports, the original post's langs.",
+          "maxLength": 3,
+          "items": { "type": "string", "format": "language" }
+        },
+        "original": {
+          "type": "ref",
+          "ref": "#originalPost",
+          "description": "Present when the post was imported from an existing BSAF post. Absent for posts created natively."
+        },
+        "botDefinition": {
+          "type": "ref",
+          "ref": "#botDefinitionReference",
+          "description": "Bot definition that interprets the BSAF metadata."
+        }
+      }
+    },
+    "originalPost": {
+      "type": "object",
+      "description": "Reference to the original app.bsky.feed.post record. The CID identifies the retrieved content; a different CID at the same URI is different content.",
+      "required": ["uri", "cid", "createdAt"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "at:// URI with the author DID as authority and collection app.bsky.feed.post."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the retrieved original record."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "createdAt of the original record, preserved as the original string."
+        }
+      }
+    },
+    "botDefinitionReference": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "retrievedAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "When the importer retrieved this definition. UTC with an uppercase Z suffix."
+        },
+        "sha256": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32,
+          "description": "SHA-256 over the raw bytes of the retrieved JSON document, before any re-serialization."
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { rootId, validateScope } from './public-information.mjs';
+import { rootConfig, validateImporterBlock, IMPORTER } from './attest.mjs';
 
 export function validateConfig(input, env = process.env) {
   const config = { plcUrl: 'https://plc.directory', relays: [], peers: [], maxEventBytes: 131072,
@@ -28,20 +28,21 @@ export function validateConfig(input, env = process.env) {
   for (const key of ['maxEventBytes', 'maxSubscriptions', 'maxResults', 'maxBufferedBytes', 'maxEvents']) {
     if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`Invalid ${key}`);
   }
+  // Trust roots are receiver-local settings (attest §3): the key, the roles it may grant and the
+  // chain depth it may delegate. The selection lists the (Bot, type) pairs this relay authorizes.
   const pi = config.publicInformation;
   if (!pi || !Array.isArray(pi.roots) || pi.roots.length > 64 || !Array.isArray(pi.selection)
-    || pi.selection.length > 16) throw new Error('Invalid publicInformation');
+    || pi.selection.length > 16 || (pi.revocationDomains !== undefined && !Array.isArray(pi.revocationDomains))) throw new Error('Invalid publicInformation');
   const ids = new Set();
-  for (const root of pi.roots) {
-    if (!root || typeof root.enabled !== 'boolean' || !/^(02|03)[0-9a-f]{64}$/.test(root.rootPubkey)
-      || !Number.isSafeInteger(root.minSequence) || root.minSequence < 1) throw new Error('Invalid public root');
-    validateScope(root.scope);
-    const url = new URL(root.snapshotUrl);
-    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Invalid snapshot URL');
-    const id = rootId(root.rootPubkey);
-    if (ids.has(id)) throw new Error('Duplicate public root');
-    ids.add(id);
+  config.publicInformation = { ...pi, roots: pi.roots.map(root => {
+    const normalized = rootConfig(root);
+    if (ids.has(normalized.id)) throw new Error('Duplicate public root');
+    ids.add(normalized.id);
+    return { ...root, pubkey: normalized.id };
+  }), revocationDomains: pi.revocationDomains ?? [] };
+  if (pi.selection.length) validateImporterBlock({ $type: IMPORTER, sources: pi.selection });
+  for (const domain of config.publicInformation.revocationDomains) {
+    if (typeof domain !== 'string' || !/^[a-z0-9.-]+$/.test(domain)) throw new Error('Invalid revocation domain');
   }
-  if (pi.selection.length) validateScope({ orgIds: ['local-selection'], bsaf: pi.selection });
   return config;
 }

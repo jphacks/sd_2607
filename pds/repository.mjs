@@ -5,16 +5,18 @@ import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { verifyEvent } from 'nostr-tools';
 
-const namespace = 'mosimo.oriom.dev';
-const prefix = `${namespace}:`;
-const collection = 'dev.oriom.mosimo.post';
+// dev.jisaku.mosimo core §7: discovery tag, basic tags and self-contained extension tags.
+export const TAG = 'mosimo.jisaku.dev';
+export const COLLECTION = 'dev.jisaku.mosimo.post';
+export const EXT_PREFIX = 'mosimo:ext:';
+export const BSAF_EXT = 'dev.jisaku.mosimo.public.bsaf';
 const tid = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function object(value) {
+export function object(value) {
   return value !== null && typeof value === 'object'
     && !Array.isArray(value) && !(value instanceof Uint8Array) && !CID.asCID(value);
 }
@@ -30,15 +32,16 @@ function dataModel(value) {
   for (const child of Object.values(value)) dataModel(child);
 }
 
-function decodeBytes(value) {
+/** Core §3.3: unpadded standard Base64 for bytes carried in custom tags. */
+export const encodeBytes = bytes => Buffer.from(bytes).toString('base64').replace(/=+$/, '');
+export function decodeBytes(value) {
   requireValue(typeof value === 'string' && /^[A-Za-z0-9+/]*$/.test(value), 'Invalid unpadded Base64');
   const bytes = new Uint8Array(Buffer.from(value, 'base64'));
-  requireValue(Buffer.from(bytes).toString('base64').replace(/=+$/, '') === value,
-    'Noncanonical Base64');
+  requireValue(encodeBytes(bytes) === value, 'Noncanonical Base64');
   return bytes;
 }
 
-function decodeCbor(bytes) {
+export function decodeCbor(bytes) {
   const value = cbor.decode(bytes);
   dataModel(value);
   requireValue(Buffer.from(cbor.encode(value)).equals(Buffer.from(bytes)), 'Noncanonical CBOR');
@@ -56,13 +59,13 @@ async function cidFor(bytes) {
   return CID.createV1(cbor.code, await sha256.digest(bytes));
 }
 
-function timestamp(value) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/.exec(value);
+/** Core §3.1 Timestamp: UTC, uppercase Z, optional fraction. Returns whole seconds. */
+export function timestampSeconds(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?Z$/.exec(value);
   requireValue(match, 'Invalid UTC timestamp');
-  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
   requireValue(year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= 31
     && hour <= 23 && minute <= 59 && second <= 59, 'Invalid UTC calendar date');
-  // setUTCFullYear avoids Date.UTC's special handling of years 00 through 99.
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
   date.setUTCHours(hour, minute, second, 0);
@@ -71,25 +74,25 @@ function timestamp(value) {
   return date.getTime() / 1000;
 }
 
-/** Routing, not authorization: malformed claimed BSAF imports also fail closed for atproto.
- * A valid ordinary BSAF extension without `original` remains a user post.
- * Keep this below the shared canonical decoder; never depend on PLC/root freshness.
- */
+export const isPost = event => event?.kind === 1 && Array.isArray(event.tags)
+  && event.tags.some(tag => Array.isArray(tag) && tag[0] === 't' && tag[1] === TAG);
+
+/** Routing, not authorization: a malformed claimed import also fails closed for atproto.
+ * A valid BSAF extension without `original` (natively created) remains an ordinary post. */
 export function isBsafImport(event) {
-  const tags = event.tags.filter(tag => tag[0] === `${prefix}ext:dev.oriom.mosimo.defs#bsafV1`);
+  const tags = event.tags.filter(tag => tag[0] === `${EXT_PREFIX}${BSAF_EXT}`);
   if (tags.length === 0) return false;
   if (tags.length !== 1) return true;
   try {
     const tag = tags[0];
     requireValue(tag.length === 2, 'Invalid BSAF extension tag');
     const fields = decodeCbor(decodeBytes(tag[1]));
-    requireValue(object(fields) && (!Object.hasOwn(fields, '$type')
-      || fields.$type === 'dev.oriom.mosimo.defs#bsafV1'), 'Invalid BSAF fields');
+    requireValue(object(fields) && !Object.hasOwn(fields, '$type'), 'Invalid BSAF fields');
     return Object.hasOwn(fields, 'original');
   } catch { return true; }
 }
 
-/** Validate the signed Nostr envelope and recover the original record and commit bytes. */
+/** Validate the signed Nostr envelope and recover the original record and commit bytes (core §7.2). */
 export async function decodePost(event) {
   requireValue(event && event.kind === 1 && typeof event.content === 'string'
     && Number.isSafeInteger(event.created_at) && Array.isArray(event.tags), 'Invalid post event');
@@ -106,35 +109,42 @@ export async function decodePost(event) {
   };
   requireValue(verifyEvent(envelope), 'Invalid Nostr signature');
 
-  function single(name, predicate = tag => tag[0] === name) {
-    const tags = event.tags.filter(predicate);
-    requireValue(tags.length === 1 && tags[0].length === 2, `Expected one two-element ${name} tag`);
-    return tags[0][1];
-  }
-  single('t', tag => tag[0] === 't' && tag[1] === namespace);
-  requireValue(single(`${prefix}version`) === '1', 'Unsupported basic version');
-  const commitBytes = decodeBytes(single(`${prefix}commit`));
-  const baseText = single(`${prefix}base`);
+  // Fixed positions: t, mosimo:v, mosimo:commit, mosimo:base, mosimo:rkey, mosimo:exp, [mosimo:created], ext..., others.
+  const tags = event.tags;
+  const basic = (index, name) => {
+    requireValue(tags[index]?.length === 2 && tags[index][0] === name, `Expected ${name} at tag position ${index}`);
+    return tags[index][1];
+  };
+  requireValue(basic(0, 't') === TAG, 'Expected protocol discovery tag first');
+  requireValue(tags.filter(tag => tag[0] === 't' && tag[1] === TAG).length === 1, 'Expected exactly one discovery tag');
+  requireValue(basic(1, 'mosimo:v') === '1', 'Unsupported basic version');
+  const commitBytes = decodeBytes(basic(2, 'mosimo:commit'));
+  const baseText = basic(3, 'mosimo:base');
   const base = baseText === '' ? null : repositoryCid(CID.parse(baseText));
-  const path = single(`${prefix}path`);
-  requireValue(path.startsWith(`${collection}/`) && tid.test(path.slice(collection.length + 1)),
-    'Invalid post TID path');
-  const createdAt = single(`${prefix}created-at`);
-  const deliveryExpiresAt = single(`${prefix}delivery-expires-at`);
-  requireValue(timestamp(createdAt) === event.created_at, 'created_at does not match createdAt');
-  timestamp(deliveryExpiresAt);
-
-  const extensions = [];
-  for (const tag of event.tags) {
-    if (!tag[0]?.startsWith(`${prefix}ext:`)) continue;
-    const type = tag[0].slice(`${prefix}ext:`.length);
+  const rkey = basic(4, 'mosimo:rkey');
+  requireValue(tid.test(rkey), 'Invalid record key TID');
+  const exp = basic(5, 'mosimo:exp');
+  timestampSeconds(exp);
+  let next = 6;
+  let created;
+  if (tags[6]?.[0] === 'mosimo:created') {
+    created = basic(6, 'mosimo:created');
+    requireValue(timestampSeconds(created) === event.created_at, 'created does not match created_at');
+    next = 7;
+  }
+  const ext = [];
+  while (tags[next]?.[0]?.startsWith(EXT_PREFIX)) {
+    const tag = tags[next++];
+    const type = tag[0].slice(EXT_PREFIX.length);
     requireValue(tag.length === 2 && type.length > 0, 'Invalid extension tag');
     const fields = decodeCbor(decodeBytes(tag[1]));
-    requireValue(object(fields), 'Extension fields must be an object');
-    requireValue(!Object.hasOwn(fields, '$type') || fields.$type === type, 'Conflicting extension $type');
-    extensions.push({ ...fields, $type: type });
+    requireValue(object(fields) && !Object.hasOwn(fields, '$type'), 'Extension value must be an object without $type');
+    ext.push({ $type: type, ...fields });
   }
-  const record = { $type: collection, text: event.content, createdAt, deliveryExpiresAt, extensions };
+  for (const tag of tags.slice(next)) {
+    requireValue(!tag[0].startsWith('mosimo:'), 'Basic/extension tags must precede other tags');
+  }
+  const record = { $type: COLLECTION, text: event.content, exp, ...(created ? { created } : {}), ext };
   const recordBytes = new Uint8Array(cbor.encode(record));
   const commit = decodeCbor(commitBytes);
   requireValue(object(commit)
@@ -145,7 +155,7 @@ export async function decodePost(event) {
   repositoryCid(commit.data);
   if (commit.prev !== null) repositoryCid(commit.prev);
   return {
-    commit, commitCid: await cidFor(commitBytes), commitBytes, base, path,
+    commit, commitCid: await cidFor(commitBytes), commitBytes, base, path: `${COLLECTION}/${rkey}`, rkey,
     record, recordCid: await cidFor(recordBytes), recordBytes,
   };
 }

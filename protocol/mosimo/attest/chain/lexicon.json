@@ -1,0 +1,89 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.attest.chain",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "attestations"
+      ],
+      "properties": {
+        "attestations": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "dev.jisaku.mosimo.attest#keyAttestation"
+          },
+          "minLength": 1,
+          "description": "Ordered from the attestation issued by the root to the leaf."
+        },
+        "binding": {
+          "type": "ref",
+          "ref": "#binding"
+        }
+      },
+      "description": "Extension carrying the signing chain that attests the author key of a post."
+    },
+    "binding": {
+      "type": "object",
+      "required": [
+        "declaration",
+        "atprotoSig",
+        "nostrSig"
+      ],
+      "properties": {
+        "declaration": {
+          "type": "union",
+          "refs": [
+            "#bindingDeclaration"
+          ],
+          "closed": true
+        },
+        "atprotoSig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        },
+        "nostrSig": {
+          "type": "bytes",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "64-byte signature over SHA-256 of the canonical CBOR of body. Schnorr for 32-byte keys, low-S compact ECDSA for 33-byte keys."
+        }
+      },
+      "description": "Reciprocal binding between an atproto signing key and a Nostr key."
+    },
+    "bindingDeclaration": {
+      "type": "object",
+      "required": [
+        "did",
+        "atprotoPubkey",
+        "nostrPubkey",
+        "consent"
+      ],
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "The author's DID.",
+          "format": "did"
+        },
+        "atprotoPubkey": {
+          "type": "bytes",
+          "minLength": 33,
+          "maxLength": 33
+        },
+        "nostrPubkey": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32
+        },
+        "consent": {
+          "type": "string",
+          "description": "Fixed string.",
+          "const": "Use this key pair for this DID's Mosimo publications"
+        }
+      }
+    }
+  }
+}

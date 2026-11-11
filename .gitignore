@@ -28,3 +28,6 @@ apps/esp32/private/
 
 # graphify
 graphify-out
+
+# Offline issuance material (identity-cli.mjs): root/CA/importer secrets and exports
+appview/bsaf/private/

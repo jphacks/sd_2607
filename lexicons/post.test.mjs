@@ -4,18 +4,17 @@ import test from 'node:test';
 import { Lexicons, lexiconDoc } from '@atproto/lexicon';
 
 const schema = JSON.parse(
-  readFileSync(new URL('./dev/oriom/mosimo/post.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../protocol/mosimo/post.json', import.meta.url), 'utf8'),
 );
-const id = 'dev.oriom.mosimo.post';
+const id = 'dev.jisaku.mosimo.post';
 const lexicons = new Lexicons([structuredClone(schema)]);
 
 function post(overrides = {}) {
   return {
     $type: id,
     text: '避難所Aは開設済みです。\n飲料水があります。',
-    createdAt: '2026-10-17T12:34:56.120000Z',
-    deliveryExpiresAt: '2026-10-18T12:34:56Z',
-    extensions: [],
+    exp: '2026-10-18T12:34:56Z',
+    ext: [],
     ...overrides,
   };
 }
@@ -35,10 +34,10 @@ test('schema is valid Lexicon with a TID key and open extension union', () => {
   assert.equal(main.type, 'record');
   assert.equal(main.key, 'tid');
   assert.deepEqual(main.record.required, [
-    'text', 'createdAt', 'deliveryExpiresAt', 'extensions',
+    'text', 'exp', 'ext',
   ]);
-  assert.deepEqual(Object.keys(main.record.properties), main.record.required);
-  assert.deepEqual(main.record.properties.extensions.items, {
+  assert.deepEqual(Object.keys(main.record.properties), ['text', 'exp', 'created', 'ext']);
+  assert.deepEqual(main.record.properties.ext.items, {
     type: 'union', refs: [], closed: false,
   });
 });
@@ -50,33 +49,34 @@ test('accepts a basic post and preserves text and datetime spelling', () => {
   assert.deepEqual(record, original);
 });
 
-test('accepts whole seconds and arbitrary fractional precision', () => {
-  for (const createdAt of [
+test('accepts optional created with arbitrary fractional precision', () => {
+  for (const created of [
     '2026-10-17T12:34:56Z',
     '2026-10-17T12:34:56.0Z',
     '2026-10-17T12:34:56.12345678912345Z',
   ]) {
-    assert.equal(validate(post({ createdAt })).createdAt, createdAt);
+    assert.equal(validate(post({ created })).created, created);
   }
+  assert.equal(validate(post()).created, undefined);
 });
 
 test('preserves third-party types, unknown fields, duplicates, and array order', () => {
-  const extensions = [
+  const ext = [
     {
-      $type: 'dev.oriom.mosimo.appExtension#report',
+      $type: 'dev.jisaku.mosimo.appExtension#report',
       detail: { text: '断水', observed: true, count: 2, optional: null },
       readings: [1, 2, 3],
     },
-    { $type: 'dev.oriom.mosimo.defs#area', futureField: 'uninterpreted' },
-    { $type: 'dev.oriom.mosimo.appExtension#report', detail: {} },
+    { $type: 'dev.jisaku.mosimo.geo#area', futureField: 'uninterpreted' },
+    { $type: 'dev.jisaku.mosimo.appExtension#report', detail: {} },
   ];
-  const record = post({ extensions });
+  const record = post({ ext });
   const original = structuredClone(record);
   assert.deepEqual(validate(record), original);
   assert.deepEqual(record, original);
 });
 
-for (const field of ['$type', 'text', 'createdAt', 'deliveryExpiresAt', 'extensions']) {
+for (const field of ['$type', 'text', 'exp', 'ext']) {
   test(`rejects a missing required ${field}`, () => {
     const record = post();
     delete record[field];
@@ -97,7 +97,7 @@ for (const value of [42, true, [], {}]) {
   });
 }
 
-for (const field of ['createdAt', 'deliveryExpiresAt']) {
+for (const field of ['exp', 'created']) {
   test(`rejects malformed ${field}`, () => {
     for (const value of [42, '2026-10-17', 'not-a-date']) {
       assert.throws(() => lexicons.assertValidRecord(id, post({ [field]: value })));
@@ -105,22 +105,22 @@ for (const field of ['createdAt', 'deliveryExpiresAt']) {
   });
 }
 
-test('rejects non-array extensions and untyped union values', () => {
-  for (const extensions of [
+test('rejects non-array ext and untyped union values', () => {
+  for (const ext of [
     {}, 'text', [null], [1], ['text'], [[]], [{}], [{ $type: 1 }],
   ]) {
-    assert.throws(() => lexicons.assertValidRecord(id, post({ extensions })));
+    assert.throws(() => lexicons.assertValidRecord(id, post({ ext })));
   }
 });
 
 test('pinned upstream validator also accepts a timezone-less datetime', () => {
-  const createdAt = '2026-10-17T12:34:56';
-  assert.equal(validate(post({ createdAt })).createdAt, createdAt);
+  const exp = '2026-10-17T12:34:56';
+  assert.equal(validate(post({ exp })).exp, exp);
 });
 
 test('Lexicon validation does not enforce the stricter protocol profile', () => {
   const record = post({
-    createdAt: '2026-10-17T12:34:56+00:00',
+    exp: '2026-10-17T12:34:56+00:00',
     extraField: 'preserve rather than strip',
   });
   assert.deepEqual(validate(record), record);

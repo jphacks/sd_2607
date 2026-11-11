@@ -19,7 +19,7 @@ async function fixture(t) {
   return { store, path };
 }
 const insert = (tx, id) => tx.query('INSERT INTO events(id,pubkey,created_at,kind,event) VALUES($1,$2,$3,$4,$5)',
-  [id, 'author', 1, 1, JSON.stringify({ id, tags: [['t', 'mosimo.oriom.dev']] })]);
+  [id, 'author', 1, 1, JSON.stringify({ id, tags: [['t', 'mosimo.jisaku.dev']] })]);
 
 test('SQLite requires an absolute path; DATABASE_PATH selects SQLite', async t => {
   await assert.rejects(openSqliteStore('relative.sqlite'), /absolute/);
@@ -58,7 +58,7 @@ test('SQLite persists JSON, blobs and retry defaults through reopen without losi
   const reopened = await openSqliteStore(path);
   try {
     assert.deepEqual((await reopened.query('SELECT event FROM events')).rows[0].event,
-      { id: 'event', tags: [['t', 'mosimo.oriom.dev']] });
+      { id: 'event', tags: [['t', 'mosimo.jisaku.dev']] });
     assert.deepEqual((await reopened.query('SELECT bytes FROM blocks')).rows[0].bytes, Buffer.from([0, 255, 1]));
     assert.equal((await reopened.query('SELECT seq FROM group_sequences')).rows[0].seq, '9223372036854775807');
     for (const table of ['jobs', 'outbox']) {

@@ -8,8 +8,8 @@ import { sha256 } from 'multiformats/hashes/sha2';
 import { finalizeEvent, generateSecretKey, verifyEvent } from 'nostr-tools';
 import { decodePost, verifyCommit, reconstruct } from './repository.mjs';
 
-const ns = 'mosimo.oriom.dev';
-const collection = 'dev.oriom.mosimo.post';
+const ns = 'mosimo.jisaku.dev';
+const collection = 'dev.jisaku.mosimo.post';
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
 const nostrKey = generateSecretKey();
 const signingKey = await Secp256k1Keypair.create();
@@ -25,9 +25,9 @@ async function fixture({ index = 0, entries = [], base = null, extensions = [], 
   const record = {
     $type: collection,
     text: `避難所\r\nか\u3099・が・🏠 ${index}`,
-    createdAt: '2026-10-17T12:34:56.1200000000001Z',
-    deliveryExpiresAt: '2026-10-18T12:34:56Z',
-    extensions,
+    exp: '2026-10-18T12:34:56Z',
+    created: '2026-10-17T12:34:56.1200000000001Z',
+    ext: extensions,
   };
   const path = `${collection}/3jzfcijpj2z2${'abcdefghij'[index]}`;
   const recordBytes = new Uint8Array(cbor.encode(record));
@@ -39,21 +39,21 @@ async function fixture({ index = 0, entries = [], base = null, extensions = [], 
   const commit = { ...unsigned, sig: await key.sign(cbor.encode(unsigned)) };
   const commitBytes = new Uint8Array(cbor.encode(commit));
   const tags = [
-    ['t', ns], [`${ns}:version`, '1'], [`${ns}:commit`, b64(commitBytes)],
-    [`${ns}:base`, base?.toString() ?? ''], [`${ns}:path`, path],
-    [`${ns}:created-at`, record.createdAt], [`${ns}:delivery-expires-at`, record.deliveryExpiresAt],
-    ...extensions.map(({ $type, ...fields }) => [`${ns}:ext:${$type}`, encode(fields)]),
+    ['t', ns], ['mosimo:v', '1'], ['mosimo:commit', b64(commitBytes)],
+    ['mosimo:base', base?.toString() ?? ''], ['mosimo:rkey', path.split('/')[1]],
+    ['mosimo:exp', record.exp], ['mosimo:created', record.created],
+    ...extensions.map(({ $type, ...fields }) => [`mosimo:ext:${$type}`, encode(fields)]),
   ];
   const event = signEvent({ kind: 1, content: record.text, created_at: 1792240496, tags });
   return { event, record, recordBytes, recordCid, commit, commitBytes, path };
 }
 
 function changeTag(event, name, value) {
-  return signEvent({ ...event, tags: event.tags.map(tag => tag[0] === `${ns}:${name}` ? [tag[0], value] : tag) });
+  return signEvent({ ...event, tags: event.tags.map(tag => tag[0] === `mosimo:${name}` ? [tag[0], value] : tag) });
 }
 
 async function changeCommit(event, change) {
-  const original = cbor.decode(Buffer.from(event.tags.find(tag => tag[0] === `${ns}:commit`)[1], 'base64'));
+  const original = cbor.decode(Buffer.from(event.tags.find(tag => tag[0] === 'mosimo:commit')[1], 'base64'));
   return changeTag(event, 'commit', encode(change(original)));
 }
 
@@ -129,15 +129,20 @@ test('rejects changed content, ID, signature, and forged nostr-tools verificatio
   await assert.rejects(decodePost(signEvent({ ...event, kind: 5 })), /post event/);
 });
 
-for (const name of ['version', 'commit', 'base', 'path', 'created-at', 'delivery-expires-at']) {
+for (const name of ['v', 'commit', 'base', 'rkey', 'exp', 'created']) {
   test(`requires one exact two-element ${name} tag`, async () => {
     const { event } = await fixture();
-    const tag = event.tags.find(tag => tag[0] === `${ns}:${name}`);
+    const tag = event.tags.find(tag => tag[0] === `mosimo:${name}`);
     for (const tags of [
-      event.tags.filter(value => value !== tag),
+      // created is the only optional basic tag; removing it yields a record without `created`.
+      ...(name === 'created' ? [] : [event.tags.filter(value => value !== tag)]),
       [...event.tags, tag],
       event.tags.map(value => value === tag ? [...tag, 'extra'] : value),
     ]) await assert.rejects(decodePost(signEvent({ ...event, tags })));
+    if (name === 'created') {
+      const decoded = await decodePost(signEvent({ ...event, tags: event.tags.filter(value => value !== tag) }));
+      assert.equal(Object.hasOwn(decoded.record, 'created'), false);
+    }
   });
 }
 
@@ -148,15 +153,18 @@ test('requires the namespace tag exactly once but permits unrelated search and u
     await assert.rejects(decodePost(signEvent({ ...event, tags })));
   }
   const decoded = await decodePost(signEvent({ ...event, tags: [
-    ['t', 'other'], ['unknown', 'kept in event', 'extra'], ...event.tags,
+    ...event.tags, ['t', 'other'], ['unknown', 'kept in event', 'extra'],
   ] }));
-  assert.equal(decoded.record.extensions.length, 0);
-  await assert.rejects(decodePost(changeTag(event, 'version', '2')), /version/);
+  assert.equal(decoded.record.ext.length, 0);
+  // Basic tags have fixed positions: a stray tag before them, or a mosimo: tag after others, is not a v1 post.
+  await assert.rejects(decodePost(signEvent({ ...event, tags: [['t', 'other'], ...event.tags] })));
+  await assert.rejects(decodePost(signEvent({ ...event, tags: [...event.tags, ['p', 'x'], ['mosimo:ext:org.example#late', encode({})]] })));
+  await assert.rejects(decodePost(changeTag(event, 'v', '2')), /version/);
 });
 
 test('rejects padded, URL-safe, whitespace, and noncanonical Base64 or CBOR', async () => {
   const { event } = await fixture();
-  const tag = event.tags.find(tag => tag[0] === `${ns}:commit`)[1];
+  const tag = event.tags.find(tag => tag[0] === 'mosimo:commit')[1];
   for (const value of [`${tag}=`, `${tag}\n`, '-_8', 'A', 'AB']) {
     await assert.rejects(decodePost(changeTag(event, 'commit', value)));
   }
@@ -168,7 +176,7 @@ test('rejects padded, URL-safe, whitespace, and noncanonical Base64 or CBOR', as
     Uint8Array.of(0xa0, 0x00), // trailing data
     cbor.encode({ float: 1.5 }),
   ]) {
-    const tags = [...event.tags, [`${ns}:ext:org.example.future#value`, b64(bytes)]];
+    const tags = [...event.tags, ['mosimo:ext:org.example.future#value', b64(bytes)]];
     await assert.rejects(decodePost(signEvent({ ...event, tags })));
   }
 });
@@ -176,11 +184,11 @@ test('rejects padded, URL-safe, whitespace, and noncanonical Base64 or CBOR', as
 test('rejects non-object extensions, absent types, conflicting types, and extra tag values', async () => {
   const { event } = await fixture();
   for (const tag of [
-    [`${ns}:ext:`, encode({})],
-    [`${ns}:ext:org.example.future#value`, encode([])],
-    [`${ns}:ext:org.example.future#value`, encode(null)],
-    [`${ns}:ext:org.example.future#value`, encode({ $type: 'org.example.other#value' })],
-    [`${ns}:ext:org.example.future#value`, encode({}), 'extra'],
+    ['mosimo:ext:', encode({})],
+    ['mosimo:ext:org.example.future#value', encode([])],
+    ['mosimo:ext:org.example.future#value', encode(null)],
+    ['mosimo:ext:org.example.future#value', encode({ $type: 'org.example.future#value' })],
+    ['mosimo:ext:org.example.future#value', encode({}), 'extra'],
   ]) await assert.rejects(decodePost(signEvent({ ...event, tags: [...event.tags, tag] })));
 });
 
@@ -189,11 +197,11 @@ test('validates actual UTC calendar dates and exact Unix seconds without roundin
   for (const value of ['2026-02-29T12:34:56Z', '2026-04-31T12:34:56Z',
     '2026-10-17T24:00:00Z', '2026-10-17T12:34:60Z', '2026-10-17T12:34:56+00:00',
     '2026-10-17t12:34:56z', '0000-01-01T00:00:00Z', '2026-13-01T00:00:00Z']) {
-    await assert.rejects(decodePost(changeTag(event, 'delivery-expires-at', value)), /UTC/);
+    await assert.rejects(decodePost(changeTag(event, 'exp', value)), /UTC/);
   }
   for (const value of ['2024-02-29T00:00:00Z', '0001-01-01T00:00:00Z',
     '2000-02-29T12:00:00.0000000000000000001Z']) {
-    assert.equal((await decodePost(changeTag(event, 'delivery-expires-at', value))).record.deliveryExpiresAt, value);
+    assert.equal((await decodePost(changeTag(event, 'exp', value))).record.exp, value);
   }
   await assert.rejects(decodePost(signEvent({ ...event, created_at: event.created_at + 1 })), /created_at/);
   await assert.rejects(decodePost(signEvent({ ...event, created_at: event.created_at + 0.5 })));
@@ -201,9 +209,8 @@ test('validates actual UTC calendar dates and exact Unix seconds without roundin
 
 test('rejects invalid TID paths, base CIDs, and signed v3 commit shapes', async () => {
   const { event } = await fixture();
-  for (const value of [`${collection}/kjzfcijpj2z2a`, `${collection}/3JZFCIJPJ2Z2A`,
-    `${collection}/3jzfcijpj2z2a/extra`, 'app.bsky.feed.post/3jzfcijpj2z2a']) {
-    await assert.rejects(decodePost(changeTag(event, 'path', value)), /path/);
+  for (const value of ['kjzfcijpj2z2a', '3JZFCIJPJ2Z2A', '3jzfcijpj2z2a/extra', `${collection}/3jzfcijpj2z2a`, '']) {
+    await assert.rejects(decodePost(changeTag(event, 'rkey', value)), /TID/);
   }
   await assert.rejects(decodePost(changeTag(event, 'base', 'not-a-cid')));
   for (const change of [
