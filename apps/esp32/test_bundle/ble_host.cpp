@@ -1,5 +1,6 @@
 #include "MeshBle.h"
 #include "ble_host_mocks.h"
+#include "MeshCbor.h"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -13,9 +14,11 @@ NimBLEServer mockServer;
 static unsigned checks = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { std::cerr << "FAIL " << __LINE__ << ": " << #x << '\n'; std::abort(); } } while (0)
 
+// One complete common exchange message as the peer would write it: here a CBOR
+// byte string wrapping test bytes (mesh §7 frames by CBOR item boundaries).
 static std::vector<uint8_t> frame(const std::vector<uint8_t>& bytes) {
-    const uint32_t n = static_cast<uint32_t>(bytes.size());
-    std::vector<uint8_t> out{uint8_t(n >> 24), uint8_t(n >> 16), uint8_t(n >> 8), uint8_t(n)};
+    std::vector<uint8_t> out;
+    mesh::cbor::head(out, 2, bytes.size());
     out.insert(out.end(), bytes.begin(), bytes.end());
     return out;
 }
@@ -64,7 +67,7 @@ static void notifications() {
     e.poll(1); CHECK(e.tx().attempts.size() == 2);
     e.poll(10); CHECK(e.tx().attempts.size() == 3);
     e.poll(100); CHECK(e.tx().attempts.size() == 3);
-    CHECK(e.sent() == frame(payload));
+    CHECK(e.sent() == payload);
     CHECK(e.relay.frames.empty()); // notify acceptance never becomes an application ACK/frame.
     for (const auto& n : e.tx().attempts) { CHECK(n.handle == 7); CHECK(n.bytes.size() <= 20); }
 }
@@ -79,7 +82,7 @@ static void retries() {
     CHECK(e.tx().attempts[0].bytes == e.tx().attempts[1].bytes);
     CHECK(mockServer.disconnects.empty());
     e.tx().accept = true; e.poll(10); e.poll(10);
-    CHECK(e.sent() == frame(payload));
+    CHECK(e.sent() == payload);
     CHECK(mockServer.disconnects.empty());
     // Failed queue attempts time out, including across millis() wraparound.
     fakeMs = std::numeric_limits<uint32_t>::max() - 100;
@@ -92,31 +95,40 @@ static void retries() {
 
 static void fragmentation() {
     Env e; e.connect(11, 517);
-    std::vector<uint8_t> payload(mesh::MAX_BUNDLE_BYTES);
+    std::vector<uint8_t> payload(mesh::Relay::MESSAGE_LIMIT - 3);
     for (size_t i = 0; i < payload.size(); ++i) payload[i] = uint8_t(i * 13);
-    CHECK(e.ble.send(payload.data(), payload.size()));
-    CHECK(!e.ble.send(payload.data(), payload.size())); // 48000-byte budget includes prefixes.
+    for (unsigned i = 0; i < 4; ++i) CHECK(e.ble.send(payload.data(), payload.size()));
+    CHECK(!e.ble.send(payload.data(), payload.size())); // 16384-byte queue budget.
     for (unsigned i = 0; i < 60; ++i) e.poll(10);
-    CHECK(e.sent() == frame(payload));
-    CHECK(e.tx().attempts.size() == 47);
+    std::vector<uint8_t> four;
+    for (unsigned i = 0; i < 4; ++i) four.insert(four.end(), payload.begin(), payload.end());
+    CHECK(e.sent() == four);
+    CHECK(e.tx().attempts.size() == 4 * 8);
     for (const auto& n : e.tx().attempts) CHECK(n.bytes.size() <= 512);
-    // RX prefix splits at every byte, full 24000-byte payload, then coalesced frames.
+    // RX header split at every byte, a maximum-size message, then coalesced messages.
     auto wire = frame(payload);
     for (size_t at = 0; at < wire.size();) {
         const size_t count = at < 4 ? 1 : std::min<size_t>(512, wire.size() - at);
         mockServer.write({wire.begin() + at, wire.begin() + at + count}); e.poll(); at += count;
     }
-    CHECK(e.relay.frames.size() == 1 && e.relay.frames[0] == payload);
+    CHECK(e.relay.frames.size() == 1 && e.relay.frames[0] == wire);
     auto pair = frame({1}); auto second = frame({2, 3}); pair.insert(pair.end(), second.begin(), second.end());
     mockServer.write(pair); e.poll();
     CHECK(e.relay.frames.size() == 3);
-    CHECK(e.relay.frames[1] == std::vector<uint8_t>({1}));
-    CHECK(e.relay.frames[2] == std::vector<uint8_t>({2, 3}));
+    CHECK(e.relay.frames[1] == frame({1}));
+    CHECK(e.relay.frames[2] == frame({2, 3}));
     CHECK(!e.ble.send(nullptr, 1));
     CHECK(!e.ble.send(payload.data(), 0));
-    CHECK(!e.ble.send(payload.data(), mesh::MAX_BUNDLE_BYTES + 1));
-    for (unsigned i = 0; i < 8; ++i) CHECK(e.ble.send(payload.data(), 1));
+    CHECK(!e.ble.send(payload.data(), mesh::Relay::MESSAGE_LIMIT + 1));
+    for (unsigned i = 0; i < 16; ++i) CHECK(e.ble.send(payload.data(), 1));
     CHECK(!e.ble.send(payload.data(), 1));
+    // A message one byte over our advertised limit loses sync: disconnect.
+    auto tooLong = frame(std::vector<uint8_t>(mesh::Relay::MESSAGE_LIMIT - 2));
+    CHECK(tooLong.size() == mesh::Relay::MESSAGE_LIMIT + 1);
+    for (size_t at = 0; at < tooLong.size(); at += 512) {
+        mockServer.write({tooLong.begin() + at, tooLong.begin() + std::min(tooLong.size(), at + 512)}); e.poll();
+    }
+    CHECK(mockServer.disconnectPending && e.relay.frames.size() == 3);
 }
 
 static void overflowDuringReceive() {
@@ -145,10 +157,10 @@ static void overflowDuringReceive() {
     e.poll(); CHECK(e.relay.connections == 2);
     CHECK(e.tx().attempts.empty()); // Previous session's queued TX was discarded.
     mockServer.write(frame({4})); e.poll();
-    CHECK(e.relay.frames.size() == 2 && e.relay.frames.back() == std::vector<uint8_t>({4}));
+    CHECK(e.relay.frames.size() == 2 && e.relay.frames.back() == frame({4}));
     CHECK(e.ble.send(&pending, 1)); e.poll(10);
     CHECK(e.tx().attempts.back().handle == 13);
-    CHECK(e.sent() == frame({pending}));
+    CHECK(e.sent() == std::vector<uint8_t>({pending}));
 }
 
 static void lifecycleLoss() {
@@ -171,17 +183,18 @@ static void lifecycleLoss() {
 }
 
 static void invalidFramesAndDisconnects() {
-    for (const auto& bad : std::vector<std::vector<uint8_t>>{{0, 0, 0, 0}, {0, 0, 0x5d, 0xc1}, std::vector<uint8_t>(513, 1)}) {
+    // Malformed CBOR (bare break, reserved head, indefinite string) or an oversized declared length.
+    for (const auto& bad : std::vector<std::vector<uint8_t>>{{0xff}, {0x1c}, {0x5f, 0x41, 1, 0xff}, {0x5a, 0, 1, 0, 0}}) {
         Env e; e.connect(); mockServer.write(bad); e.poll();
         CHECK(e.relay.frames.empty()); CHECK(mockServer.disconnectPending);
         e.finishDisconnect();
     }
     {
-        Env e; e.connect(); mockServer.write({0, 0}); e.poll();
+        Env e; e.connect(); mockServer.write({0x45, 1}); e.poll();
         e.poll(15001); CHECK(mockServer.disconnectPending); e.finishDisconnect();
         mockServer.up(31); mockServer.subscribe(); e.poll();
         mockServer.write(frame({6})); e.poll();
-        CHECK(e.relay.frames.size() == 1 && e.relay.frames[0] == std::vector<uint8_t>({6}));
+        CHECK(e.relay.frames.size() == 1 && e.relay.frames[0] == frame({6}));
     }
     {
         Env e; e.connect(); mockServer.subscribe(0); e.poll();
@@ -194,7 +207,7 @@ static void invalidFramesAndDisconnects() {
     }
     {
         Env e; e.connect(); mockServer.immediateDisconnect = true;
-        mockServer.write({0, 0, 0, 0}); e.poll();
+        mockServer.write({0xff}); e.poll();
         CHECK(!mockServer.alive && mockAdvertising.active && queueResets == 1);
     }
 }
@@ -242,8 +255,8 @@ static void idleDisable() {
 }
 
 static void disableDiscardsSession() {
-    // Exercise both a split length prefix and a partially received body.
-    for (size_t partial : {size_t(2), size_t(6)}) {
+    // Exercise both a split CBOR head and a partially received body.
+    for (size_t partial : {size_t(1), size_t(6)}) {
         Env e; e.connect();
         const std::vector<uint8_t> old(53, 0xa5);
         const auto wire = frame(old);
@@ -282,10 +295,10 @@ static void disableDiscardsSession() {
         const std::vector<uint8_t> fresh{9, 8, 7};
         const auto freshWire = frame(fresh);
         for (uint8_t byte : freshWire) { mockServer.write({byte}); e.poll(); }
-        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({fresh}));
+        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({freshWire}));
         CHECK(e.ble.send(fresh.data(), fresh.size()));
         for (unsigned i = 0; i < 10; ++i) e.poll(10);
-        CHECK(e.sent() == freshWire); // Fresh prefix, no old tail or queued frame.
+        CHECK(e.sent() == fresh); // No old tail or queued frame.
         CHECK(e.tx().attempts.size() == 1 && e.tx().attempts[0].handle == 41);
     }
 }
@@ -309,7 +322,7 @@ static void disableDuringDisconnectAndRapidToggle() {
         Env e; e.connect();
         const uint8_t old = 0xee;
         CHECK(e.ble.send(&old, 1));
-        mockServer.write({0, 0}); e.poll();
+        mockServer.write({0x45, 1}); e.poll();
         e.tx().attempts.clear();
         mockServer.write(frame({old})); // Stale callback event must be discarded.
         e.ble.setEnabled(false, e.relay);
@@ -329,10 +342,10 @@ static void disableDuringDisconnectAndRapidToggle() {
         e.poll();
         CHECK(e.relay.connections == 2 && e.tx().attempts.empty());
         mockServer.write(frame({1, 2, 3})); e.poll();
-        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({{1, 2, 3}}));
+        CHECK(e.relay.frames == std::vector<std::vector<uint8_t>>({frame({1, 2, 3})}));
         const uint8_t fresh = 4;
         CHECK(e.ble.send(&fresh, 1)); e.poll(10);
-        CHECK(e.sent() == frame({fresh}) && e.tx().attempts.back().handle == 43);
+        CHECK(e.sent() == std::vector<uint8_t>({fresh}) && e.tx().attempts.back().handle == 43);
     }
 }
 
@@ -371,7 +384,17 @@ static void networkPause() {
         CHECK(mockAdvertising.active);
     }
 }
+static void scanResponse() {
+    Env e;
+    // Mesh §3.1 / mesh.adv §1: node 8 | role flags (peripheral-only) | summary 3 | ext flags.
+    const std::vector<uint8_t> expected{0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef, 1, 0xe3,0xb0,0xc4, 0};
+    e.poll(); CHECK(mockAdvertising.scanServiceData == expected);
+    e.relay.summary[0] = 0x11; e.poll(1000); CHECK(mockAdvertising.scanServiceData == expected); // Rate limited.
+    e.poll(5000); CHECK(mockAdvertising.scanServiceData[9] == 0x11);
+    e.connect(); e.relay.summary[0] = 0x22; e.poll(6000); CHECK(mockAdvertising.scanServiceData[9] == 0x11); // Not while connected.
+}
 int main() {
+    scanResponse();
     networkPause();
     busyReceiveYieldsToControls();
     notifications(); retries(); fragmentation(); overflowDuringReceive();

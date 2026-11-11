@@ -35,15 +35,11 @@ void gatewayPoll(Relay&, Ble*) {
 }
 void gatewayWorkPoll() {}
 bool gatewayNetworkBusy() { return false; }
-bool gatewayRequestIngress() { return false; }
 }
 #else
 #include "GatewayProtocol.h"
 #include "GatewayWire.h"
-#include "MeshIngress.h"
-#include "IngressTrust.h"
-#include <esp_sntp.h>
-#include <atomic>
+#include <ArduinoJson.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/base64.h>
 #include <esp_system.h>
@@ -60,23 +56,18 @@ namespace mesh {
 namespace {
 #ifdef MESH_GATEWAY_TTS
 // One shared worker, no concurrent relay parsing or SDK allocation during TLS.
-constexpr unsigned NetworkHeap = 80000, FetchHeap = 80000, ParseHeap = 70000, VerifyHeap = 65000;
+constexpr unsigned NetworkHeap = 80000;
 // ESP-IDF mbedTLS has separate 16 KiB record buffers plus framing overhead;
 // requiring one 32 KiB hole falsely stalls after TTS/BLE even when both fit.
-constexpr unsigned TlsBlock = 18000, ParseBlock = 16000, VerifyBlock = 12000;
+constexpr unsigned TlsBlock = 18000;
 #else
-constexpr unsigned NetworkHeap = 110000, FetchHeap = 130000, ParseHeap = 70000, VerifyHeap = 65000;
-constexpr unsigned TlsBlock = 32768, ParseBlock = 16000, VerifyBlock = 12000;
+constexpr unsigned NetworkHeap = 110000;
+constexpr unsigned TlsBlock = 32768;
 #endif
 struct Job {
     std::string id;
     std::vector<uint8_t> bytes;
-    bool delivered = false, fetch = false, checkpointExists = false, checkpointValid = false;
-    std::vector<std::string> known;
-    std::vector<std::array<uint8_t,8>> seenPrefixes;
-    std::vector<uint8_t> checkpoint, payload;
-    ingress::Authorization authorization;
-    std::string reason;
+    bool delivered = false;
 };
 struct Retry { std::string id; unsigned failures = 0; uint64_t at = 0; };
 QueueHandle_t workQueue = nullptr, resultQueue = nullptr;
@@ -84,17 +75,7 @@ bool busy = false, started = false;
 size_t cursor = 0;
 std::vector<Retry> retries;
 uint64_t nextWifi = 0;
-ingress::Policy ingressPolicy;
-bool ingressReady = false, fetchRequested = false, ingressStorageHealthy = true;
-std::atomic<bool> ingressClockSynced{false};
-std::atomic<uint32_t> ingressSyncSeconds{0};
 uint64_t nowMs() { return esp_timer_get_time() / 1000; }
-void timeSynced(struct timeval*) {
-    ingressSyncSeconds.store(uint32_t(nowMs() / 1000)); ingressClockSynced.store(true);
-}
-bool ingressClockTrusted() {
-    return ingressClockSynced.load() && uint32_t(uint32_t(nowMs() / 1000) - ingressSyncSeconds.load()) < 3600;
-}
 
 struct Socket : WiFiClientSecure {
     uint64_t now() { return nowMs(); }
@@ -103,7 +84,7 @@ struct Socket : WiFiClientSecure {
 struct Body { std::string bytes; };
 using Wire = gateway::Wire<Socket>;
 int request(const std::string& url, const std::string* operation, Body& body,
-            const char* ca = MESH_GATEWAY_PLC_CA, bool cbor = false) {
+            const char* ca = MESH_GATEWAY_PLC_CA) {
     const size_t slash = url.find('/', 8);
     const std::string host = url.substr(8,slash == std::string::npos ? slash : slash - 8);
     const std::string path = slash == std::string::npos ? "/" : url.substr(slash);
@@ -118,12 +99,10 @@ int request(const std::string& url, const std::string* operation, Body& body,
     Wire wire(tls, nowMs() + 15000);
     std::string headers = std::string(operation ? "POST " : "GET ") + path +
         " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nCache-Control: no-cache\r\n";
-    if (cbor) headers += "Accept: application/cbor\r\n";
     if (operation) headers += "Content-Type: application/json\r\nContent-Length: " + std::to_string(operation->size()) + "\r\n";
     Wire::Headers response;
     if (!wire.write(headers + "\r\n") || (operation && !wire.write(*operation)) || !wire.headers(response)) return -1;
-    if (!operation && response.status >= 200 && response.status < 300 &&
-        ((cbor && Wire::trim(response.contentType.substr(0,response.contentType.find(';'))) != "application/cbor") || !wire.body(response, body.bytes,cbor ? ingress::SNAPSHOT_LIMIT : 16384))) return -1;
+    if (!operation && response.status >= 200 && response.status < 300 && !wire.body(response, body.bytes, 16384)) return -1;
     return response.status; // Redirects are never followed.
 }
 bool registerPlc(const std::string& operation) {
@@ -194,150 +173,11 @@ bool upload(const std::string& id, std::string& json) {
     }
     return false;
 }
-// -1 failure, 0 ignored/processed, 1 matching EOSE. All trust checks stay here.
-int ingressFrame(Job& job, ingress::State& state, const std::string& subscription,
-                 const std::string& frame, unsigned& events, std::string* bestFrame = nullptr) {
-    if (ESP.getFreeHeap() < ParseHeap || ESP.getMaxAllocHeap() < ParseBlock) {
-        Serial.printf("ingress: parse memory refused heap=%u max_alloc=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap()); return -1;
-    }
-    ingress::Document message;
-    if (!ingress::json(frame,message) || message.at(message.root).type != ingress::Value::Array) return -1;
-    const auto& cells = message.at(message.root).children;
-    if (cells.size() < 2 || message.at(cells[0]).type != ingress::Value::Text || message.at(cells[1]).type != ingress::Value::Text || message.at(cells[1]).s != subscription) return 0;
-    const auto& verb = message.at(cells[0]).s;
-    if (verb == "EOSE" && cells.size() == 2) return 1;
-    if (verb == "CLOSED") return -1;
-    if (verb != "EVENT") return 0;
-    if (cells.size() != 3 || ++events > 8) return -1;
-    const std::string id = message.str(cells[2],"id");
-    if (id.size() != 64 || std::find(job.known.begin(),job.known.end(),id) != job.known.end()) return 0;
-    const auto idBytes = ingress::unhex(id);
-    if (idBytes.size() == 32) for (const auto& prefix : job.seenPrefixes)
-        if (std::equal(prefix.begin(),prefix.end(),idBytes.begin())) return 0;
-    if (ESP.getFreeHeap() < VerifyHeap || ESP.getMaxAllocHeap() < VerifyBlock) {
-        Serial.printf("ingress: verify memory refused heap=%u max_alloc=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap()); return -1;
-    }
-    ingress::Authorization candidate; std::vector<uint8_t> payload; std::string reason;
-    if (!ingress::authorize(message,cells[2],ingressPolicy,uint64_t(time(nullptr)),state,candidate,payload,reason)) {
-        Serial.printf("ingress: rejected id=%s reason=%s\n", id.c_str(), reason.c_str());
-        if (job.authorization.id.empty()) job.reason = reason;
-    } else if (ingress::higher(candidate,job.authorization)) {
-        Serial.printf("ingress: verified candidate id=%s priority=%u heap=%u\n", id.c_str(), candidate.priority, ESP.getFreeHeap());
-        if (bestFrame) {
-            *bestFrame = frame;
-            job.authorization.id = candidate.id;
-            job.authorization.priority = candidate.priority;
-            job.authorization.created = candidate.created;
-        } else {
-            job.authorization = std::move(candidate); job.payload = std::move(payload);
-        }
-        job.reason.clear();
-    }
-    return 0;
-}
-bool fetchPass(Job& job, ingress::State& state, bool priorityRequest) {
-    const std::string subscription = ingress::fetchSubscription(priorityRequest);
-    const std::string query = ingress::fetchRequest(priorityRequest);
-    unsigned events = 0;
-#ifdef MESH_GATEWAY_TTS
-    // Measured on Basic: TLS + verifier peaks cannot safely coexist, even with
-    // BLE stopped. Reconnect the same finite window; close TLS before each new
-    // frame is verified. Keep only the preallocated raw winner between connects.
-    std::vector<std::array<uint8_t,32>> processed;
-    processed.reserve(9);
-    std::string bestFrame;
-    bestFrame.reserve(ingress::JSON_LIMIT);
-    job.authorization.id.reserve(64);
-    job.reason.reserve(256);
-    state.serials.reserve(16);
-    constexpr unsigned connections = 9;
-#else
-    constexpr unsigned connections = 1;
-#endif
-    std::string frame;
-    frame.reserve(ingress::JSON_LIMIT);
-    const uint64_t deadline = nowMs() + 120000;
-    for (unsigned connection = 0; connection < connections && nowMs() < deadline; ++connection) {
-        Socket tls; Wire wire(tls,nowMs() + 20000);
-        if (!connectRelay(tls,wire)) return false;
-        if (!wire.masked(1,reinterpret_cast<const uint8_t*>(query.data()),query.size(),esp_random())) return false;
-        wire.resetDeadline(std::min(deadline, nowMs() + (priorityRequest ? 8000 : 15000)));
-        for (unsigned count = 0; count < 24; ++count) {
-            unsigned opcode;
-            if (!wire.frame(opcode,frame,ingress::JSON_LIMIT) || opcode == 8) return false;
-            if (opcode == 9) { if (!wire.masked(10,reinterpret_cast<const uint8_t*>(frame.data()),frame.size(),esp_random())) return false; continue; }
-            if (opcode != 1) continue;
-#ifdef MESH_GATEWAY_TTS
-            std::array<uint8_t,32> digest{};
-            if (mbedtls_sha256_ret(reinterpret_cast<const uint8_t*>(frame.data()),frame.size(),digest.data(),0)) return false;
-            if (std::find(processed.begin(),processed.end(),digest) != processed.end()) continue;
-            processed.push_back(digest);
-            tls.stop();
-            const int result = ingressFrame(job,state,subscription,frame,events,&bestFrame);
-#else
-            const int result = ingressFrame(job,state,subscription,frame,events);
-#endif
-            if (result < 0) return false;
-            if (result == 1) {
-#ifdef MESH_GATEWAY_TTS
-                job.authorization = {};
-                if (!bestFrame.empty()) {
-                    unsigned finalEvents = 0;
-                    if (ingressFrame(job,state,subscription,bestFrame,finalEvents) < 0) return false;
-                }
-#else
-                const std::string close = "[\"CLOSE\",\"" + subscription + "\"]";
-                wire.masked(1,reinterpret_cast<const uint8_t*>(close.data()),close.size(),esp_random());
-#endif
-                Serial.printf("ingress: window complete path=%s events=%u selected=%s priority=%u heap=%u min_heap=%u stack_free=%u\n", priorityRequest ? "priority-v1" : "REQ", events, job.authorization.id.c_str(), job.authorization.priority, ESP.getFreeHeap(), ESP.getMinFreeHeap(), uxTaskGetStackHighWaterMark(nullptr));
-                return true;
-            }
-#ifdef MESH_GATEWAY_TTS
-            break;
-#endif
-        }
-    }
-    return false;
-}
-void fetchIngress(Job& job) {
-    if (!ingressReady || !ingressClockTrusted()) { job.reason = "ingress disabled/clock unknown"; return; }
-    ingress::State state;
-    if (job.checkpointExists && !ingress::decodeState(job.bytes,ingressPolicy,state)) { job.reason = "checkpoint invalid: operator recovery required"; return; }
-    ingress::Snapshot old;
-    if (!state.snapshot.empty() && ingress::currentSnapshot(ingressPolicy,uint64_t(time(nullptr)),state,old,false) &&
-        std::binary_search(old.keys.begin(),old.keys.end(),ingressPolicy.rootPubkey)) { job.reason = "root revoked: no automatic recovery"; return; }
-    Body body; ingress::Snapshot fresh;
-    const int code = request(ingressPolicy.snapshotUrl,nullptr,body,ingressPolicy.snapshotCa.c_str(),true);
-    if (!ingressClockTrusted()) { job.reason = "clock sync no longer fresh"; return; }
-    std::vector<uint8_t> downloaded(body.bytes.begin(),body.bytes.end());
-    if (code >= 200 && code < 300) {
-        if (!ingress::observeSnapshot(downloaded,ingressPolicy,uint64_t(time(nullptr)),state,fresh)) { job.reason = "snapshot invalid/rollback/equivocation"; return; }
-    } else if (!ingress::currentSnapshot(ingressPolicy,uint64_t(time(nullptr)),state,fresh)) { job.reason = "no fresh verified snapshot"; return; }
-    // Release HTTP buffers before allocating TLS + event/certificate trees.
-    std::string().swap(body.bytes); std::vector<uint8_t>().swap(downloaded); std::vector<uint8_t>().swap(job.bytes);
-    if (std::binary_search(fresh.keys.begin(),fresh.keys.end(),ingressPolicy.rootPubkey)) job.reason = "root revoked";
-    else {
-        if (!fetchPass(job,state,true)) {
-            job.authorization = {}; job.payload.clear();
-            if (!fetchPass(job,state,false)) { job.authorization = {}; job.payload.clear(); job.reason = "fetch incomplete (priority and REQ fallback)"; }
-        }
-        for (const auto& serial : state.serials) if (serial.conflict && serial.certId == job.authorization.leafId) { job.payload.clear(); job.reason = "certificate serial conflict"; }
-        if (!ingress::eligibleNow(ingressPolicy,uint64_t(time(nullptr)),job.authorization)) job.payload.clear();
-    }
-    job.checkpointValid = ingress::encodeState(state,ingressPolicy,job.checkpoint);
-    if (job.reason.empty()) job.reason = job.payload.empty() ? "no new authorized candidate in bounded window" : "verified candidate";
-}
 void workOnce(TickType_t wait) {
         Job* job = nullptr;
         if (!workQueue || xQueueReceive(workQueue, &job, wait) != pdTRUE) return;
 
-        Serial.printf("gateway: job start fetch=%u heap=%u max_alloc=%u min_heap=%u stack_free=%u\n", unsigned(job->fetch), ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), uxTaskGetStackHighWaterMark(nullptr));
-        if (job->fetch) {
-            if (ESP.getFreeHeap() >= FetchHeap) fetchIngress(*job);
-            else job->reason = "heap admission deferred";
-            xQueueSend(resultQueue,&job,portMAX_DELAY);
-            return;
-        }
+        Serial.printf("gateway: job start heap=%u max_alloc=%u min_heap=%u stack_free=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), uxTaskGetStackHighWaterMark(nullptr));
         BundleInfo info; std::string json, error;
         // Leave room for a concurrent BLE frame and codec temporaries. Estimate
         // worst-case JSON escaping before allocating, not after an OOM/reset.
@@ -348,8 +188,9 @@ void workOnce(TickType_t wait) {
             exportEvent(job->bytes.data(), job->bytes.size(), info, json, error) && info.id == job->id) {
             // Release raw bundle before TLS allocations. Original is still durable in Relay.
             std::vector<uint8_t>().swap(job->bytes);
-            if (info.kind == 8173) { std::string().swap(json); job->delivered = registerPlc(info.text); }
-            else if (info.kind == 1 || info.kind == 5) {
+            // pds §6: PLC genesis control events go to the directory, never the relay.
+            if (info.kind == 8173 && info.topic == "mosimo.jisaku.dev/plc") { std::string().swap(json); job->delivered = registerPlc(info.text); }
+            else if (info.kind == 1 || info.kind == 5 || (info.kind == 8173 && info.topic == "mosimo.jisaku.dev/revocation")) {
                 std::string().swap(info.text);
                 job->delivered = upload(info.id, json);
             }
@@ -359,12 +200,6 @@ void workOnce(TickType_t wait) {
 #ifndef MESH_GATEWAY_TTS
 void worker(void*) { for (;;) workOnce(portMAX_DELAY); }
 #endif
-bool snapshotUrlValid(const std::string& url) {
-    if (url.compare(0,8,"https://") || url.size() > 256 || url.find_first_of("\r\n\t @?#") != std::string::npos) return false;
-    const size_t slash = url.find('/',8);
-    const std::string host = url.substr(8,slash == std::string::npos ? slash : slash - 8);
-    return !host.empty() && host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") == std::string::npos;
-}
 bool configValid() {
     const std::string host = MESH_GATEWAY_RELAY_HOST, path = MESH_GATEWAY_RELAY_PATH;
     const std::string plc = MESH_GATEWAY_PLC_URL;
@@ -391,14 +226,6 @@ void gatewayWorkPoll() {
 void gatewayBegin(Relay& relay) {
     relay.enableGateway(); // Fail closed: invalid configuration must not unpin data.
     if (!configValid()) { Serial.println("gateway: invalid config; pending data pinned"); return; }
-    ingressPolicy.enabled = MESH_INGRESS_ENABLED;
-    ingressPolicy.trustedClock = MESH_INGRESS_TRUST_CLOCK;
-    ingressPolicy.snapshotUrl = MESH_INGRESS_SNAPSHOT_URL;
-    ingressPolicy.snapshotCa = MESH_INGRESS_SNAPSHOT_CA;
-    ingressReady = ingressPolicy.enabled && ingressPolicy.trustedClock && snapshotUrlValid(ingressPolicy.snapshotUrl) &&
-        !ingressPolicy.snapshotCa.empty() && ingress::configure(ingressPolicy,MESH_INGRESS_ROOT_PUBKEY,MESH_INGRESS_SCOPE_CBOR_HEX,
-            MESH_INGRESS_SELECTED_CBOR_HEX,MESH_INGRESS_MIN_SEQUENCE);
-    Serial.println(ingressReady ? "ingress: configured, A requests priority download; waiting for SNTP" : "ingress: disabled/no valid public root+selection+clock opt-in");
     workQueue = xQueueCreate(1, sizeof(Job*));
     resultQueue = xQueueCreate(1, sizeof(Job*));
     bool workerReady = workQueue && resultQueue;
@@ -417,14 +244,9 @@ void gatewayBegin(Relay& relay) {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.begin(MESH_GATEWAY_WIFI_SSID, MESH_GATEWAY_WIFI_PASSWORD);
-    sntp_set_time_sync_notification_cb(timeSynced);
     configTime(0, 0, MESH_GATEWAY_NTP_SERVER);
     started = true; nextWifi = nowMs() + 30000;
     Serial.println("gateway: enabled; TLS clock sync required, public export opted in");
-}
-bool gatewayRequestIngress() {
-    if (!started || !ingressReady || !ingressStorageHealthy) return false;
-    fetchRequested = true; return true;
 }
 void gatewayPoll(Relay& relay, Ble* ble) {
 #ifndef MESH_GATEWAY_TTS
@@ -460,29 +282,6 @@ void gatewayPoll(Relay& relay, Ble* ble) {
         resumePending = ble != nullptr;
         nextNetworkAt = now + 5000; // Leave a BLE acquisition window between jobs.
 #endif
-        if (finished->fetch) {
-            bool committed = finished->checkpointValid && ingressStorageHealthy;
-            if (committed && !relay.ingressWriteState(finished->checkpoint)) {
-                ingressStorageHealthy = false; committed = false;
-                Serial.println("ingress: checkpoint save failed; ingress latched off, no advertise");
-            }
-            bool saved = false;
-            auto permitted = [&]() { return ingressClockTrusted() && ingress::eligibleNow(ingressPolicy,uint64_t(time(nullptr)),finished->authorization); };
-            if (committed && !finished->payload.empty() && permitted()) {
-                std::vector<uint8_t> bundle; BundleInfo info; std::string error;
-                const uint64_t life = std::min(MAX_RESIDENCE_MS,(finished->authorization.deadline - uint64_t(time(nullptr))) * 1000);
-                if (life && wrapEventPayload(finished->payload,life,bundle,info,error) && permitted())
-                    saved = relay.ingressSave(bundle,finished->authorization.id,finished->authorization.orgName,finished->authorization.priority,permitted);
-            }
-            Serial.printf("ingress: id=%s %s; %s heap=%u max_alloc=%u min_heap=%u\n", finished->authorization.id.c_str(), saved ? "persisted before advertise" : "not admitted",finished->reason.c_str(), ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap());
-            if (saved) Serial.printf("ingress: root=%s leaf=%s bot=%s type=%s snapshot=%llu issued=%llu until=%llu checked=%llu priority=%u org=%s importer=%s; authorSignature=1 binding=1 chainScope=1 certificateTime=1 revocation=fresh-as-of\n",
-                finished->authorization.rootId.c_str(),finished->authorization.leafId.c_str(),
-                finished->authorization.botDid.c_str(),finished->authorization.type.c_str(),
-                static_cast<unsigned long long>(finished->authorization.sequence),static_cast<unsigned long long>(finished->authorization.issuedAt),
-                static_cast<unsigned long long>(finished->authorization.validUntil),static_cast<unsigned long long>(finished->authorization.checkedAt),
-                finished->authorization.priority,finished->authorization.orgId.c_str(),finished->authorization.orgName.c_str());
-            delete finished; finished = nullptr;
-        }
         if (finished) for (auto& retry : retries) if (retry.id == finished->id) {
             if (finished->delivered) relay.gatewayDelivered(finished->id);
             else { retry.at = now + gateway::retryDelay(retry.failures); if (retry.failures < 6) ++retry.failures; }
@@ -496,8 +295,8 @@ void gatewayPoll(Relay& relay, Ble* ble) {
     static uint64_t statusAt = 0;
     if (now >= statusAt) {
         statusAt = now + 30000;
-        Serial.printf("gateway: wifi=%u clock=%u ingress_clock=%u heap=%u pending=%u busy=%u utc_epoch=%llu max_alloc=%u min_heap=%u\n",
-            unsigned(WiFi.status() == WL_CONNECTED), unsigned(time(nullptr) >= 1792281600), unsigned(ingressClockTrusted()),
+        Serial.printf("gateway: wifi=%u clock=%u heap=%u pending=%u busy=%u utc_epoch=%llu max_alloc=%u min_heap=%u\n",
+            unsigned(WiFi.status() == WL_CONNECTED), unsigned(time(nullptr) >= 1792281600),
             ESP.getFreeHeap(), unsigned(relay.gatewayPending().size()), unsigned(busy), static_cast<unsigned long long>(time(nullptr)), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap());
     }
 #ifdef MESH_GATEWAY_TTS
@@ -523,20 +322,6 @@ void gatewayPoll(Relay& relay, Ble* ble) {
         nextNetworkAt = now + 30000;
         return false;
     };
-    // A download must not displace pending custody. Drain at least one full-cache
-    // upload first, keeping the explicit request queued rather than wasting it.
-    if (fetchRequested && ingressReady && ingressStorageHealthy && ingressClockTrusted() && relay.gatewayPending().size() < 16) {
-        if (!memoryReady(FetchHeap)) return;
-        Job* job = new (std::nothrow) Job;
-        if (!job) { resumeRadio(); return; }
-        job->fetch = true; job->known = relay.retainedIds(); job->seenPrefixes = relay.seenPrefixes();
-        if (!relay.ingressReadState(job->bytes,job->checkpointExists)) {
-            ingressStorageHealthy = false; delete job; resumeRadio();
-            Serial.println("ingress: checkpoint unreadable; latched off, no reset"); return;
-        }
-        if (xQueueSend(workQueue,&job,0) != pdTRUE) { delete job; resumeRadio(); return; }
-        fetchRequested = false; busy = true; return;
-    }
     const auto pending = relay.gatewayPending();
     retries.erase(std::remove_if(retries.begin(), retries.end(), [&](const Retry& r) {
         return std::find(pending.begin(), pending.end(), r.id) == pending.end();

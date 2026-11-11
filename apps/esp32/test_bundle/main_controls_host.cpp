@@ -97,19 +97,17 @@ struct Speech {
 };
 struct Relay {
     unsigned begins = 0, acceptedCalls = 0;
-    std::vector<std::vector<std::string>> peerFilters;
-    bool setAllowedPeers(const std::vector<std::string>& nodes) { peerFilters.push_back(nodes); return true; }
-    std::string node;
+    bool link = false;
     std::function<bool(const uint8_t*, size_t)> send;
     std::function<void(const BundleInfo&)> accepted;
-    bool begin(const std::string& id, std::function<bool(const uint8_t*, size_t)> tx,
+    bool begin(std::function<bool(const uint8_t*, size_t)> tx,
                std::function<void(const std::string&)>, std::function<void(const BundleInfo&)> callback) {
-        ++begins; node = id; send = tx; accepted = callback; return true;
+        ++begins; send = tx; accepted = callback; return true;
     }
     size_t storedCount() const { return acceptedCalls; }
+    size_t candidateCount() const { return acceptedCalls; }
+    bool sessionActive() const { return link; }
 };
-unsigned downloadRequests = 0;
-bool gatewayRequestIngress() { ++downloadRequests; return true; }
 void gatewayBegin(Relay&) {}
 struct Ble;
 void gatewayPoll(Relay&, Ble*) {}
@@ -159,17 +157,22 @@ static void acceptFresh(const std::string& id, const std::string& text) {
     CHECK(relay.acceptedCalls == accepted + 1);
     CHECK(M5.Display.previews.size() == previews + 1);
     CHECK(M5.Display.previews.back() == mesh::messagePreview(text));
-    CHECK(M5.Display.headings.back() == "RX " + id.substr(0, 8) + "\n");
+    CHECK(M5.Display.headings.back() == "RX " + id.substr(0, 8) + "  author   hop 0\n");
+}
+
+static bool status(const std::string& prefix) {
+    const std::string& shown = M5.Display.statuses.back();
+    return shown.compare(0, prefix.size(), prefix) == 0;
 }
 
 int main() {
     setup();
     CHECK(meshReady && speechReady);
     CHECK(ble.begins == 1 && speech.begins == 1 && relay.begins == 1);
-    CHECK(ble.node == relay.node && ble.node == "0001020304050607");
+    CHECK(ble.node == "0001020304050607");
     CHECK(bool(relay.accepted) && bool(relay.send));
     CHECK(ble.enabled() && !speech.muted());
-    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:ON");
+    CHECK(status("RX/TX:ON AUDIO:ON "));
     const uint8_t byte = 1;
     CHECK(relay.send(&byte, 1) && ble.sends == 1);
     // Positive control: a fresh accepted bundle normally queues speech.
@@ -197,7 +200,7 @@ int main() {
     press(M5.BtnC); // Exercise actual wasPressed -> toggleMuted path.
     CHECK(speech.muted() && speech.toggles == 1);
     CHECK(ble.enabled() && ble.enableCalls.empty());
-    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:MUTE");
+    CHECK(status("RX/TX:ON AUDIO:MUTE "));
     const size_t queued = speech.enqueued.size();
     acceptFresh("22222222-muted", "Fresh muted message\nwith preview");
     CHECK(ble.enabled() && speech.muted() && ble.enableCalls.empty());
@@ -206,7 +209,7 @@ int main() {
     press(M5.BtnB);
     CHECK(!ble.enabled() && speech.muted() && speech.toggles == 1);
     CHECK(ble.enableCalls == std::vector<bool>({false}));
-    CHECK(M5.Display.statuses.back() == "RX/TX:OFF  AUDIO:MUTE");
+    CHECK(status("RX/TX:OFF AUDIO:MUTE "));
     CHECK(!relay.send(&byte, 1));
     const unsigned polls = ble.polls;
     loop(); CHECK(ble.polls == polls + 1); // Poll continues even with radio/audio off.
@@ -220,16 +223,12 @@ int main() {
     press(M5.BtnC);
     CHECK(!speech.muted() && speech.toggles == 2 && ble.enabled());
     CHECK(ble.enableCalls == std::vector<bool>({false, true}));
-    CHECK(M5.Display.statuses.back() == "RX/TX:ON  AUDIO:ON");
+    CHECK(status("RX/TX:ON AUDIO:ON "));
     acceptFresh("44444444-audible", "Speech is back");
     CHECK(speech.enqueued.size() == queued + 1);
     CHECK(speech.enqueued.back() == std::make_pair(std::string("44444444-audible"), std::string("Speech is back")));
     press(M5.BtnA);
-#ifdef MESH_GATEWAY_BUILD
-    CHECK(mesh::downloadRequests == 1 && speech.tests == 0 && !speech.muted() && ble.enabled());
-#else
     CHECK(speech.tests == 1 && !speech.muted() && ble.enabled());
-#endif
     CHECK(ble.enableCalls == std::vector<bool>({false, true}));
     CHECK(speech.enqueued.size() == queued + 1 && speech.toggles == 2);
 
@@ -238,38 +237,21 @@ int main() {
     press(M5.BtnC);
     CHECK(!ble.enabled() && speech.muted());
     press(M5.BtnA);
-#ifdef MESH_GATEWAY_BUILD
-    CHECK(mesh::downloadRequests == 2 && speech.tests == 0 && !ble.enabled() && speech.muted());
-#else
     CHECK(speech.tests == 2 && !ble.enabled() && speech.muted());
-#endif
     press(M5.BtnC);
     CHECK(!ble.enabled() && !speech.muted());
     CHECK(ble.enableCalls == std::vector<bool>({false, true, false}));
-#ifdef MESH_TEST_DIAGNOSTICS
-    Serial.input = "peers 707b1f7b29e16363 07a6b6ee338d7419\r\n";
-    loop();
-    CHECK(relay.peerFilters.size() == 1);
-    CHECK(relay.peerFilters.back() == std::vector<std::string>({"707b1f7b29e16363", "07a6b6ee338d7419"}));
-    Serial.input = "peers *\n"; loop();
-    CHECK(relay.peerFilters.size() == 2 && relay.peerFilters.back().empty());
-    Serial.input = "peers \n"; loop();
-    CHECK(relay.peerFilters.size() == 2);
-    Serial.input = "peers " + std::string(180, 'a') + "\n";
-    loop(); loop(); loop();
-    CHECK(relay.peerFilters.size() == 2); // Overflow cannot change isolation.
-#endif
 #ifdef MESH_GATEWAY_BUILD
     Serial.input = "audio off\n"; loop(); CHECK(speech.muted());
     Serial.input = "audio on\n"; loop(); CHECK(!speech.muted());
-    const auto downloads = mesh::downloadRequests;
-    Serial.input = "download\r\nstatus\n"; loop();
-    CHECK(mesh::downloadRequests == downloads + 1);
-    Serial.input = std::string(170, 'x') + "download\n";
+    Serial.input = std::string(170, 'x') + "audio off\n";
     loop(); loop(); loop();
-    CHECK(mesh::downloadRequests == downloads + 1);
-    Serial.input = "invalid\ndownload\n"; loop();
-    CHECK(mesh::downloadRequests == downloads + 2);
+    CHECK(!speech.muted()); // An overflowed line is rejected as a whole.
+    Serial.input = "invalid\nstatus\n"; loop();
+#endif
+#if defined(MESH_TEST_DIAGNOSTICS) || defined(MESH_GATEWAY_BUILD)
+    relay.link = true; fakeMs = 2000; loop();
+    CHECK(status("RX/TX:OFF AUDIO:ON LINK")); // The status line follows link/count changes.
 #endif
     fakeMs = 5000; loop(); // Exercise heartbeat dependencies as well.
     std::cout << "PASS main controls: " << checks << " assertions (actual main.cpp, host boundaries)\n";

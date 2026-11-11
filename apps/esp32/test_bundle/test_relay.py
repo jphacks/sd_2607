@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Build/run relay_host.cpp with real codec/ArduinoJson and mock LittleFS/time.
+"""Build/run relay_host.cpp: the real mesh §5 exchange (MeshRelay, MeshMessages,
+Negentropy, MeshBundle) against a simulated peer, with mock LittleFS/time/RNG.
 
 From the repository root (Linux host, mbedTLS 2.x development library):
     python3 -m pip install cbor2==5.6.2
     python3 apps/esp32/test_bundle/test_relay.py
 
-ArduinoJson defaults to ../.pio/libdeps/m5stack-basic/ArduinoJson/src.
-Override with --arduinojson /path/to/ArduinoJson/src. Non-system mbedTLS can
-use --mbedtls-include /path/include --mbedtls-library /path/libmbedcrypto.a.
-No downloads, firmware changes, or test outputs are written into the repo.
-This tests same-session replacement, bounded replay history and state/storage
-ordering, NOT actual LittleFS power-loss guarantees,
-BLE transport, or ESP32 timing/heap. The Python signer uses public test keys.
+Non-system mbedTLS can use --mbedtls-include /path/include --mbedtls-library
+/path/libmbedcrypto.a. No downloads, firmware changes, or test outputs are
+written into the repo. This tests exchange state, flow control, reconciliation,
+storage/eviction ordering and failure handling, NOT actual LittleFS power-loss
+guarantees, BLE transport, or ESP32 timing/heap. The Python signer uses public test keys.
 The provisioned littlefs.bin has name_max=32 despite SDK headers saying 64.
 The mock enforces 32-byte components and a 63-byte whole-path bound. Bundle
 files occupy /mesh/00 through /mesh/15; identity comes only from verified data.
@@ -129,7 +128,6 @@ struct MockFS {
         }
         if (*mode == 'w') {
             // Arduino open() can leave ENOENT after successful create-on-missing.
-            if (std::string(p) == "/ingress-tmp" && !files.count(p)) errno = ENOENT;
             files[p].clear(); return File(p, false);
         }
         if (*mode == 'a') { auto& bytes = files[p]; File f(p, false); f.h->pos = bytes.size(); return f; }
@@ -200,22 +198,24 @@ MOCK_CLOCK = '''#pragma once
 extern uint64_t fakeNow;
 inline int64_t esp_timer_get_time() { return static_cast<int64_t>(fakeNow * 1000); }
 '''
+MOCK_RANDOM = '''#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+extern uint8_t nextRandom;
+inline void esp_fill_random(void* p, size_t n) { std::memset(p, nextRandom, n); }
+'''
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default=os.environ.get("CXX", shutil.which("g++") or "c++"),
                         help="host C++ compiler executable (not the ESP32 cross compiler)")
-    parser.add_argument("--arduinojson", type=Path,
-                        default=ESP32 / ".pio/libdeps/m5stack-basic/ArduinoJson/src")
     parser.add_argument("--mbedtls-include", type=Path)
     parser.add_argument("--mbedtls-library", type=Path)
     parser.add_argument("--no-sanitize", action="store_true",
                         help="for host toolchains without ASan/UBSan")
-    parser.add_argument("--dedup-only", action="store_true", help="fast eviction/reconnect/reboot regression")
     args = parser.parse_args()
-    if not (args.arduinojson / "ArduinoJson.h").is_file():
-        parser.error("ArduinoJson headers missing; install 7.4.2 or supply --arduinojson")
     try:
         import cbor2  # noqa: F401; shared fixture generator dependency
     except ImportError:
@@ -229,45 +229,40 @@ def main():
         build = Path(temp)
         (build / "LittleFS.h").write_text(MOCK_FS, encoding="utf-8")
         (build / "esp_timer.h").write_text(MOCK_CLOCK, encoding="utf-8")
+        (build / "esp_random.h").write_text(MOCK_RANDOM, encoding="utf-8")
         fixed = json.loads((HERE / "fixtures.json").read_text(encoding="utf-8"))
         (build / "0.bin").write_bytes(bytes.fromhex(fixed["valid_bundle_hex"]))
-
         (build / "tampered.bin").write_bytes(bytes.fromhex(fixed["tampered_signature_bundle_hex"]))
-        control, _, _ = fixtures.event('{"type":"plc_operation"}',
-            [[fixtures.DEADLINE, "2030-10-18T12:34:56Z"]], kind=8173)
-        (build / "control.bin").write_bytes(fixtures.bundle(control))
+        (build / "tampered.id").write_text(fixed["event_id"], encoding="ascii")
+        deadline = [fixtures.DEADLINE, "2030-10-18T12:34:56Z"]
+        for name, topic in (("plc", "plc"), ("revocation", "revocation"), ("other-control", "other")):
+            control, _, _ = fixtures.event('{"type":"' + topic + '"}', [["t", "mosimo.jisaku.dev/" + topic], deadline], kind=8173)
+            (build / f"{name}.bin").write_bytes(fixtures.bundle(control))
+        big, _, _ = fixtures.event("大" * 3500, [deadline])
+        (build / "big.bin").write_bytes(fixtures.bundle(big))
         header = b"MSEEN1\r\n"
         def record(raw):
             return raw + fixtures.crc(raw, 2)
-        history = [record(hashlib.sha256(f"previously-accepted-{i}".encode()).digest()) for i in range(1023)]
-        (build / "seen-near-full.bin").write_bytes(header + b"".join(history))
         original = bytes.fromhex(fixed["event_id"])
         (build / "seen-id0.bin").write_bytes(header + record(original))
         (build / "seen-collision.bin").write_bytes(header + record(original[:8] + bytes(24)))
-        # 128 session completions plus a 129th offer exercise the history cap.
-        for i in range(1, 18 if args.dedup_only else 129):
+        for i in range(1, 18):
             payload, _, _ = fixtures.event("host relay test " + str(i))
             (build / f"{i}.bin").write_bytes(fixtures.bundle(payload))
-            if i == 5:
-                (build / "aged5.bin").write_bytes(fixtures.bundle(payload, age=86400000 - 2))
-            if i == 16:
-                payload[6] = payload[6][:-1] + bytes([payload[6][-1] ^ 1])
-                (build / "tampered16.bin").write_bytes(fixtures.bundle(payload))
 
         executable = build / ("relay-host.exe" if os.name == "nt" else "relay-host")
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g"]
         if not args.no_sanitize:
             command += ["-fsanitize=address,undefined"]
-        command += ["-I" + str(build), "-I" + str(args.arduinojson.resolve()),
-                    "-I" + str(ESP32 / "include")]
+        command += ["-I" + str(build), "-I" + str(ESP32 / "include")]
         if args.mbedtls_include:
             command += ["-I" + str(args.mbedtls_include.resolve())]
-        command += [str(HERE / "relay_host.cpp"), str(ESP32 / "src/MeshRelay.cpp"),
-                    str(ESP32 / "src/MeshBundle.cpp")]
+        command += [str(HERE / "relay_host.cpp")] + [str(ESP32 / "src" / name) for name in
+                    ("MeshRelay.cpp", "MeshBundle.cpp", "MeshMessages.cpp", "Negentropy.cpp")]
         command += [str(args.mbedtls_library.resolve()) if args.mbedtls_library else "-lmbedcrypto"]
         command += ["-o", str(executable)]
         subprocess.run(command, check=True, timeout=90)
-        subprocess.run([str(executable), str(build)] + (["dedup"] if args.dedup_only else []), check=True, timeout=90)
+        subprocess.run([str(executable), str(build)], check=True, timeout=180)
 
 
 if __name__ == "__main__":

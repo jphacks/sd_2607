@@ -46,14 +46,8 @@ def main():
         '#define MESH_GATEWAY_RELAY_CA ' + json.dumps(roots['pds.oriom.dev']),
         '#define MESH_GATEWAY_PLC_URL "https://plc.directory"',
         '#define MESH_GATEWAY_PLC_CA ' + json.dumps(roots['plc.directory']),
-        '#define MESH_GATEWAY_NTP_SERVER "pool.ntp.org"',
-        '#define MESH_INGRESS_ENABLED 1', '#define MESH_INGRESS_TRUST_CLOCK 1', ''])
+        '#define MESH_GATEWAY_NTP_SERVER "pool.ntp.org"', ''])
     (target / 'config.h').write_text(header, encoding='utf-8')
-    public = (root / '../../appview/bsaf/private/IngressTrust.generated.h').read_text(encoding='utf-8')
-    if '#define MESH_INGRESS_MIN_SEQUENCE 4ULL' not in public:
-        raise SystemExit('Unexpected public sequence floor; inspect export')
-    public = public.replace('R"PEM()PEM"', json.dumps(roots['pds.oriom.dev']))
-    (root / 'include/IngressTrust.generated.h').write_text(public, encoding='utf-8')
     print('Private config saved; exact-profile key=', exact, '; alternate key needs actual authentication check=', not exact)
 
 

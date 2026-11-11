@@ -1,149 +1,138 @@
 #pragma once
 
 #include "MeshBundle.h"
+#include "MeshMessages.h"
+#include "Negentropy.h"
+
 #include <array>
+#include <deque>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace mesh {
 
-// Single-peer provisional mndt §9 JSON/raw-BPv7 exchange, NOT the standardized
-// CBOR exchange. All methods, filesystem work, crypto and callbacks run on one
-// serialized worker/main loop, never from BLE callbacks. No plaintext originate.
+// Mesh §4-5 contact exchange with one peer at a time: HELLO -> RECONCILE
+// (Negentropy) -> INVENTORY/WANT -> BEGIN/DATA with CREDIT -> RESULT.
+// All methods, filesystem work, crypto and callbacks run on one serialized
+// main loop, never from BLE callbacks.
+//
+// Local profile (advertised in HELLO, not a protocol claim): Bundle <= 24000 B,
+// message <= 4096 B, initial credit 4096 B, GATT only, no HELLO extensions,
+// no key-attestation reference restoration (FETCH answers "unavailable").
 class Relay {
 public:
-    // node: random lowercase 16-hex per boot. send must synchronously copy the
-    // complete frame into the transport queue and return false if not enqueued.
-    // The pointer is valid only during the call. Callbacks must not reenter Relay.
-    // Mounts LittleFS with formatOnFail=false; never formats. Bounded cache,
-    // not permanent storage: ACK means durable acceptance, not indefinite retention.
-    bool begin(const std::string& node,
-               std::function<bool(const uint8_t*, size_t)> send,
+    static constexpr size_t MESSAGE_LIMIT = 4096;
+    static constexpr size_t INITIAL_CREDIT = 4096;
+
+    // send must synchronously copy one complete message into the transport
+    // queue and return false (backpressure) if it cannot. Callbacks must not
+    // reenter Relay. Mounts LittleFS with formatOnFail=false; never formats.
+    bool begin(std::function<bool(const uint8_t*, size_t)> send,
                std::function<void(const std::string&)> note,
                std::function<void(const BundleInfo&)> accepted = {});
     void connected();
-    // Transport must also discard queued TX/RX frames on disconnect, so an old
-    // session's control/bundle bytes cannot leak into the next connected().
+    // Transport must also discard queued TX/RX bytes on disconnect.
     void disconnected();
+    // One complete common exchange message (the transport splits the CBOR sequence).
     void receive(const uint8_t* data, size_t size);
     void tick();
-    // Opt-in test isolation only, not authentication. Empty list restores normal
-    // unrestricted interoperability. Invalid lists leave the current filter intact.
-    bool setAllowedPeers(const std::vector<std::string>& nodes);
-    // Validated live + cold entries; invalid diagnostic files still consume
-    // disk capacity but are not included in this count.
-    size_t storedCount() const { return entries_.size(); }
+    // Parent must physically close the current link when true, then call disconnected().
+    bool disconnectRequested() const { return disconnect_; }
+    bool sessionActive() const { return active_ && peerHello_; }
 
-    // Enable before BLE starts. Pending kind 1/5/8173 entries cannot be evicted,
+    // Validated live + cold entries.
+    size_t storedCount() const { return entries_.size(); }
+    // Entries currently offered to peers (mesh §5.5 candidate set).
+    size_t candidateCount() const;
+    // mesh.adv §1: 3-byte candidate-set summary + extension flags byte.
+    void advertisement(uint8_t out[4]) const;
+
+    // Enable before BLE starts. Pending exportable entries cannot be evicted,
     // even cold/expired. Completion is RAM-only: reboot safely resends originals.
     void enableGateway() { gateway_ = true; }
     std::vector<std::string> gatewayPending() const;
     bool gatewayRead(const std::string& id, std::vector<uint8_t>& bytes);
     void gatewayDelivered(const std::string& id);
-    std::vector<std::string> retainedIds() const;
-    // Conservative acquisition prefilter only; custody still compares full IDs.
-    std::vector<std::array<uint8_t,8>> seenPrefixes() const { return seen_; }
-    // Main-loop-only ingress custody/checkpoint operations. Missing state is
-    // distinguishable from unreadable/corrupt state. No auto-format/reset.
-    bool ingressReadState(std::vector<uint8_t>& bytes, bool& exists);
-    bool ingressWriteState(const std::vector<uint8_t>& bytes);
-    bool ingressSave(const std::vector<uint8_t>& bundle, const std::string& expectedId,
-                     const std::string& importerOrg, unsigned priority,
-                     std::function<bool()> stillAuthorized);
 
-    // Parent must physically close the current link when true, then call
-    // disconnected(). There is no BLE dependency or disconnect callback here.
-    bool disconnectRequested() const { return disconnect_; }
-
-    // /mesh/00 through /mesh/15 hold original wire bundles in bounded slots.
-    // Entry retains its slot path; filenames never encode or truncate identity.
-    // Restore verifies contents and indexes the FULL event ID from the bundle.
-    // Verified cache entries may be replaced: cold/expired first, then oldest
-    // live. Only a DIFFERENT requested, fully verified event, staged and synced
-    // to .incoming, can trigger eviction. Invalid diagnostics are never deleted.
-    // Every retained file counts toward capacity; .incoming is removed on boot.
-    // Failed saves report stage + captured errno (0 if unavailable), ID prefix
-    // and byte length through note; never body text and never an ACK.
-    // Entries validated on begin() are retained for diagnosis but NEVER
-    // advertised/forwarded in this boot: no trusted downtime/monotonic-age
-    // recovery is available.
-    // Only newly received entries get a live monotonic receivedMs. Duplicates
-    // cannot replace files or refresh this timestamp. All files (even invalid
-    // diagnostic files) count toward 16 committed files/384000 bytes, plus one
-    // <=24000-byte staging file. Full caches can accept replacements; a cache
-    // filled only with invalid diagnostics needs operator cleanup while off.
-    // /mesh-seen preserves up to 1024 evicted, verified event IDs across peers
-    // and reboot. Written/read back BEFORE eviction; history alone never permits
-    // inventory/ACK/forwarding. No automatic history rotation/forgetting: at its
-    // limit or an I/O error, stop new acquisition but keep retained-bundle forwarding.
-    // History adds <=36872 disk bytes and ~8 KiB of prefix-index RAM.
-    // No persisted checkpoint or trusted wall-clock policy is claimed.
-    // Local limits (not standardized wire claims): JSON <=10 KiB, <=128 distinct
-    // lowercase-hex IDs; <=16 outstanding WANTs, <=128 completed IDs per session
-    // (retained even after cache eviction, never reset by minute windows). WANTs
-    // reserve history capacity; at 128 completions drain ACKs then request link
-    // closure/reconnect, rather than forget IDs and replay writes. Cache slots
-    // do not impose a sixteen-write session quota. 512 RX/TX messages per minute
-    // and 4096 messages/4 MiB per direction per session. HELLO timeout 60 s;
-    // WANT timeout 30 s; inventory every 10 s or after acceptance; queue refusal
-    // retries every 250 ms, disconnect after 10 s stalled. Bundle retries after
-    // 10 s without ACK, at most three enqueues. tick() sends at most one frame.
+    // Storage: /mesh/00../mesh/15 hold original wire bundles. Restore verifies
+    // contents and indexes the FULL event ID from the bundle. Entries restored on
+    // begin() are cold: retained (and exported by a gateway) but never offered or
+    // forwarded in this boot, because residence during power-off is unknown.
+    // Verified entries may be replaced (cold/expired first, then oldest live);
+    // evicted IDs are journaled in /mesh-seen (<=1024) BEFORE eviction so they are
+    // not requested again. RESULT "stored" is sent only after save + readback.
 
 private:
     struct Entry {
         std::string id, path;
-        uint64_t age = 0, lifetime = 0, receivedMs = 0;
+        uint64_t age = 0, lifetime = 0, receivedMs = 0, createdAt = 0;
         uint32_t hop = 0, hopLimit = 0;
         size_t size = 0;
         bool cold = true;
         uint16_t kind = 0;
+        std::string topic;
         bool delivered = false;
     };
-    struct Request {
-        std::string id;
-        uint64_t sentMs = 0;
-        bool issued = false;
+    struct Request { uint64_t id; std::vector<std::string> open; uint64_t sentMs; };
+    struct Pending { std::string id; uint64_t request; };
+    struct Outgoing {
+        uint64_t id = 0, request = 0, startedMs = 0;
+        std::string eventId;
+        std::vector<uint8_t> bytes;
+        size_t credit = 0, sent = 0;
+        uint32_t hop = 0;
     };
-    struct Offer {
-        std::string id;
-        uint64_t sentMs = 0;
-        unsigned attempts = 0;
+    struct Awaiting { uint64_t id; std::string eventId; uint64_t startedMs; };
+    struct Incoming {
+        uint64_t id = 0, request = 0, lastMs = 0;
+        std::string eventId;
+        size_t length = 0, granted = 0;
+        std::vector<uint8_t> buffer;
     };
 
-    std::string node_, peerNode_;
-    std::vector<std::string> allowedPeers_;
     std::function<bool(const uint8_t*, size_t)> send_;
     std::function<void(const std::string&)> note_;
-    // Saved, verified NEW events only. Called on the main loop; must not reenter.
     std::function<void(const BundleInfo&)> accepted_;
     std::vector<Entry> entries_;
     // Full IDs + CRC live in /mesh-seen; 8-byte prefixes are only an index.
-    // Every prefix hit is confirmed against the full on-disk ID (no false dedup).
     std::vector<std::array<uint8_t, 8>> seen_;
     bool seenHealthy_ = true;
     size_t fileCount_ = 0, diskBytes_ = 0;
-    bool ready_ = false, active_ = false, disconnect_ = false;
-    bool gateway_ = false;
-    bool helloPending_ = false, peerHello_ = false, inventoryDirty_ = false;
-    size_t peerMax_ = 0;
-    uint64_t beganMs_ = 0, inventoryMs_ = 0, windowMs_ = 0;
-    uint64_t blockedMs_ = 0, retryMs_ = 0;
-    bool blocked_ = false;
-    size_t rxBytes_ = 0, txBytes_ = 0;
-    unsigned rxWindow_ = 0, txWindow_ = 0, rxMessages_ = 0, txMessages_ = 0;
-    std::vector<std::string> remoteIds_, advertised_, completed_, acks_;
+    bool ready_ = false, active_ = false, disconnect_ = false, gateway_ = false;
+
+    // Session state (mesh §5.3-5.4), reset on every connection.
+    bool peerHello_ = false;
+    uint8_t nonce_[8] = {};
+    unsigned side_ = 0;
+    size_t peerMaxBundle_ = 0, peerCredit_ = 0, peerMaxMessage_ = msg::MIN_MESSAGE_BYTES;
+    uint64_t nextRequest_ = 0, nextTransfer_ = 0, nextReconcile_ = 0;
+    std::unique_ptr<Negentropy> reconcile_;
+    uint64_t reconcileId_ = 0, reconcileMs_ = 0;
+    std::vector<std::string> reconcileCandidates_;
     std::vector<Request> requests_;
-    std::vector<Offer> offers_;
+    std::vector<std::string> peerHas_, offered_, refused_;
+    std::deque<Pending> queue_;
+    std::unique_ptr<Outgoing> sending_;
+    std::vector<Awaiting> awaiting_;
+    std::unique_ptr<Incoming> incoming_;
+    std::vector<uint64_t> closedIncoming_;
+    std::deque<std::vector<uint8_t>> outbox_;
+    size_t outboxBytes_ = 0;
+    uint64_t beganMs_ = 0, activityMs_ = 0, windowMs_ = 0, blockedMs_ = 0;
+    bool blocked_ = false;
+    unsigned rxWindow_ = 0;
 
     void note(const std::string& text);
-    void fail(const char* reason);
+    void fail(const std::string& reason);
     void resetSession();
-    void window(uint64_t now);
     const Entry* find(const std::string& id) const;
     bool eligible(const Entry& entry, uint64_t now) const;
     bool gatewayProtected(const Entry& entry) const;
     size_t victim(uint64_t now) const;
+    size_t acquisitionCapacity() const;
+    std::vector<const Entry*> candidates(uint64_t now) const;
     bool restore();
     bool restoreSeen();
     bool wasSeen(const std::string& id);
@@ -151,10 +140,21 @@ private:
     bool seenFailure(const char* stage);
     bool save(const uint8_t* data, size_t size, const BundleInfo& info, uint64_t receivedMs);
     bool read(const Entry& entry, std::vector<uint8_t>& bytes);
-    void fillRequests();
-    void control(const uint8_t* data, size_t size, uint64_t now);
-    void bundle(const uint8_t* data, size_t size, uint64_t now);
-    bool transmit(const uint8_t* data, size_t size, uint64_t now);
-    bool sendIds(const char* type, const std::vector<std::string>& ids, uint64_t now);
+
+    size_t frameLimit() const;
+    void push(std::vector<uint8_t> message);
+    void hello(const msg::Message& m);
+    void startReconcile();
+    void reconcile(const msg::Message& m);
+    void want(const std::vector<std::string>& ids);
+    void offer(const std::vector<std::string>& ids);
+    void served(const msg::Message& m);
+    void begin(const msg::Message& m);
+    void append(const uint8_t* fragment, size_t size);
+    void finish();
+    void result(const msg::Message& m);
+    void closeRequestItem(uint64_t request, const std::string& id);
+    void closeIncoming(uint64_t code, uint64_t reason);
+    void startTransfer(uint64_t now);
 };
 } // namespace mesh

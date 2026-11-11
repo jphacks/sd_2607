@@ -43,7 +43,7 @@
 | ディレクトリ | 内容 |
 |---|---|
 | [`apps/android/`](./apps/android/README.md) | 被災地の端末を想定し、投稿とリレー、サーバーとの送受信ができるAndroidアプリ |
-| [`apps/esp32/`](./apps/esp32/README.md) | M5Stack Basicで動く、リレーとサーバーとの送受信ができる中継ノード |
+| [`apps/esp32/`](./apps/esp32/README.md) | M5Stack Basicで動く、端末間の投稿を預かって中継し、任意でサーバーへ搬出できる中継ノード |
 | [`apps/web/`](./apps/web/README.md) | AppViewから投稿を取得して表示するWebクライアント |
 | [`pds/`](./pds/README.md) | Nostrリレー兼PDS。投稿を収集、蓄積する |
 | [`appview/happyview/`](./appview/happyview/README.md) | 投稿を索引化するAppView（HappyView）のコンテナー・NixOS設定 |

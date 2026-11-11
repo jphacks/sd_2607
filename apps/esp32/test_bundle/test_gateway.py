@@ -48,10 +48,6 @@ def main():
             return result.stdout.decode()
 
         count = 0
-        for case in json.loads((HERE / 'android-base64-fixtures.json').read_text())['cases']:
-            exported = json.loads(run('export', bytes.fromhex(case['bundle_hex'])))
-            assert exported == json.loads(case['event_json'])
-            count += 1
         for kind in (1, 5, 8173):
             event, event_id, signing = fixtures.event(kind=kind)
             exported = json.loads(run('export', fixtures.bundle(event)))

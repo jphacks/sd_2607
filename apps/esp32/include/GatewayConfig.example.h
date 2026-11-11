@@ -14,8 +14,3 @@
 #define MESH_GATEWAY_PLC_URL ""
 #define MESH_GATEWAY_PLC_CA R"PEM()PEM"
 #define MESH_GATEWAY_NTP_SERVER "pool.ntp.org"
-// Optional wire-v1 ingress is OFF without explicit local opt-ins and public root
-// configuration; see include/IngressTrust.example.h. A requests a bounded fetch.
-// #define MESH_INGRESS_ENABLED 1
-// #define MESH_INGRESS_TRUST_CLOCK 1 // acknowledges that SNTP itself is unauthenticated
-// #define MESH_INGRESS_SELECTED_CBOR_HEX "..." // exact selected JMA Bot DID/types
