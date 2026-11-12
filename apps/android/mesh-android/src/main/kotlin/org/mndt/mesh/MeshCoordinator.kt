@@ -126,7 +126,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         require(it.matches(Regex("[0-9a-f]{64}"))) { "Invalid test author" }
     }
     private val gatt = GattLink(context, allowedPeerNode)
-    private val links: List<Link> = listOf(gatt, LanLink(context))
+    // BLE and LAN run only in the app that holds this phone's LocalLink port; other Mosimo apps on the phone relay through it.
+    private val links: List<Link> = listOf(LocalLink(listOf(gatt, LanLink(context))))
     private val blocked get() = disk?.blockedPubkeys.orEmpty()
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.

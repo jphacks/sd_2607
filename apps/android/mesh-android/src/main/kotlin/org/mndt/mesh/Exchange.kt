@@ -165,6 +165,7 @@ internal class Exchange(
         require(s.peer == null) { "Duplicate HELLO" }
         if (m.nonce.contentEquals(s.nonce)) { drop(s); return }
         s.peer = m
+        s.link.hello(s.handle)
         s.side = if (compareUnsigned(s.nonce, m.nonce) < 0) 0 else 1
         m.extensions.firstOrNull { it["\$type"] == Messages.TIME_HINT }?.let { hint ->
             val peerNow = hint["now"] as? Long; val confidence = (hint["confidence"] as? Long)?.toInt()
