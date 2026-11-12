@@ -48,7 +48,7 @@ Android・ESP32を含むローカルデータ相互運用試験の手順は [ESP
 
 ## 優先度付き履歴取得（MOSIMO-REQ）
 
-NIP-11で `mosimo.protocol: "dev.jisaku.mosimo"`、`mosimo.v: "1"`、`mosimo.priority_order: ["priority-v1"]`、`mosimo.kinds: [1, 5, 8173]` を通知する。独自の `MOSIMO-REQ` を明示した場合だけ優先度順で取得する。通常の `REQ` は `created_at` の降順、同時刻ではevent IDの昇順で、フィルター・件数制限・ライブ購読を維持する。
+NIP-11で `mosimo.protocol: "dev.jisaku.mosimo"`、`mosimo.v: "1"`、`mosimo.priority_order: ["priority-v1"]`、`mosimo.kinds: [1, 5, 1984, 8173]` を通知する。kind `1984`（[通報](../protocol/mosimo/report/README.md)）は §1 の形式を検査して保存・配信し、リポジトリは変更しない。独自の `MOSIMO-REQ` を明示した場合だけ優先度順で取得する。通常の `REQ` は `created_at` の降順、同時刻ではevent IDの昇順で、フィルター・件数制限・ライブ購読を維持する。
 
 ```json
 ["MOSIMO-REQ", "priority-history", {"order":"priority-v1","filter":{"kinds":[1],"#t":["mosimo.jisaku.dev"],"limit":100}}]

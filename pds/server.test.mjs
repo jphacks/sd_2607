@@ -311,7 +311,7 @@ test('health, NIP-11 capabilities, HTTP errors and method handling', async t => 
   const capabilities = await info.json();
   assert.deepEqual(capabilities.supported_nips, [1, 9, 11]);
   assert.equal(capabilities.mosimo.protocol, 'dev.jisaku.mosimo'); assert.equal(capabilities.mosimo.v, '1');
-  assert.deepEqual(capabilities.mosimo.kinds, [1, 5, 8173]);
+  assert.deepEqual(capabilities.mosimo.kinds, [1, 5, 1984, 8173]);
   assert.deepEqual(capabilities.mosimo.priority_order, ['priority-v1']);
   assert.equal((await app.request('/unknown')).status, 404);
   assert.equal((await app.xrpc('com.atproto.sync.listRepos', {}, { method: 'POST' })).status, 405);

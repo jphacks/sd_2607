@@ -163,7 +163,7 @@ test('relay subscribes without a timestamp watermark and ingests only matching t
     return { accepted: true };
   } });
   const { socket, request } = await server.connected;
-  assert.deepEqual(request, ['REQ', 'mosimo', { kinds: [1, 8173], '#t': ['mosimo.jisaku.dev'] }, { kinds: [5] }]);
+  assert.deepEqual(request, ['REQ', 'mosimo', { kinds: [1, 1984, 8173], '#t': ['mosimo.jisaku.dev'] }, { kinds: [5] }]);
   socket.send('not json');
   socket.send(JSON.stringify(['EVENT', 'mosimo', { id: 'binary' }]), { binary: true });
   socket.send(JSON.stringify(['EVENT', 'other-subscription', event]));

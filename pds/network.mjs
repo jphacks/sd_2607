@@ -1,7 +1,7 @@
 import { WebSocket, createWebSocketStream } from 'ws';
 import { fetchJson, fetchBytes, parseNetworkJson } from './identity.mjs';
 import { authorizeImport, priorityHintOf, decodeRevocationList, canonical, encodeBytes, CONTROL_KIND } from './attest.mjs';
-import { TAG } from './repository.mjs';
+import { TAG, REPORT_KIND } from './repository.mjs';
 import { sqliteNow } from './store.mjs';
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -110,7 +110,7 @@ export function startNetwork({ config, store, ingest }) {
     ws.on('open', () => {
       attempt = 0;
       // Do not use a created_at watermark: disaster/offline posts may be arbitrarily old.
-      ws.send(JSON.stringify(['REQ', 'mosimo', { kinds: [1, CONTROL_KIND], '#t': [TAG] }, { kinds: [5] }]));
+      ws.send(JSON.stringify(['REQ', 'mosimo', { kinds: [1, REPORT_KIND, CONTROL_KIND], '#t': [TAG] }, { kinds: [5] }]));
     });
     const task = (async () => {
       try {

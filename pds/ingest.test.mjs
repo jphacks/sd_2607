@@ -295,6 +295,32 @@ test('NIP-09 tombstones are author-scoped, including deletion before original ar
   assert.equal((await rows('SELECT * FROM events WHERE id=$1', [later.event.id])).length, 0);
 });
 
+test('NIP-56 reports in the report §1 shape are stored and forwarded without repository jobs; malformed ones are refused', async () => {
+  const target = await fixture();
+  const report = (tags, content = 'テスト通報') => signEvent({ kind: 1984, content, tags }, otherNostrKey);
+  const valid = [['t', namespace], ['e', target.event.id, 'spam'], ['p', target.event.pubkey, 'spam'],
+    ['mosimo:exp', '2026-10-19T12:34:56Z']];
+  const stored = await ingestion.ingest(report(valid));
+  assert.deepEqual([stored.accepted, stored.message], [true, 'stored: report']);
+  // An unknown NIP-56 type is still relayed; receivers count it as `other`.
+  const unknownType = valid.map(tag => tag[0] === 'e' || tag[0] === 'p' ? [tag[0], tag[1], 'future'] : tag);
+  assert.equal((await ingestion.ingest(report(unknownType))).accepted, true);
+  assert.equal((await rows('SELECT * FROM events WHERE kind=1984')).length, 2);
+  assert.equal((await rows('SELECT * FROM outbox')).length, 2);
+  assert.equal((await rows('SELECT * FROM jobs')).length, 0);
+  const malformed = [
+    valid.slice(1),
+    [valid[1], valid[0], valid[2], valid[3]],
+    [valid[0], ['e', target.event.id, 'spam'], ['p', target.event.pubkey, 'illegal'], valid[3]],
+    [valid[0], ['e', target.event.id], ['p', target.event.pubkey], valid[3]],
+    [valid[0], valid[1], valid[2], ['mosimo:exp', 'tomorrow']],
+    [...valid, ['e', target.event.id, 'spam']],
+  ];
+  for (const tags of malformed) assert.match((await ingestion.ingest(report(tags))).message, /^invalid: /, JSON.stringify(tags));
+  assert.match((await ingestion.ingest(report(valid, 'あ'.repeat(94)))).message, /280 bytes/);
+  assert.equal((await rows('SELECT * FROM events WHERE kind=1984')).length, 2);
+});
+
 test('initial and chained commits preserve original signatures and complete earlier record CAR blocks', async () => {
   let parent = null;
   for (let index = 0; index < 4; index++) {
@@ -610,7 +636,7 @@ test('real relay EVENT acknowledgement is separate from repository validation an
     client.send(['EVENT', event]);
     const ack = await client.next();
     assert.deepEqual(ack.slice(0, 3), ['OK', event.id, false]);
-    assert.match(ack[3], /kind 1, 5 or 8173/);
+    assert.match(ack[3], /kind 1, 5, 1984 or 8173/);
   }
   assert.deepEqual(await rows('SELECT * FROM events'), []);
   const source = await fixture({ badRoot: true });
@@ -645,7 +671,7 @@ test('configured upstream WebSocket feeds signed events into real SQL ingestion 
   const [socket] = await connected;
   const [request] = await once(socket, 'message', { signal: AbortSignal.timeout(5000) });
   assert.deepEqual(JSON.parse(request.toString()), ['REQ', 'mosimo',
-    { kinds: [1, 8173], '#t': [namespace] }, { kinds: [5] }]);
+    { kinds: [1, 1984, 8173], '#t': [namespace] }, { kinds: [5] }]);
   const source = await fixture();
   socket.send(JSON.stringify(['EVENT', 'mosimo', source.event]));
   assert.equal((await delivered.promise).accepted, true);

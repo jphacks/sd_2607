@@ -3,7 +3,7 @@ import { sqliteNow } from './store.mjs';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { decodePost, verifyCommit, reconstruct, isBsafImport, isPost } from './repository.mjs';
+import { decodePost, verifyCommit, reconstruct, isBsafImport, isPost, REPORT_KIND, validateReport } from './repository.mjs';
 import { CONTROL_KIND, controlType, decodeRevocationEvent } from './attest.mjs';
 import { commitFrame, encodeFrame, futureRevisionDelay } from './sync.mts';
 
@@ -16,7 +16,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
     try {
       if (Buffer.byteLength(JSON.stringify(input)) > config.maxEventBytes) throw new Error('Event too large');
       event = JSON.parse(JSON.stringify(input));
-      if (![1, 5, CONTROL_KIND].includes(event.kind) || !Number.isSafeInteger(event.created_at) || event.created_at < 0
+      if (![1, 5, REPORT_KIND, CONTROL_KIND].includes(event.kind) || !Number.isSafeInteger(event.created_at) || event.created_at < 0
         || !/^[0-9a-f]{64}$/.test(event.id) || !/^[0-9a-f]{64}$/.test(event.pubkey)
         || !/^[0-9a-f]{128}$/.test(event.sig) || !verifyEvent(event)) throw new Error('Invalid event or signature');
       // Preserve only the standard signed envelope, never implementation-specific metadata.
@@ -24,6 +24,9 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
     } catch (error) { return { accepted: false, message: `invalid: ${error.message}` }; }
     // Control events: only revocation notices are stored and relayed (pds §4.2); PLC operations
     // stay inside the mesh. The notice's own signatures decide authenticity, not the carrier.
+    if (event.kind === REPORT_KIND) {
+      try { validateReport(event); } catch (error) { return { accepted: false, message: `invalid: ${error.message}` }; }
+    }
     let revocation = null;
     if (event.kind === CONTROL_KIND) {
       if (controlType(event) !== 'revocation') return { accepted: false, message: 'restricted: unsupported control event' };
@@ -58,12 +61,12 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
       } else if (isPost(event) && !isBsafImport(event)) {
         await tx.query('INSERT INTO jobs(event_id) VALUES($1)', [event.id]);
       }
-      if (forward && (isPost(event) || event.kind === 5 || revocation)) {
+      if (forward && (isPost(event) || event.kind === 5 || event.kind === REPORT_KIND || revocation)) {
         for (const peer of config.peers) {
           await tx.query('INSERT INTO outbox(peer,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [peer.url, event.id]);
         }
       }
-      return { accepted: true, message: revocation ? 'stored: revocation notice'
+      return { accepted: true, message: revocation ? 'stored: revocation notice' : event.kind === REPORT_KIND ? 'stored: report'
         : isPost(event) && isBsafImport(event) ? 'stored: Nostr-only BSAF import' : 'stored: repository verification is asynchronous' };
     });
   }

@@ -6,12 +6,13 @@ import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
 import { createPriorityPolicy } from './network.mjs';
 import { parseNetworkJson } from './identity.mjs';
-import { TAG } from './repository.mjs';
+import { TAG, REPORT_KIND } from './repository.mjs';
 import { CONTROL_KIND } from './attest.mjs';
 
 const defaults = { maxEventBytes: 131072, maxSubscriptions: 20, maxResults: 500, maxBufferedBytes: 4194304 };
 const hex = /^[0-9a-f]{64}$/;
-const relayKinds = `(1, 5, ${CONTROL_KIND})`;
+const relayKinds = `(1, 5, ${REPORT_KIND}, ${CONTROL_KIND})`;
+const acceptedKinds = [1, 5, REPORT_KIND, CONTROL_KIND];
 const visible = '(e.kind <> 1 OR NOT EXISTS (SELECT 1 FROM deletions d WHERE d.event_id = e.id AND d.pubkey = e.pubkey))';
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -181,7 +182,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
       res.writeHead(200, { 'content-type': 'application/nostr+json', 'access-control-allow-origin': '*' });
       return res.end(JSON.stringify({ name: 'mosimo', supported_nips: [1, 9, 11],
         limitation: { max_message_length: options.maxEventBytes, max_subscriptions: options.maxSubscriptions, max_limit: options.maxResults },
-        mosimo: { protocol: 'dev.jisaku.mosimo', v: '1', tag: TAG, priority_order: ['priority-v1'], kinds: [1, 5, CONTROL_KIND],
+        mosimo: { protocol: 'dev.jisaku.mosimo', v: '1', tag: TAG, priority_order: ['priority-v1'], kinds: acceptedKinds,
                   control: [`${TAG}/revocation`], publicTextOnly: true, blobs: false,
                   groups: (options.groups ?? []).map(({ id, endpoint }) => ({ id, endpoint })) } }));
     }
@@ -439,8 +440,8 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         }
         if (value[0] === 'EVENT' && value.length === 2) {
           const event = value[1];
-          if (!isObject(event) || !hex.test(event.id) || ![1, 5, CONTROL_KIND].includes(event.kind)) {
-            return sendJson(['OK', typeof event?.id === 'string' ? event.id.slice(0, 64) : '', false, `invalid: expected kind 1, 5 or ${CONTROL_KIND} event`]);
+          if (!isObject(event) || !hex.test(event.id) || !acceptedKinds.includes(event.kind)) {
+            return sendJson(['OK', typeof event?.id === 'string' ? event.id.slice(0, 64) : '', false, `invalid: expected kind 1, 5, ${REPORT_KIND} or ${CONTROL_KIND} event`]);
           }
           try {
             const result = await ingest(event);
@@ -482,7 +483,7 @@ export function createServer({ config, store, ingest, resolveIdentity, onNotify 
         const rows = await query(`SELECT e.id, e.event, CAST(e.arrival AS text) AS arrival, ${visible} AS visible FROM events e WHERE e.arrival > $1 ORDER BY e.arrival LIMIT $2`, [sub.cursor.toString(), options.maxResults]);
         for (const row of rows) {
           sub.cursor = BigInt(row.arrival);
-          if (row.visible && [1, 5, CONTROL_KIND].includes(row.event.kind) && sub.filters.some(filter => matches(row.event, filter))) {
+          if (row.visible && acceptedKinds.includes(row.event.kind) && sub.filters.some(filter => matches(row.event, filter))) {
             if (!sendJson(['EVENT', id, row.event])) return;
           }
         }

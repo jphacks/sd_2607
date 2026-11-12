@@ -74,6 +74,27 @@ export function timestampSeconds(value) {
   return date.getTime() / 1000;
 }
 
+/** report §1: NIP-56 report. The node policy (thresholds) belongs to clients; the PDS stores and relays it. */
+export const REPORT_KIND = 1984;
+const reportTypes = new Set(['spam', 'profanity', 'illegal', 'impersonation', 'nudity', 'malware', 'other']);
+
+/** report §1 shape: t, e (target + type), p (author + same type), mosimo:exp in this order; comment <= 280 bytes.
+ * Unknown NIP-56 types are kept (receivers count them as `other`); later unknown tags are preserved. */
+export function validateReport(event) {
+  const tags = event.tags;
+  requireValue(Array.isArray(tags) && tags.length >= 4 && tags.length <= 32 && tags.every(Array.isArray), 'Malformed report tags');
+  const [t, e, p, exp] = tags;
+  requireValue(t.length === 2 && t[0] === 't' && t[1] === TAG, 'Report must start with the protocol t tag');
+  requireValue(e.length === 3 && e[0] === 'e' && /^[0-9a-f]{64}$/.test(e[1]), 'Report target must be one e tag with a type');
+  requireValue(p.length === 3 && p[0] === 'p' && /^[0-9a-f]{64}$/.test(p[1]), 'Report author must be one p tag with a type');
+  requireValue(typeof e[2] === 'string' && e[2] === p[2] && /^[a-z]{1,32}$/.test(e[2]), 'Report e and p types must match');
+  requireValue(exp.length === 2 && exp[0] === 'mosimo:exp', 'Report needs a delivery deadline');
+  timestampSeconds(exp[1]);
+  requireValue(tags.slice(4).every(tag => !['t', 'e', 'p', 'mosimo:exp'].includes(tag[0])), 'Report tags must appear once each');
+  requireValue(typeof event.content === 'string' && Buffer.byteLength(event.content) <= 280, 'Report comment exceeds 280 bytes');
+  return { target: e[1], author: p[1], type: reportTypes.has(e[2]) ? e[2] : 'other' };
+}
+
 export const isPost = event => event?.kind === 1 && Array.isArray(event.tags)
   && event.tags.some(tag => Array.isArray(tag) && tag[0] === 't' && tag[1] === TAG);
 
