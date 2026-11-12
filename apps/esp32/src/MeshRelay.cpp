@@ -21,6 +21,10 @@ constexpr size_t OUTBOX_MESSAGES = 64, OUTBOX_BYTES = 20000;
 constexpr unsigned MINUTE_MESSAGES = 2048;
 constexpr uint64_t HELLO_MS = 60000, TRANSFER_MS = 90000, RECONCILE_MS = 60000, REQUEST_MS = 90000;
 constexpr uint64_t IDLE_MS = 45000, BACKPRESSURE_MS = 10000;
+// mesh §3.4: release the link once reconciliation ran and neither side has sent anything for this long.
+// Long enough for the peer's INVENTORY/WANT right after reconciliation, short enough that one synced
+// phone does not hold a single-connection peripheral for the whole idle timeout.
+constexpr uint64_t SETTLED_MS = 5000;
 const char* DIRECTORY = "/mesh";
 const char* TEMP = "/mesh/.incoming";
 const char* SEEN = "/mesh-seen"; // Outside /mesh's bundle slot/file budget.
@@ -84,7 +88,7 @@ void Relay::fail(const std::string& reason) {
     note(reason);
 }
 void Relay::resetSession() {
-    peerHello_ = blocked_ = false;
+    peerHello_ = blocked_ = reconciled_ = false;
     side_ = 0;
     peerMaxBundle_ = peerCredit_ = 0; peerMaxMessage_ = msg::MIN_MESSAGE_BYTES;
     nextRequest_ = nextTransfer_ = nextReconcile_ = 0;
@@ -631,6 +635,7 @@ void Relay::reconcile(const msg::Message& m) {
         for (const auto& id : reconcile_->need()) need.push_back(idHex(id));
         for (const std::string& id : reconcileCandidates_) if (!contains(have, id)) remember(peerHas_, id);
         reconcile_.reset();
+        reconciled_ = true;
         note("reconciled: peer lacks " + std::to_string(have.size()) + ", we lack " + std::to_string(need.size()));
         want(need);
         offer(have);
@@ -641,6 +646,8 @@ void Relay::reconcile(const msg::Message& m) {
     for (const Entry* e : candidates(clockMs())) items.push_back({e->createdAt, idBytes(e->id)});
     Negentropy responder(std::move(items), frameLimit() - msg::RECONCILE_OVERHEAD);
     if (!responder.reconcile(m.bytes.p, m.bytes.n, out, done, error)) { fail("reconcile: " + error); return; }
+    // The initiator may need more rounds; SETTLED_MS of silence after our answer means it is done.
+    reconciled_ = true;
     push(msg::reconcile(m.first, out));
 }
 
@@ -649,12 +656,16 @@ void Relay::want(const std::vector<std::string>& ids) {
     for (const Request& r : requests_) open += r.open.size();
     const size_t capacity = std::min(acquisitionCapacity(), MAX_OPEN_REQUEST_IDS);
     std::vector<std::string> wanted;
+    size_t held = 0, refused = 0, seen = 0, deferred = 0;
     for (const std::string& id : ids) {
-        if (open + wanted.size() >= capacity) break;
-        if (find(id) || contains(refused_, id) || contains(wanted, id)) continue;
+        if (open + wanted.size() >= capacity) { deferred = ids.size() - held - refused - seen - wanted.size(); break; }
+        if (contains(wanted, id)) continue;
+        if (find(id)) { ++held; continue; }
+        if (contains(refused_, id)) { ++refused; continue; }
         bool requested = false;
         for (const Request& r : requests_) if (contains(r.open, id)) requested = true;
-        if (requested || wasSeen(id)) continue;
+        if (requested) { ++held; continue; }
+        if (wasSeen(id)) { ++seen; continue; }
         if (!seenHealthy_) return;
         wanted.push_back(id);
     }
@@ -666,7 +677,11 @@ void Relay::want(const std::vector<std::string>& ids) {
         push(msg::ids(msg::WANT, &r.id, list));
         requests_.push_back(std::move(r));
     }
-    if (!wanted.empty()) note("want " + std::to_string(wanted.size()));
+    // Why offered IDs were not requested: stored/in flight, refused this session, seen before, or no capacity.
+    if (!ids.empty()) note("want " + std::to_string(wanted.size()) + " of " + std::to_string(ids.size()) +
+                           " (held " + std::to_string(held) + ", refused " + std::to_string(refused) +
+                           ", seen " + std::to_string(seen) + ", deferred " + std::to_string(deferred) +
+                           ", capacity " + std::to_string(capacity) + ")");
 }
 
 void Relay::offer(const std::vector<std::string>& ids) {
@@ -885,6 +900,8 @@ void Relay::tick() {
     } else blocked_ = false;
     // A single-connection peripheral must not be held by an idle phone.
     const bool busy = !outbox_.empty() || sending_ || incoming_ || !awaiting_.empty() || !queue_.empty() || reconcile_ || !requests_.empty();
-    if (!busy && now - activityMs_ >= IDLE_MS) fail("mesh idle; releasing connection");
+    if (busy) return;
+    if (reconciled_ && now - activityMs_ >= SETTLED_MS) { fail("mesh exchange complete; releasing connection"); return; }
+    if (now - activityMs_ >= IDLE_MS) fail("mesh idle; releasing connection");
 }
 } // namespace mesh

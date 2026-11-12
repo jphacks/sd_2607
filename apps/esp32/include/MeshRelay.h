@@ -137,6 +137,7 @@ private:
     size_t outboxBytes_ = 0;
     uint64_t beganMs_ = 0, activityMs_ = 0, windowMs_ = 0, blockedMs_ = 0;
     bool blocked_ = false;
+    bool reconciled_ = false;  // a reconciliation round finished or was answered this session
     unsigned rxWindow_ = 0;
 
     void note(const std::string& text);

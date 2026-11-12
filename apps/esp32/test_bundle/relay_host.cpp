@@ -208,6 +208,11 @@ void reconciliation(const std::string& dir){
   }
   CHECK(peer.have().size()==1&&hexId(peer.have()[0])==ids[3]);
   CHECK(peer.need().size()==1&&hexId(peer.need()[0])==ids[0]);
+  // mesh §3.4: once reconciled and quiet, the single link is released well before the idle timeout.
+  fakeNow+=4000;e.flush();CHECK(!e.relay.disconnectRequested());
+  fakeNow+=1500;e.flush();CHECK(e.relay.disconnectRequested());
+  CHECK(e.notes.back()=="mesh exchange complete; releasing connection");
+  e.relay.disconnected();
  }
  // Self-consistency across sizes that force fingerprint splitting and frame
  // truncation, down to the 1000-byte minimum frame (1024-byte message limit).
