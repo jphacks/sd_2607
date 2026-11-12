@@ -11,6 +11,8 @@ flowchart TD
   val[.validity 情報の有効期間]
   ann[.annotation 訂正・補足・追認]
   pri[.priority 配送優先度ヒント]
+  del[.delete 削除要求]
+  rep[.report 通報]
   mesh[.mesh BPv7 メッシュ配送]
   madv[.mesh.adv 広告要約]
   ml2[.mesh.l2cap L2CAP CoC]
@@ -35,7 +37,7 @@ flowchart TD
   eq[.public.jma.earthquake]
   wx[.public.jma.weather]
   bsaf[.public.bsaf]
-  core --> geo & val & ann & pri & mesh & pds & pub & dm
+  core --> geo & val & ann & pri & del & rep & mesh & pds & pub & dm
   mesh --> madv & ml2 & mz & mt
   core --> chain
   att --> chain & rev & sign & ext
@@ -54,6 +56,8 @@ flowchart TD
 | `dev.jisaku.mosimo.validity` | [mosimo/validity/](mosimo/validity/README.md) | 情報の有効期間 |
 | `dev.jisaku.mosimo.annotation` | [mosimo/annotation/](mosimo/annotation/README.md) | 訂正・補足・追認と Label |
 | `dev.jisaku.mosimo.priority` | [mosimo/priority/](mosimo/priority/README.md) | 著者の配送優先度ヒントと実効優先度 |
+| `dev.jisaku.mosimo.delete` | [mosimo/delete/](mosimo/delete/README.md) | 著者による投稿の削除要求（NIP-09）と削除後の commit、ノードでの扱い |
+| `dev.jisaku.mosimo.report` | [mosimo/report/](mosimo/report/README.md) | 不適切な投稿の通報（NIP-56）と、通報の集計による配送の停止 |
 | `dev.jisaku.mosimo.mesh` | [mosimo/mesh/](mosimo/mesh/README.md) | BPv7 による保存・中継、BLE/LAN/Nearby、接触時交換、Negentropy による差分照合、メッシュ用 CBOR |
 | `dev.jisaku.mosimo.mesh.adv` | [mosimo/mesh/adv/](mosimo/mesh/adv/README.md) | 広告に載せる所持要約。接続前に接続の要否を判断する |
 | `dev.jisaku.mosimo.mesh.l2cap` | [mosimo/mesh/l2cap/](mosimo/mesh/l2cap/README.md) | L2CAP CoC への経路切替 |

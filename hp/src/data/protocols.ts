@@ -1,4 +1,4 @@
-export type GroupId = 'core' | 'ext' | 'mesh' | 'pds' | 'attest' | 'public' | 'dm';
+export type GroupId = 'core' | 'ext' | 'moderation' | 'mesh' | 'pds' | 'attest' | 'public' | 'dm';
 
 export interface Group {
   id: GroupId;
@@ -16,7 +16,7 @@ export interface Protocol {
   en: string;
   group: GroupId;
   /** 仕様の性質 */
-  kind: '基本' | '投稿の拡張' | '配送' | 'サービス' | '鍵署名' | '形式' | '通信';
+  kind: '基本' | '投稿の拡張' | '制御' | '配送' | 'サービス' | '鍵署名' | '形式' | '通信';
   /** 一文の要約。一覧に表示する */
   tagline: string;
   /** 概要。2〜3 文 */
@@ -34,11 +34,12 @@ export interface Protocol {
 export const groups: Group[] = [
   { id: 'core', no: '01', title: 'コア', en: 'CORE', lead: '投稿の単位、基本型、拡張の運び方、atproto と Nostr への対応。全ての拡張がこれを前提とする。' },
   { id: 'ext', no: '02', title: '投稿の拡張', en: 'EXTENSIONS', lead: '投稿に著者が署名して添える構造化情報。位置、期間、注釈、優先度。' },
-  { id: 'mesh', no: '03', title: 'メッシュ配送', en: 'MESH', lead: '圏外の端末同士が BLE・LAN で接触したときに、署名済みイベントを保存・中継する手順。' },
-  { id: 'pds', no: '04', title: 'PDS とリレー', en: 'PDS / RELAY', lead: '端末が署名したリポジトリを収集・復元し、atproto ネットワークへ公開するサーバー側の構成。' },
-  { id: 'attest', no: '05', title: '発信者証明', en: 'ATTESTATION', lead: '鍵が鍵に署名する連なりで、自治体等の名称と公開鍵の対応をオフラインで確認する。失効と発行も扱う。' },
-  { id: 'public', no: '06', title: '公的情報', en: 'PUBLIC INFORMATION', lead: 'CAP・EDXL・気象庁 XML・BSAF などの公的情報を共通投稿へ変換し、信頼できる経路でメッシュへ持ち込む。' },
-  { id: 'dm', no: '07', title: '個別通信', en: 'DIRECT MESSAGE', lead: '鍵を持つ二者の間で暗号化したメッセージをメッシュとリレーで運ぶ。' },
+  { id: 'moderation', no: '03', title: '削除と通報', en: 'MODERATION', lead: '著者による投稿の削除要求と、不適切な投稿の通報。コアから独立した Nostr イベントとして運び、各ノードが自身の配送を止める。' },
+  { id: 'mesh', no: '04', title: 'メッシュ配送', en: 'MESH', lead: '圏外の端末同士が BLE・LAN で接触したときに、署名済みイベントを保存・中継する手順。' },
+  { id: 'pds', no: '05', title: 'PDS とリレー', en: 'PDS / RELAY', lead: '端末が署名したリポジトリを収集・復元し、atproto ネットワークへ公開するサーバー側の構成。' },
+  { id: 'attest', no: '06', title: '発信者証明', en: 'ATTESTATION', lead: '鍵が鍵に署名する連なりで、自治体等の名称と公開鍵の対応をオフラインで確認する。失効と発行も扱う。' },
+  { id: 'public', no: '07', title: '公的情報', en: 'PUBLIC INFORMATION', lead: 'CAP・EDXL・気象庁 XML・BSAF などの公的情報を共通投稿へ変換し、信頼できる経路でメッシュへ持ち込む。' },
+  { id: 'dm', no: '08', title: '個別通信', en: 'DIRECT MESSAGE', lead: '鍵を持つ二者の間で暗号化したメッセージをメッシュとリレーで運ぶ。' },
 ];
 
 export const protocols: Protocol[] = [
@@ -57,7 +58,7 @@ export const protocols: Protocol[] = [
       '発信者はアプリのインストールごとに独立した鍵・DID（did:plc）・リポジトリを持つ。Nostr 鍵、atproto 署名鍵、PLC 管理鍵は別々に生成する。',
       '拡張は $type 付きのオブジェクトの配列 ext であり、Nostr では「mosimo:ext:〈$type〉」の自己完結タグとして運ぶ。未知の拡張は意味を解釈せずに元の表現のまま保持・中継する。',
       '検証は「Nostr 署名の検証」「DID の認証」「署名済み状態への包含」の三段階に分かれ、通常の受信・中継・表示は第一段階だけで成立する。',
-      '配送期限 exp は著者が署名する配送の上限であり、情報の有効期間や削除とは別である。削除は著者端末による制御処理（NIP-09 と削除後の commit）で表す。',
+      '配送期限 exp は著者が署名する配送の上限であり、情報の有効期間や削除とは別である。削除と通報はそれぞれ独立した拡張（delete・report）が定める。',
     ],
     deps: [],
     types: ['dev.jisaku.mosimo.post'],
@@ -148,6 +149,54 @@ export const protocols: Protocol[] = [
     ],
     deps: ['', 'attest/chain', 'attest/importer', 'pds'],
     types: ['dev.jisaku.mosimo.priority'],
+  },
+  {
+    slug: 'delete',
+    nsid: 'dev.jisaku.mosimo.delete',
+    title: '削除要求',
+    en: 'Deletion request',
+    group: 'moderation',
+    kind: '制御',
+    tagline: '著者による投稿の削除要求（NIP-09 kind 5）と、対象を除いた atproto commit',
+    summary:
+      '著者が自分の投稿の削除を求める方法を定義する。削除要求は NIP-09 の kind 5 イベントであり、投稿を削除する場合は対象レコードを除いた状態を指す atproto commit を同じイベントに収め、PDS が著者の署名を保ったまま削除後のリポジトリを再構築できるようにする。',
+    points: [
+      '削除要求は対象 1 件につき 1 件。対象の著者と同じ鍵で署名したものだけが有効である。',
+      '投稿の削除は mosimo:commit・mosimo:base・mosimo:rkey で削除後の commit を運ぶ。以後の投稿の適用元はこの commit を指す。',
+      '有効な削除要求を受けたノードは対象の表示・配送を直ちにやめ、以後は取得しない。削除要求そのものは配送期限まで中継し続ける。',
+      'PDS は削除後の commit を必ず適用する。運用方針ではなく、以後の投稿を検証するためのリポジトリの整合性の要件である。',
+    ],
+    deps: ['', 'mesh'],
+    figure: {
+      caption: '削除要求の流れ。対象の配送は止まり、削除要求は流れ続ける',
+      source: `sequenceDiagram
+  participant A as 著者端末
+  participant N as 中継ノード
+  participant P as PDS
+  A->>A: 対象を MST から除き commit に署名
+  A->>N: kind 5（e = 対象, mosimo:commit）
+  N->>N: 著者一致を確認し対象の表示・配送を停止
+  N->>P: kind 5 を中継（削除要求は流し続ける）
+  P->>P: 削除後の commit を適用し対象を公開から除く`,
+    },
+  },
+  {
+    slug: 'report',
+    nsid: 'dev.jisaku.mosimo.report',
+    title: '通報',
+    en: 'Report',
+    group: 'moderation',
+    kind: '制御',
+    tagline: '不適切な投稿の通報（NIP-56 kind 1984）と、通報者数による配送の停止',
+    summary:
+      '利用者が不適切と判断した投稿を、他の利用者・中継ノード・サーバーに知らせる方法を定義する。通報は NIP-56 の kind 1984 イベントであり、運営者への個別の連絡経路を前提とせず、圏外でも通報を伝えられる。',
+    points: [
+      '通報は対象 1 件につき 1 件。種別は NIP-56 の spam・profanity・illegal・impersonation・nudity・malware・other。',
+      'ノードは対象ごとに異なる通報者の数を数え、閾値（参照実装は 2）以上で対象の表示・配送を止める。',
+      '通報そのものは閾値に関わらず配送期限まで中継し続ける。',
+      '通報は判断の表明であり、内容が不適切であることの証明ではない。鍵は自由に作れるため、件数は利用者数を表さない。',
+    ],
+    deps: ['', 'mesh'],
   },
   {
     slug: 'mesh',
@@ -252,7 +301,7 @@ export const protocols: Protocol[] = [
     points: [
       '論理 PDS グループは DID が正規公開先として指定する運用単位で、公開 HTTPS endpoint を一つ持つ。物理 PDS は複数のグループに所属できる。',
       '物理 PDS はレコード・path・適用元 CID から MST を再構築し、root を署名済み commit の data と照合する。欠落があれば保留し、推測した木を公開しない。',
-      'PDS は著者の commit を再署名せず、NIP-09 削除要求だけで削除後の commit を生成しない。',
+      'PDS は著者の commit を再署名しない。削除要求に収められた削除後の commit は、以後の投稿を検証するために必ず適用する。',
       'Nostr リレーは独自タグや古い作成時刻を理由に本プロトコルのイベントを拒否せず、PLC 初期操作の制御イベント（kind 8173）を代理登録する。',
       'MOSIMO-REQ は実効優先度順の取得を提供する任意機能であり、標準 REQ の結果は変えない。',
     ],
@@ -651,8 +700,8 @@ export function dependentsOf(slug: string): Protocol[] {
 /** 実装の立場ごとの読む順序 */
 export const readingPaths: { role: string; path: string[]; note?: string }[] = [
   { role: '発信アプリ', path: ['', 'geo', 'validity', 'annotation', 'mesh'], note: '身元を示す場合は attest/chain' },
-  { role: '表示・中継だけのアプリ', path: ['', 'mesh'], note: '未知の拡張は書き換えず保持する' },
-  { role: 'PDS・Nostr リレー', path: ['', 'pds', 'attest/revocation/list'] },
+  { role: '表示・中継だけのアプリ', path: ['', 'mesh', 'delete', 'report'], note: '未知の拡張は書き換えず保持する' },
+  { role: 'PDS・Nostr リレー', path: ['', 'pds', 'delete', 'report', 'attest/revocation/list'] },
   { role: '公的情報の取り込み', path: ['public', 'public/cap', 'public/edxl', 'public/jma', 'attest/importer'] },
   { role: '認証局', path: ['attest', 'attest/revocation', 'attest/revocation/list', 'attest/revocation/request'], note: '自動発行は attest/signing、個人向けは attest/external、転載サーバーへの発行は attest/importer' },
   { role: 'ゲートウェイ（Android・ESP32）', path: ['mesh', 'attest/chain', 'attest/importer'] },
