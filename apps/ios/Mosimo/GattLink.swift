@@ -133,6 +133,9 @@ final class GattLink: NSObject, Link {
             running = false
             central?.stopScan()
             peripheralManager?.stopAdvertising()
+            // The GATT database is shared by every app on the device: a stopped (e.g. LocalLink follower) service must not stay in it.
+            peripheralManager?.removeAllServices()
+            serviceAdded = false
             advertisedNode = nil
             for p in Array(peers.values) { drop(p) }
             firstSeen.removeAll(); lastSynced.removeAll(); lastAdvertSummary.removeAll()

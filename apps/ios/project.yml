@@ -12,8 +12,8 @@ settings:
     DEVELOPMENT_TEAM: 356F93V4HL
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: 0.1.0
-    CURRENT_PROJECT_VERSION: 2
+    MARKETING_VERSION: 0.1.1
+    CURRENT_PROJECT_VERSION: 3
 targets:
   Mosimo:
     type: application

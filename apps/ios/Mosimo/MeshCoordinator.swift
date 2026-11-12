@@ -47,13 +47,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private let allowedPeerNode = MeshCoordinator.testValue("mosimo.test.peer.node")
     private lazy var gatt = GattLink(allowedPeerNode: allowedPeerNode)
     private let lan = LanLink()
-    private var links: [Link] {
+    private var radios: [Link] {
         #if DEBUG
         // Lab-only: `-mosimo.test.links ble` or `lan` runs one transport, to test each in isolation.
         switch Self.lab("mosimo.test.links") { case "ble": return [gatt]; case "lan": return [lan]; default: break }
         #endif
         return [gatt, lan]
     }
+    // BLE and LAN run only in the app that holds this device's LocalLink port; other Mosimo apps on it relay through it (mesh §4.6).
+    private lazy var links: [Link] = [LocalLink(radios: radios)]
     private lazy var exchange = Exchange(engine: engine, now: { Self.now() }, elapsed: { Self.elapsed() },
         note: { [weak self] in self?.note($0) }, log: { [weak self] text in
             self?.log.info("\(text, privacy: .public)")

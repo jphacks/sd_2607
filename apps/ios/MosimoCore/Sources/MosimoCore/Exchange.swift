@@ -26,11 +26,14 @@ public protocol Link: AnyObject {
     func disconnect(_ peer: String)
     /// Reconciliation with [peer] completed; a link may remember the peer's advertised summary to skip idle reconnects (mesh.adv §4).
     func synced(_ peer: String)
+    /// [peer] sent a valid HELLO; LocalLink uses it to tell a Mosimo holder from another app on its port.
+    func hello(_ peer: String)
     /// [peer] broke the exchange framing (mesh §7, e.g. a pre-v1 build); a link may stop redialing its node for a while.
     func rejected(_ peer: String)
 }
 
 public extension Link {
+    func hello(_ peer: String) {}
     func rejected(_ peer: String) {}
 }
 
@@ -232,6 +235,7 @@ public final class Exchange {
            let confidence = hint["confidence"]?.int, (0...3).contains(confidence) {
             onTimeHint(s.label, peerNow - now() / 1000, Int(confidence))
         }
+        s.link.hello(s.handle)
         log("hello from \(s.label) on \(s.link.name):\(s.handle) side=\(s.side) max=\(maxBundle) msg=\(maxMessage) credit=\(credit)")
         if s.side == 0 { startReconcile(s) }
     }
