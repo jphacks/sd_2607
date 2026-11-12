@@ -6,20 +6,20 @@ import Layout from "../../../layouts/Layout.astro";
   title="もしもの防災"
   image="/images/mosimo-bosai-feature.png"
   imageAlt="もしもの防災"
-  description="圏外でも公開テキストを作成し、近くの端末へ中継する Mosimo Android デモアプリを紹介します。"
+  description="圏外でも近くの端末と災害情報を共有する iPhone・iPad・Android 用アプリ「もしもの防災」のサポートページです。"
 >
   <main class="mobile-page">
     <section class="mobile-hero" aria-labelledby="mobile-title">
       <div class="mobile-hero-inner">
         <div class="mobile-hero-copy">
-          <p class="mobile-eyebrow">MOSIMO PROTOCOL / ANDROID DEMO</p>
+          <p class="mobile-eyebrow">MOSIMO PROTOCOL / APP</p>
           <div class="mobile-title">
             <img src="/images/mosimo-bosai-icon.png" width="512" height="512" alt="" />
             <h1 id="mobile-title">もしもの防災</h1>
           </div>
           <p class="mobile-lead">
-            もしもの防災は、インターネットに接続できない場所でも、公開テキストを作成し、近くの端末へ渡す
-            Android デモアプリです。
+            もしもの防災は、インターネットや携帯電話がつながりにくいときにも、近くの人と被害や避難の状況を伝え合うための
+            iPhone・iPad・Android 用アプリです。
           </p>
           <a class="mobile-button" href="#mobile-features">
             できることを見る <span aria-hidden="true">↓</span>
@@ -65,7 +65,7 @@ import Layout from "../../../layouts/Layout.astro";
           <span class="mobile-number">03</span>
           <h3>接続できたら送信</h3>
           <p>
-            オンライン送信を有効にすると、接続できたときに預かった投稿を署名とともに送信先へ届けます。
+            インターネットにつながると、預かった投稿を署名とともに送信先へ届けます。
           </p>
         </article>
       </div>
@@ -85,7 +85,7 @@ import Layout from "../../../layouts/Layout.astro";
       </div>
       <div class="mobile-details-body">
         <p>
-          中継の開始・停止や送信先の管理に加え、近隣端末や投稿の配送状況を画面で確認できます。中継は画面を閉じた後や端末の再起動後にも続けられます。
+          中継の開始・停止や送信先の管理に加え、近隣端末や投稿の配送状況を画面で確認できます。画面を閉じた後も中継を続けます（iPhone・iPad では iOS の動作状況によります）。
         </p>
         <p>
           投稿は署名を検証し、暗号化して保存できた後に受理を応答します。署名は投稿内容の真実性や、投稿者の実社会での身元を保証するものではありません。
@@ -103,16 +103,36 @@ import Layout from "../../../layouts/Layout.astro";
       </div>
       <div>
         <p>
-          このアプリは実験実装です。対象は公開テキストのみで、画像・音声、投稿の削除・訂正、iOS
-          には対応していません。
+          すべての投稿が届くとは限りません。通信環境や省電力設定によって、遅れたり届かなかったりします。避難など命に関わる判断は、自治体や気象庁の発表と周囲の状況をもとに行ってください。
         </p>
         <p>
-          すべての投稿の配送は保証されません。省電力制限や強制停止の影響も受けます。Bluetooth
-          中継から Web 表示までの全経路は、一続きには実証されていません。
+          投稿は、投稿した場所とあわせて誰でも見られる形で公開されます。名前、電話番号、詳しい居場所は投稿しないでください。
+        </p>
+        <p>本アプリは行政機関が提供するものではありません。</p>
+      </div>
+    </section>
+
+    <section
+      class="mobile-section mobile-note"
+      id="support"
+      aria-labelledby="mobile-support-title"
+    >
+      <div>
+        <p class="mobile-eyebrow">04 / SUPPORT</p>
+        <h2 id="mobile-support-title">お問い合わせ</h2>
+      </div>
+      <div>
+        <p>
+          ご質問、不具合のご連絡、投稿の削除のご依頼は
+          <a href="mailto:contact@mosimo.jisaku.dev">contact@mosimo.jisaku.dev</a>
+          へお送りください。
         </p>
         <p>
-          投稿は公開されます。名前、電話番号、詳しい居場所は投稿しないでください。
+          不適切な投稿は、アプリの投稿詳細画面にある「不適切な投稿を報告」か、
+          <a href="mailto:report@mosimo.jisaku.dev">report@mosimo.jisaku.dev</a>
+          からお知らせください。24時間以内に確認して対応します。投稿者をブロックすると、その投稿者の投稿はアプリに表示されなくなります。
         </p>
+        <p><a href="/reference/mobile/policy/">プライバシーポリシー</a></p>
       </div>
     </section>
   </main>
