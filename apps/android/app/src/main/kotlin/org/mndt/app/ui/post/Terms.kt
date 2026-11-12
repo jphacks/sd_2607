@@ -24,16 +24,24 @@ import org.mndt.app.ui.theme.Mosimo
 const val CONTACT_ADDRESS = "contact@mosimo.jisaku.dev"
 private const val TERMS_ACCEPTED = "termsAccepted"
 
-/** Whether the terms were agreed, in the same "app" preferences as the timeline's read marker. */
+private var termsAccepted: MutableState<Boolean>? = null
+
+/**
+ * Whether the terms were agreed, in the same "app" preferences as the timeline's read marker.
+ * One state for the whole process, so agreeing in [TermsAgreement] also updates the screen that showed it.
+ */
 @Composable
 fun rememberTermsAccepted(): MutableState<Boolean> {
-    val prefs = LocalContext.current.getSharedPreferences("app", Context.MODE_PRIVATE)
-    val state = remember { mutableStateOf(prefs.getBoolean(TERMS_ACCEPTED, false)) }
+    val context = LocalContext.current.applicationContext
     return remember {
-        object : MutableState<Boolean> by state {
-            override var value: Boolean
-                get() = state.value
-                set(v) { prefs.edit { putBoolean(TERMS_ACCEPTED, v) }; state.value = v }
+        termsAccepted ?: run {
+            val prefs = context.getSharedPreferences("app", Context.MODE_PRIVATE)
+            val state = mutableStateOf(prefs.getBoolean(TERMS_ACCEPTED, false))
+            object : MutableState<Boolean> by state {
+                override var value: Boolean
+                    get() = state.value
+                    set(v) { prefs.edit { putBoolean(TERMS_ACCEPTED, v) }; state.value = v }
+            }.also { termsAccepted = it }
         }
     }
 }
