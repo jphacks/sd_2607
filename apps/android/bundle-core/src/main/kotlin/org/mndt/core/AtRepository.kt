@@ -115,6 +115,46 @@ object AtRepository {
         return (tags + extensionTags) to previous.copy(records = Collections.unmodifiableMap(records), previousCommit = cid(commit), lastRevMicros = micros)
     }
 
+    /**
+     * delete §2: removes `collection/<rkey>` from the repository and signs the commit of the resulting state.
+     * Returns the commit bytes, the apply-from commit CID and the next repository state.
+     */
+    internal fun delete(keys: SecretKeys, did: String, rkey: String, nowMillis: Long, previous: RepositoryState): Triple<ByteArray, String, RepositoryState> {
+        val path = "$COLLECTION/$rkey"
+        val base = previous.previousCommit
+        require(path in previous.records && base != null) { "Record not in this repository" }
+        val micros = maxOf(Math.multiplyExact(nowMillis, 1000L), Math.addExact(previous.lastRevMicros, 1))
+        val rev = tid(micros, previous.clockId)
+        val records = previous.records - path
+        val unsigned = linkedMapOf<String, Any?>("did" to did, "version" to 3, "data" to CidLink(mstRoot(records)), "rev" to rev, "prev" to null)
+        val commit = CanonicalCbor.encode(unsigned + ("sig" to secp.sign(sha256(CanonicalCbor.encode(unsigned)), keys.atproto)))
+        return Triple(commit, base, previous.copy(records = Collections.unmodifiableMap(records), previousCommit = cid(commit), lastRevMicros = micros))
+    }
+
+    /** delete §1: target of a deletion request (`e`, `k`) and, for a post, its removal commit. Null when malformed. */
+    data class Deletion(val target: String, val kind: Int, val change: RepositoryChange?)
+    fun deletion(event: NostrEvent): Deletion? = runCatching {
+        val t = event.tags
+        require(event.kind == 5 && t.size >= 4 && t[0] == TOPIC_TAG && t[1].size == 2 && t[1][0] == "e" && t[2].size == 2 && t[2][0] == "k")
+        unhex(t[1][1], 32)
+        val kind = t[2][1].toInt().also { require(it in 0..65535 && t[2][1] == it.toString()) }
+        if (kind != 1) { require(t.size == 4 && t[3].firstOrNull() == TAG_EXP); return@runCatching Deletion(t[1][1], kind, null) }
+        require(t.size == 7 && t[3].size == 2 && t[3][0] == TAG_COMMIT && t[4].size == 2 && t[4][0] == TAG_BASE &&
+            t[5].size == 2 && t[5][0] == TAG_RKEY && t[6].firstOrNull() == TAG_EXP && tidPattern.matches(t[5][1]))
+        cidBytes(t[4][1])
+        Deletion(t[1][1], 1, RepositoryChange("$COLLECTION/${t[5][1]}", ByteArray(0), B64.decode(t[3][1]) ?: error("Base64"), t[4][1]))
+    }.getOrNull()
+
+    /** report §1: target event ID, target author and report type of a well-formed report. Null when malformed. */
+    data class Report(val target: String, val author: String, val type: String)
+    fun report(event: NostrEvent): Report? = runCatching {
+        val t = event.tags
+        require(event.kind == 1984 && t.size >= 4 && t[0] == TOPIC_TAG && t[1].size == 3 && t[1][0] == "e" && t[2].size == 3 &&
+            t[2][0] == "p" && t[1][2] == t[2][2] && t[3].firstOrNull() == TAG_EXP)
+        unhex(t[1][1], 32); unhex(t[2][1], 32)
+        Report(t[1][1], t[2][1], t[1][2])
+    }.getOrNull()
+
     /** The signed delivery deadline `mosimo:exp` of any kind of event; null when the event lacks a valid one. */
     fun deliveryExpiresAt(event: NostrEvent): Instant? = runCatching {
         val tag = event.tags.single { it.firstOrNull() == TAG_EXP }

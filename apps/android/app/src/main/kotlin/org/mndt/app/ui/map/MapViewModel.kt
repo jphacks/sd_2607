@@ -19,11 +19,12 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToLong
+import org.mndt.app.ui.post.latLng
 
-/** Posts drawn on the map: those with an origin, minus annotations whose target is shown (they live in its detail). */
+/** Posts drawn on the map: those with a position (origin or area), minus annotations whose target is shown (they live in its detail). */
 fun mapPosts(posts: List<PostView>): List<PostView> {
     val ids = posts.mapTo(HashSet()) { it.id }
-    return posts.filter { it.ext.origin != null && it.ext.annotation?.targetEventId !in ids }
+    return posts.filter { it.latLng() != null && it.ext.annotation?.targetEventId !in ids }
 }
 
 class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepository) : ViewModel() {

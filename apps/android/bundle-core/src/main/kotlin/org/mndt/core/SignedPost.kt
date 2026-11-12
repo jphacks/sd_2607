@@ -144,13 +144,33 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     }
 
     /**
-     * NIP-09 deletion request (core §11) for this author's own events. The MST-removal commit is not carried: its
-     * delivery format is still open in core/PDS, and an undelivered removal would break the PDS's rebuild of later posts.
+     * delete §1-2: NIP-09 deletion request for one of this author's events. A post also carries the commit of the
+     * repository without it, which every later post builds on; the returned state must be saved before sending.
      */
-    fun createDeletion(targetIds: List<String>, nowMillis: Long): NostrEvent {
-        require(targetIds.isNotEmpty() && targetIds.size <= 16 && targetIds.all { it.matches(Regex("[0-9a-f]{64}")) })
-        return signEvent(5, targetIds.map { listOf("e", it) } + listOf(listOf("k", "1")), "", nowMillis)
+    fun createDeletion(target: NostrEvent, nowMillis: Long, previous: RepositoryState): CreatedPost {
+        require(target.pubkey == nostrPubkey) { "Only this author's events can be deleted" }
+        var tags = listOf(AtRepository.TOPIC_TAG, listOf("e", target.id), listOf("k", target.kind.toString()))
+        var repository = previous
+        if (target.kind == 1) {
+            val rkey = AtRepository.restore(target).path.substringAfterLast('/')
+            val (commit, base, next) = AtRepository.delete(keys, did, rkey, nowMillis, previous)
+            tags = tags + listOf(listOf(AtRepository.TAG_COMMIT, B64.encode(commit)), listOf(AtRepository.TAG_BASE, base), listOf(AtRepository.TAG_RKEY, rkey))
+            repository = next
+        }
+        return CreatedPost(sign(5, tags + listOf(expTag(moderationDeadline(target, nowMillis))), "", nowMillis), repository)
     }
+
+    /** report §1: NIP-56 report of another author's event; [type] is a NIP-56 report type. */
+    fun createReport(target: NostrEvent, type: String, comment: String = "", nowMillis: Long): NostrEvent {
+        require(target.pubkey != nostrPubkey) { "Own events are not reported" }
+        require(type in Moderation.REPORT_TYPES && utf8(comment).size <= 280) { "Invalid report" }
+        val tags = listOf(AtRepository.TOPIC_TAG, listOf("e", target.id, type), listOf("p", target.pubkey, type), expTag(moderationDeadline(target, nowMillis)))
+        return sign(1984, tags, comment, nowMillis)
+    }
+
+    /** delete §1 / report §1: no earlier than the target's own deadline, else 24 h from now. */
+    private fun moderationDeadline(target: NostrEvent, nowMillis: Long): Long =
+        maxOf(AtRepository.deliveryExpiresAt(target)?.epochSecond ?: 0, Math.addExact(nowMillis / 1000, 86400))
 
     /** Any non-post kind (e.g. another app's DM, kind 4). Only the signed delivery deadline the mesh requires is appended. */
     fun signEvent(kind: Int, tags: List<List<String>>, content: String, nowMillis: Long,

@@ -79,6 +79,8 @@ internal class Exchange(
     /** Our HELLO receive limits (mesh §5.4); tests lower them to emulate small devices. */
     private val messageLimit: Int = MESSAGE_LIMIT,
     private val initialCredit: Int = INITIAL_CREDIT,
+    /** Event IDs not worth requesting (targets stopped by reports); refused again by MeshEngine.admit if they arrive. */
+    private val skip: (String) -> Boolean = { false },
 ) {
     val sessions = linkedMapOf<Pair<Link, String>, Session>()
     // ponytail: in-memory FIFO; a restarted app re-wants a refused bundle once.
@@ -211,7 +213,7 @@ internal class Exchange(
     private fun want(s: Session, ids: List<String>) {
         val owned = engine.entries().mapTo(hashSetOf()) { it.event.id }
         val open = s.requests.values.flatten().toSet()
-        val missing = ids.filter { it !in owned && it !in refused && it !in open }.distinct()
+        val missing = ids.filter { it !in owned && it !in refused && it !in open && !skip(it) }.distinct()
         if (missing.isEmpty()) return
         for (chunk in missing.chunked(Messages.idsPerMessage(frameLimit(s)))) {
             val id = s.nextRequest++

@@ -19,8 +19,6 @@ android {
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
         manifestPlaceholders["mosimoPlcRegistration"] = providers.gradleProperty("mosimoPlcRegistration").orElse("true").get()
-        // Empty until the policy page is published; the settings row is hidden while empty.
-        buildConfigField("String", "PRIVACY_POLICY_URL", "\"\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

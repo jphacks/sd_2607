@@ -25,6 +25,7 @@ import org.mndt.core.BlockedAuthor
 import org.mndt.core.ClockConfidence
 import org.mndt.core.DeliveryDeadline
 import org.mndt.core.MeshEngine
+import org.mndt.core.Moderation
 import org.mndt.core.SecretKeys
 import org.mndt.core.PublicIngress
 import org.mndt.core.NostrEvent
@@ -67,6 +68,8 @@ data class MeshState(
     val roots: List<Attest.Root> = emptyList(), val revocationCount: Int = 0, val revocationChecked: Map<String, Long> = emptyMap(),
     /** Unverified peer clock hints, newest first (mesh.time). */
     val clockSkews: List<ClockSkew> = emptyList(),
+    /** Posts reported from this device in this run. */
+    val reported: Set<String> = emptySet(),
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -97,8 +100,10 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var revocationBusy = false
     private var revocationNext = 0L
     private val clockSkews = linkedMapOf<String, ClockSkew>()
-    /** Core §11: target event ID → pubkeys that asked for its deletion. Applied only when the target's author asked. */
-    private val deletionRequests = mutableMapOf<String, MutableSet<String>>()
+    /** Deletion requests (delete §3) and reports (report §2) seen so far; rebuilt from the store at launch. */
+    private val moderation = Moderation()
+    /** Posts reported from this device in this run (the report events themselves are in the store). */
+    private val reported = mutableSetOf<String>()
     private var lastChainFlush = 0L
     private val bootCount = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT) }
         .getOrNull()?.takeIf { it >= 0 }
@@ -129,7 +134,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val exchange = Exchange(engine, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor,
         forwarded = { id, peer -> forwarded.getOrPut(id) { mutableSetOf() } += peer },
         accepted = { absorbControl(it.event); persist(); drainRelay(); if (it.event.kind == 1) received(online = false) },
-        timeHint = ::timeHint, onTimeHint = { peer, delta, confidence -> noteSkew(peer, delta, confidence) })
+        timeHint = ::timeHint, onTimeHint = { peer, delta, confidence -> noteSkew(peer, delta, confidence) },
+        skip = { moderation.skip(it) })
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
@@ -173,8 +179,9 @@ class MeshCoordinator private constructor(private val context: Context) {
         engine.clockConfidence = if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(CLOCK_TRUSTED, true)) ClockConfidence.TRUSTED else ClockConfidence.UNKNOWN
         engine.relayed = { id -> disk?.relayAccepted?.values?.any { id in it } == true }
         // Author block (mesh §10, by Nostr key): such events never enter the store, so they are never advertised or relayed either.
-        engine.admit = { it.pubkey !in blocked }
-        engine.suppressed = { deleted(it) || chainOf(it)?.revocation == Attest.RevocationState.REVOKED }
+        // Stopped targets (deleted by their author, or reported enough) are refused too (delete §3, report §2).
+        engine.admit = { it.pubkey !in blocked && !moderation.stopped(it) }
+        engine.suppressed = { moderation.stopped(it) || chainOf(it)?.revocation == Attest.RevocationState.REVOKED }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
         // Kinds the PDS never accepts would otherwise be pinned forever and fill the store.
         engine.canEvict = { entry ->
@@ -246,7 +253,10 @@ class MeshCoordinator private constructor(private val context: Context) {
     private fun now() = System.currentTimeMillis()
     private fun elapsed() = SystemClock.elapsedRealtime()
     private fun received(online: Boolean) = mutableState.update { it.copy(lastReceivedAtMillis = now(), lastReceivedOnline = online) }
-    private fun note(text: String) = mutableState.update { it.copy(diagnostics = (it.diagnostics + text).takeLast(16)) }
+    private fun note(text: String) {
+        runCatching { android.util.Log.i("MeshCoordinator", text) }
+        mutableState.update { it.copy(diagnostics = (it.diagnostics + text).takeLast(16)) }
+    }
     private fun issue(text: String) { mutableState.update { it.copy(error = text) }; note(text) }
     fun clearError() = enqueue(critical = true) { mutableState.update { it.copy(error = null) } }
     fun reportError(text: String) = enqueue(critical = true) { issue(text.take(160)) }
@@ -287,16 +297,14 @@ class MeshCoordinator private constructor(private val context: Context) {
             PublicIngress.chainView(event, publicConfig.roots, revocations, clock, seenAt[event.id] ?: Instant.ofEpochMilli(now()))
         }
     }
-    private fun deleted(event: NostrEvent) = deletionRequests[event.id]?.contains(event.pubkey) == true
     /**
-     * Applies control data held in the store: NIP-09 deletion requests (core §11, recorded even before their target
-     * arrives) and revocation control events (attest.revocation §5, verified by their inner signatures only).
+     * Applies control data held in the store: deletion requests and reports (delete §3, report §2, recorded even
+     * before their target arrives) and revocation control events (attest.revocation §5, verified by their inner
+     * signatures only).
      */
     private fun absorbControl(event: NostrEvent, quiet: Boolean = false) {
-        if (event.kind == 5) {
-            event.tags.filter { it.size >= 2 && it[0] == "e" && it[1].matches(HEX64) }.take(64)
-                .forEach { deletionRequests.getOrPut(it[1]) { mutableSetOf() } += event.pubkey }
-            while (deletionRequests.size > MAX_DELETIONS) deletionRequests.remove(deletionRequests.keys.first())
+        moderation.absorb(event)?.let { target ->
+            if (pruneStopped() && !quiet) note("${if (event.kind == 5) "削除要求" else "報告"} により ${target.take(8)} の表示・中継を停止")
             return
         }
         val revocation = runCatching { Attest.revocationOf(event) }.getOrNull() ?: return
@@ -307,25 +315,67 @@ class MeshCoordinator private constructor(private val context: Context) {
             if (!quiet) note("失効通知を受信・永続保存（配送候補を再評価）")
         }
     }
-    /** Core §11: asks for deletion of our own post. Other holders may keep copies; this is a request, not erasure. */
+    /**
+     * Erases stopped posts (delete §3, report §2). Our own stays held, hidden and off the mesh, only until the PDS has
+     * it: the PDS needs it to verify the removal commit and every later post.
+     */
+    private fun pruneStopped(): Boolean {
+        val me = author?.nostrPubkey
+        val atPds = disk?.relayAccepted?.get(DiskState.PDS_RELAY).orEmpty()
+        return engine.remove { moderation.stopped(it.event) && (it.event.pubkey != me || it.event.id in atPds) }.also { if (it) dirty = true }
+    }
+    /** delete §1-2: asks for deletion of our own post with the commit of the repository without it. A request, not erasure. */
     fun delete(eventId: String) = enqueue(critical = true) {
         check(!fatal)
         val me = checkNotNull(author)
+        val current = checkNotNull(disk)
         val target = engine.entries().firstOrNull { it.event.id == eventId }?.event
-        require(target != null && target.pubkey == me.nostrPubkey) { "Only our own posts can be deleted" }
-        val request = me.createDeletion(listOf(eventId), now())
-        try { engine.originate(request, now(), elapsed()) } catch (_: IllegalArgumentException) {
+        if (target == null || target.pubkey != me.nostrPubkey) { issue("自分の投稿だけ削除を依頼できます"); return@enqueue }
+        val request = try {
+            me.createDeletion(target, now(), current.repository).also { engine.originate(it.event, now(), elapsed()) }
+        } catch (_: IllegalArgumentException) {
             issue("削除要求を保存できませんでした（容量・発信頻度の制限）"); return@enqueue
         }
-        seenAt[request.id] = Instant.ofEpochMilli(now())
-        absorbControl(request)
+        seenAt[request.event.id] = Instant.ofEpochMilli(now())
+        // The removal commit is the next base: save it before anything leaves the device.
+        persist(current.copy(repository = request.repository))
+        absorbControl(request.event)
         persist()
         note("削除要求を署名・配送 ${eventId.take(8)}（受信済みの端末から消える保証はありません）")
         exchange.broadcastInventory()
         drainRelay()
     }
+    /** report §1: publishes a NIP-56 report of another author's post; [block] also blocks its key on this device. */
+    fun report(eventId: String, type: String, comment: String, block: Boolean) = enqueue(critical = true) {
+        check(!fatal)
+        val me = checkNotNull(author)
+        val target = engine.entries().firstOrNull { it.event.id == eventId }?.event
+            ?: (relaySubscription.events() + publicEvents).firstOrNull { it.id == eventId }
+        if (target == null || target.pubkey == me.nostrPubkey) { issue("この投稿は報告できません"); return@enqueue }
+        var text = comment.trim()
+        while (text.toByteArray(Charsets.UTF_8).size > 280) text = text.dropLast(1)
+        val event = try {
+            me.createReport(target, type, text, now()).also { engine.originate(it, now(), elapsed()) }
+        } catch (_: IllegalArgumentException) {
+            issue("報告を保存できませんでした（容量・発信頻度の制限）"); return@enqueue
+        }
+        seenAt[event.id] = Instant.ofEpochMilli(now())
+        absorbControl(event)
+        reported += eventId
+        persist()
+        note("報告を署名・配送 ${eventId.take(8)}")
+        exchange.broadcastInventory()
+        drainRelay()
+        if (block && target.pubkey !in blocked) {
+            val current = checkNotNull(disk)
+            engine.remove { it.event.pubkey == target.pubkey }
+            persist(current.copy(blockedPubkeys = current.blockedPubkeys + target.pubkey))
+            note("ブロック ${target.pubkey.take(8)}")
+        }
+    }
     private fun refresh() {
         val data = disk
+        val stopped = (engine.entries().map { it.event } + relaySubscription.events() + publicEvents).filter { moderation.stopped(it) }.mapTo(hashSetOf()) { it.id }
         mutableState.update { state -> state.copy(
             ready = author != null && !fatal, running = running, clockConfidence = engine.clockConfidence,
             onlineEnabled = data?.onlineEnabled == true, onlineActive = onlineAllowed(),
@@ -353,7 +403,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                     publicAuthorization = data?.publicAudit?.get(it.event.id), did = it.did,
                     createdAt = it.event.createdAt, ext = Extensions.of(it.event), chain = chainOf(it.event))
             }, (relaySubscription.events() + publicEvents).distinctBy { it.id }, activeRelay, { engine.deadline(it, now()) }, ::chainOf)
-                .filterNot { it.pubkey in blocked || deletionRequests[it.id]?.contains(it.pubkey) == true ||
+                .filterNot { it.pubkey in blocked || it.id in stopped ||
                     hideExpired && it.deliveryDeadline == DeliveryDeadline.EXPIRED }.let { posts ->
                 val publicIds = publicEvents.mapTo(hashSetOf()) { it.id }
                 posts.map { post -> if (post.volatile && post.id in publicIds) post.copy(sourceRelay = DiskState.PDS_RELAY) else post }
@@ -363,6 +413,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             forwardedTo = forwarded.apply { keys.retainAll(engine.entries().mapTo(hashSetOf()) { it.event.id }) }.mapValues { it.value.size },
             roots = publicConfig.roots, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
             clockSkews = clockSkews.values.reversed(),
+            reported = reported.toSet(),
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
@@ -678,7 +729,9 @@ class MeshCoordinator private constructor(private val context: Context) {
         relayIndex++
         note("リレー未受理。キューを保持し、次のリレーで再試行")
     }
-    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { relayWants(relay, it.event) && (allowedAuthor == null || it.event.pubkey == allowedAuthor) && it.event.id !in d.relayAccepted[relay].orEmpty() } }.orEmpty()
+    // A stopped post (our own, kept for the PDS) goes to the PDS relay only (delete §3).
+    private fun pendingFor(relay: String) = disk?.let { d -> engine.entries().filter { relayWants(relay, it.event) && (allowedAuthor == null || it.event.pubkey == allowedAuthor) &&
+        it.event.id !in d.relayAccepted[relay].orEmpty() && (relay == DiskState.PDS_RELAY || !moderation.stopped(it.event)) } }.orEmpty()
     /** Rotates through the configured relays so every one eventually receives every held event (mesh §12). */
     private fun drainRelay() {
         val current = disk ?: return
@@ -774,6 +827,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         val current = checkNotNull(disk)
         current.relayAccepted[activeRelay].orEmpty().let { disk = current.copy(relayAccepted = current.relayAccepted + (activeRelay to it + id)) }
         dirty = true
+        pruneStopped()
         relayFailures.remove(activeRelay)
         relayRetryAt.remove(activeRelay)
         relayDeferred[activeRelay]?.remove(id)
@@ -875,8 +929,6 @@ class MeshCoordinator private constructor(private val context: Context) {
         private const val CLOCK_TRUSTED = "clockTrusted"
         private const val HIDE_EXPIRED = "hideExpired"
         private const val REVOCATION_INTERVAL_MS = 15 * 60_000L
-        private const val MAX_DELETIONS = 4096
-        private val HEX64 = Regex("[0-9a-f]{64}")
         @Volatile private var instance: MeshCoordinator? = null
         fun get(context: Context): MeshCoordinator = instance ?: synchronized(this) {
             instance ?: MeshCoordinator(context.applicationContext).also { instance = it }

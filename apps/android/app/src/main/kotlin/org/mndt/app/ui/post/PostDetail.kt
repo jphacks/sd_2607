@@ -1,6 +1,7 @@
 package org.mndt.app.ui.post
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -106,6 +108,7 @@ private fun endsAt(value: String): String = runCatching { Instant.parse(value).e
     .recoverCatching { OffsetDateTime.parse(value).toEpochSecond() }.map(::dateTime).getOrDefault(value)
 
 /** Shared by the timeline (full screen) and the map (bottom sheet). [onShowOnMap] is null where already on the map. Scrolls itself. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -> Unit)? = null, onBlocked: () -> Unit = {}) {
     val mesh = koinInject<MeshCoordinator>()
@@ -114,6 +117,7 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
     val annotations = remember(state.posts, post.id) { annotationsByTarget(state.posts)[post.id].orEmpty().sortedBy { it.createdAt } }
     var confirmBlock by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var reporting by remember { mutableStateOf(false) }
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             KindLabel(post)
@@ -139,10 +143,15 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
             }
             if (post.ext.hasChain || post.chain != null) SenderVerification(post)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onShowOnMap != null && post.latLng() != null) OutlinedButton(onClick = onShowOnMap) { Text("マップで見る") }
-            if (post.pubkey != state.publicKey) TextButton(onClick = { confirmBlock = true }) { Text("ブロック", color = Mosimo.danger) }
+            // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+            if (post.pubkey != state.publicKey) { if (!post.isPublic) TextButton(onClick = { confirmBlock = true }) { Text("ブロック", color = Mosimo.danger) } }
             else if (!post.volatile) TextButton(onClick = { confirmDelete = true }) { Text("削除を依頼", color = Mosimo.danger) }
+            if (post.pubkey != state.publicKey) {
+                val done = post.id in state.reported
+                TextButton(onClick = { reporting = true }, enabled = !done && state.ready) { Text(if (done) "報告済み" else "報告", color = Mosimo.textSecondary) }
+            }
         }
         HorizontalDivider(color = Mosimo.border)
         if (post.isPublic) Text("確認した ${endorsers(annotations).size}人", style = MaterialTheme.typography.bodySmall, color = Mosimo.safe)
@@ -159,6 +168,11 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
         },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("キャンセル") } },
     )
+    if (reporting) ReportDialog(post, onDismiss = { reporting = false }) { type, comment, block ->
+        reporting = false
+        mesh.report(post.id, type, comment, block)
+        if (block) onBlocked()
+    }
     if (confirmBlock) AlertDialog(
         onDismissRequest = { confirmBlock = false },
         containerColor = Mosimo.bgElevated,
@@ -191,4 +205,47 @@ private fun AnnotationItem(annotation: PostView, target: PostView) {
         Text("${shortDid(annotation.did, annotation.pubkey)} · ${dateTime(annotation.createdAt)}", style = MaterialTheme.typography.labelSmall,
             color = Mosimo.textTertiary)
     }
+}
+
+/** report §1: NIP-56 report types with the labels shown in both apps. */
+val REPORT_TYPES = listOf(
+    "spam" to "スパム・宣伝", "profanity" to "不快な表現・嫌がらせ", "illegal" to "違法な内容", "impersonation" to "なりすまし",
+    "nudity" to "性的な内容", "malware" to "有害なリンク", "other" to "その他（虚偽の情報・個人情報など）",
+)
+
+/** Publishes a signed report (report §1). It travels like a post; each receiver decides what to do with it. */
+@Composable
+private fun ReportDialog(post: PostView, onDismiss: () -> Unit, onReport: (String, String, Boolean) -> Unit) {
+    var type by remember { mutableStateOf<String?>(null) }
+    var comment by remember { mutableStateOf("") }
+    var block by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Mosimo.bgElevated,
+        title = { Text("この投稿を報告") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("報告はあなたの鍵で署名された公開情報として、周辺の端末やサーバーに届きます。報告をどう扱うかは、受け取った各アプリ・サーバーが判断します。",
+                    style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+                REPORT_TYPES.forEach { (value, label) ->
+                    Row(Modifier.fillMaxWidth().selectable(type == value, role = Role.RadioButton) { type = value }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(type == value, onClick = null)
+                        Text(label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary)
+                    }
+                }
+                OutlinedTextField(comment, { comment = it.take(90) }, Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 2,
+                    placeholder = { Text("補足（任意・公開されます）") })
+                // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+                if (!post.isPublic) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("この投稿者をブロックする", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary)
+                    Switch(block, { block = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { type?.let { onReport(it, comment, block) } }, enabled = type != null) { Text("報告する", color = Mosimo.danger) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } },
+    )
 }

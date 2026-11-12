@@ -1,5 +1,7 @@
 package org.mndt.app.ui.settings
 
+import androidx.core.content.edit
+
 import android.Manifest
 import android.content.ClipData
 import android.content.Context
@@ -113,6 +115,14 @@ internal fun AdvancedScreen(nav: Navigator) = SubScreen("詳細設定", nav) {
             notify.launch(Manifest.permission.POST_NOTIFICATIONS)
         else startRelay(context)
     }
+    // Privacy policy §3: anonymous usage statistics, on unless the user turns them off. Nothing is sent yet.
+    var usageStats by remember { mutableStateOf(UsageStats.enabled(context)) }
+    Header("利用状況")
+    Group {
+        SwitchRow(Icons.Outlined.BarChart, Mosimo.info, "利用状況の統計を送信", "個人を識別しない利用状況を送信し、アプリの改善と統計に使います", usageStats) {
+            usageStats = it; UsageStats.set(context, it)
+        }
+    }
     Header("通信")
     Group {
         SwitchRow(Icons.Outlined.SyncAlt, Mosimo.info, "オフライン中継を有効にする", "圏外時に近くの端末と情報を交換", state.running, state.ready || state.running) {
@@ -220,4 +230,11 @@ internal fun BlockedScreen(nav: Navigator) = SubScreen("ブロックリスト", 
             })
         }
     }
+}
+
+/** Privacy policy §3 switch, shared with a future usage reporter (none sends yet). */
+object UsageStats {
+    private const val KEY = "usageStats"
+    fun enabled(context: Context): Boolean = context.getSharedPreferences("app", Context.MODE_PRIVATE).getBoolean(KEY, true)
+    fun set(context: Context, value: Boolean) = context.getSharedPreferences("app", Context.MODE_PRIVATE).edit { putBoolean(KEY, value) }
 }

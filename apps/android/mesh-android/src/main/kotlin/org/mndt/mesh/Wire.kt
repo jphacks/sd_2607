@@ -44,13 +44,13 @@ internal fun nextRelayIndex(relays: List<String>, start: Int, pending: (String) 
     }
 
 /**
- * PDS §4.2 / §6 and DM §5: PLC genesis control events stay in the mesh; the PDS relay takes posts, deletions and
+ * PDS §4.2 / §6 and DM §5: PLC genesis control events stay in the mesh; the PDS relay takes posts, deletion requests, reports and
  * revocation notices; general relays take everything else (DMs, profiles) too.
  */
 internal fun relayWants(relay: String, event: NostrEvent): Boolean {
     val topic = AtRepository.controlTopic(event)
     if (event.kind == AtRepository.CONTROL_KIND && topic != AtRepository.REVOCATION_TOPIC) return false
-    return relay != DiskState.PDS_RELAY || event.kind == 1 || event.kind == 5 || topic == AtRepository.REVOCATION_TOPIC
+    return relay != DiskState.PDS_RELAY || event.kind == 1 || event.kind == 5 || event.kind == 1984 || topic == AtRepository.REVOCATION_TOPIC
 }
 
 internal fun onlineRelayAllowed(enabled: Boolean, foreground: Boolean, fatal: Boolean, hasRelay: Boolean,
