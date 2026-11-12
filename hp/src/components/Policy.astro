@@ -1,25 +1,29 @@
 ---
 import Layout from "../layouts/Layout.astro";
-import { Content } from "../content/policy.md";
 
 interface Props {
   appName: string;
+  established: string;
+  revised?: string;
   image?: string;
   imageAlt?: string;
 }
 
-const { appName, image, imageAlt } = Astro.props;
+const { appName, established, revised, image, imageAlt } = Astro.props;
 const title = `「${appName}」プライバシーポリシー`;
 ---
 
 <Layout title={title} description={`「${appName}」における情報の取り扱いについて。`} image={image} imageAlt={imageAlt}>
   <main class="policy">
     <h1>{title}</h1>
-    <p>制定日：2026年11月2日</p>
+    <p class="policy-dates">
+      制定日：{established}
+      {revised && <><br />改訂日：{revised}</>}
+    </p>
     <p>
       Team JISAKU（以下「本団体」）は、本団体が提供するアプリ「{appName}」（以下「本アプリ」）における情報の取り扱いについて、以下のとおり定めます。
     </p>
-    <Content />
+    <slot />
   </main>
 </Layout>
 
@@ -41,6 +45,9 @@ const title = `「${appName}」プライバシーポリシー`;
     margin-top: 3rem;
     border-bottom: 1px solid;
     padding-bottom: 0.5rem;
+  }
+  .policy-dates {
+    color: #555;
   }
   .policy :global(a) {
     overflow-wrap: anywhere;
