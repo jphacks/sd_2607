@@ -1,0 +1,7 @@
+# CoreS3 16 MiB. One large app slot for the Japanese UI fonts; no OTA, no TTS dictionary.
+# Name, Type, SubType, Offset, Size, Flags
+nvs, data, nvs, 0x9000, 0x5000,
+otadata, data, ota, 0xe000, 0x2000,
+app0, app, ota_0, 0x10000, 0x600000,
+spiffs, data, spiffs, 0x610000, 0x200000,
+coredump, data, coredump, 0x810000, 0x10000,

@@ -46,6 +46,10 @@ public:
     size_t storedCount() const { return entries_.size(); }
     // Entries currently offered to peers (mesh §5.5 candidate set).
     size_t candidateCount() const;
+    // Local display only: revalidates each stored original (live and cold) and passes it
+    // to visit with its cold flag. Unreadable or invalid files are skipped. visit must not
+    // reenter Relay. Not a forwarding decision; cold entries stay cold.
+    void forEachStored(const std::function<void(const BundleInfo&, bool cold)>& visit);
     // mesh.adv §1: 3-byte candidate-set summary + extension flags byte.
     void advertisement(uint8_t out[4]) const;
 

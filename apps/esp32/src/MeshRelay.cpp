@@ -486,6 +486,14 @@ std::vector<const Relay::Entry*> Relay::candidates(uint64_t now) const {
     return list;
 }
 size_t Relay::candidateCount() const { return candidates(clockMs()).size(); }
+void Relay::forEachStored(const std::function<void(const BundleInfo&, bool cold)>& visit) {
+    std::vector<uint8_t> bytes;
+    for (const Entry& e : entries_) {
+        BundleInfo info;
+        std::string error;
+        if (read(e, bytes) && validateBundle(bytes.data(), bytes.size(), info, error)) visit(info, e.cold);
+    }
+}
 void Relay::advertisement(uint8_t out[4]) const {
     // SHA-256 over the candidate IDs sorted as unsigned bytes (= lowercase hex order).
     std::vector<std::string> ids;

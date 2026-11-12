@@ -123,7 +123,11 @@ void basicExchange(const std::string& dir){
  std::vector<uint8_t> badWant={0x82,0x02,0x00};e.rx(badWant);CHECK(e.relay.disconnectRequested());
  // Reboot: retained but cold, never offered or forwarded in this boot.
  e.relay.disconnected();
- Env reboot(false);CHECK(reboot.relay.storedCount()==1&&reboot.relay.candidateCount()==0);reboot.start();
+ Env reboot(false);CHECK(reboot.relay.storedCount()==1&&reboot.relay.candidateCount()==0);
+ // Local display may list the cold entry, revalidated from its original bytes; it stays cold.
+ {size_t visits=0;reboot.relay.forEachStored([&](const mesh::BundleInfo& stored,bool cold){++visits;CHECK(cold&&stored.id==id&&stored.kind==1&&!stored.text.empty());});
+  CHECK(visits==1&&reboot.relay.candidateCount()==0);}
+ reboot.start();
  request=1;reboot.rx(msg::ids(msg::WANT,&request,{idBytes(id)}));
  none=reboot.flush();CHECK(none.size()==1&&none[0].code==msg::UNAVAILABLE);
  // HELLO rules: wrong version, data before HELLO, equal nonces.
