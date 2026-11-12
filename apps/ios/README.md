@@ -6,7 +6,8 @@ SwiftUI port of the Android app (`apps/android`, 0.2.2 feature set) for iOS 17+,
   the `dev.jisaku.mosimo` protocol (`protocol/mosimo`): canonical CBOR, secp256k1 (libsecp256k1 via `swift-secp256k1`),
   NIP-01 events with the core §7.2 fixed tag order, atproto record/MST/commit, PLC DID, mesh CBOR v1 payload (mesh §2),
   BPv7 bundles, `MeshEngine`, the mesh §5 exchange messages over CBOR sequences with Negentropy reconciliation,
-  `attest` chains and revocations, importer ingress (`attest.importer`), relay subscription, PLC directory, encrypted state file.
+  `attest` chains and revocations, importer ingress (`attest.importer`), relay subscription, PLC directory, encrypted state file,
+  `LocalLink` (mesh §4.6: the app holding 127.0.0.1:29584 → 26741 → 23771 runs BLE/LAN for the device; other Mosimo apps exchange with it there).
 - `Mosimo/` — the app: SwiftUI screens, `MeshCoordinator` (single main-actor owner of mesh/relay/disk state),
   `GattLink` (Core Bluetooth), `LanLink` (Network.framework Bonjour `_mosimo._tcp` + TCP), location.
 
