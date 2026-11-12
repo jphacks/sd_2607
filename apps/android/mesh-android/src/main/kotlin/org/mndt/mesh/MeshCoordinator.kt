@@ -195,7 +195,11 @@ class MeshCoordinator private constructor(private val context: Context) {
                 try { action() }
                 catch (e: CancellationException) { throw e }
                 catch (_: SecurityException) { stopInternal(stopService = true); issue("権限が無効になったため停止しました。設定を確認してください") }
-                catch (_: Throwable) { if (!fatal) issue("処理に失敗しました（設定・権限・サイズを確認）") }
+                catch (e: Throwable) {
+                    // The cause is otherwise lost: the UI shows only the generic message below.
+                    runCatching { android.util.Log.w("MeshCoordinator", "action failed", e) }
+                    if (!fatal) issue("処理に失敗しました（設定・権限・サイズを確認）")
+                }
                 refresh()
             }
         }
@@ -820,7 +824,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (!reply.accepted) {
             // OK false is relay policy, not transport: onOpen resets failures, so a backoff here looped every ~2 s.
             relayDeferred.getOrPut(activeRelay) { mutableMapOf() }[id] = elapsed() + RELAY_REJECT_DEFER_MILLIS
-            note("リレー拒否 ${id.take(8)}（$activeRelay）。投稿は保持")
+            note("リレー拒否 ${id.take(8)}（$activeRelay）: ${reply.message.ifEmpty { "理由なし" }}。投稿は保持")
             closeRelay(); relayIndex++
             drainRelay()
             return

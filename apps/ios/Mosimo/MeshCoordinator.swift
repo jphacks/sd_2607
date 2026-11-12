@@ -957,18 +957,18 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         case .event: received(online: true); if relaySubscription.atCapacity { closeRelayRead() }
         case .full: closeRelayRead()
         case .eose, .closed: relayReadDeadline = 0
-        case .ok(let id, let accepted): relayOk(id, accepted)
+        case .ok(let id, let accepted, let message): relayOk(id, accepted, message)
         case nil: break
         }
     }
 
-    private func relayOk(_ id: String, _ accepted: Bool) {
+    private func relayOk(_ id: String, _ accepted: Bool, _ message: String) {
         guard let pending = relayPendingId, pending == id, var current = disk else { return }
         relayPendingId = nil; relayDeadline = 0
         if !accepted {
             // OK false is relay policy, not transport; deferring avoids a reconnect loop.
             relayDeferred[activeRelay, default: [:]][id] = Self.elapsed() + Self.rejectDeferMillis
-            note("リレー拒否 \(id.prefix(8))（\(activeRelay)）。投稿は保持")
+            note("リレー拒否 \(id.prefix(8))（\(activeRelay)）: \(message.isEmpty ? "理由なし" : message)。投稿は保持")
             closeRelay(); relayIndex += 1
             drainRelay()
             return

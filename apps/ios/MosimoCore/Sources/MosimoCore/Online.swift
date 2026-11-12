@@ -1,7 +1,8 @@
 import Foundation
 
 public enum RelayReply: Equatable {
-    case ok(id: String, accepted: Bool)
+    /// NIP-01 `OK`; message is the relay's machine-readable prefix and reason ("blocked: …", "invalid: …").
+    case ok(id: String, accepted: Bool, message: String)
     case event(NostrEvent)
     case eose, closed, full
 }
@@ -60,7 +61,7 @@ public final class RelaySubscription {
         let frame = try? Json.parse(text, maxDepth: 32, maxBytes: Self.maxFrameBytes)
         let a = frame?.array ?? []
         // OKs answer our own one-at-a-time EVENTs, so a backlog flush must not spend the receive window.
-        if a.count == 4, a[0].string == "OK", let id = a[1].string, let accepted = a[2].bool, a[3].string != nil { return .ok(id: id, accepted: accepted) }
+        if a.count == 4, a[0].string == "OK", let id = a[1].string, let accepted = a[2].bool, let message = a[3].string { return .ok(id: id, accepted: accepted, message: String(message.prefix(160))) }
         // A rotation's re-sent backlog is dropped unverified by id, so reconnects cannot spend the window either.
         if a.count == 3, a[0].string == "EVENT", let id = a[2]["id"]?.string, retained[id] != nil || meshIds.contains(id) { return nil }
         frameTimes.removeAll { elapsed - $0 >= 60_000 || elapsed < $0 }

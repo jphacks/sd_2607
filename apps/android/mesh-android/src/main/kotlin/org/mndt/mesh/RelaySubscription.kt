@@ -5,7 +5,8 @@ import org.mndt.core.DeliveryDeadline
 import org.mndt.core.NostrEvent
 
 internal sealed interface RelayReply {
-    data class Ok(val id: String, val accepted: Boolean) : RelayReply
+    /** NIP-01 `OK`; message is the relay's machine-readable prefix and reason ("blocked: …", "invalid: …"). */
+    data class Ok(val id: String, val accepted: Boolean, val message: String = "") : RelayReply
     data class Event(val event: NostrEvent) : RelayReply
     data object Eose : RelayReply
     data object Closed : RelayReply
@@ -67,7 +68,7 @@ internal class RelaySubscription {
         val frame = runCatching { json.readTree(text) }.getOrNull()
         // OKs answer our own one-at-a-time EVENTs, so a backlog flush must not spend the receive window.
         if (frame != null && frame.isArray && frame.size() == 4 && frame[0].textValue() == "OK" && frame[1].isTextual &&
-            frame[2].isBoolean && frame[3].isTextual) return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue())
+            frame[2].isBoolean && frame[3].isTextual) return RelayReply.Ok(frame[1].textValue(), frame[2].booleanValue(), frame[3].textValue().take(160))
         // A rotation's re-sent backlog is dropped unverified by id, so reconnects cannot spend the window either.
         if (frame != null && frame.isArray && frame.size() == 3 && frame[0].textValue() == "EVENT" &&
             frame[2].path("id").textValue()?.let { it in retained || it in meshIds } == true) return null

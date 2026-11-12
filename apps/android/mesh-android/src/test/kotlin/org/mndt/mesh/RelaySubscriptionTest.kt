@@ -86,7 +86,7 @@ class RelaySubscriptionTest {
         assertEquals(RelayReply.Closed, session.receive(1, "[\"CLOSED\",\"mosimo-1\",\"blocked\"]", 0))
         assertNull(session.subscriptionId)
         assertNull(session.receive(1, old, 0))
-        assertEquals(RelayReply.Ok("id", true), session.receive(1, "[\"OK\",\"id\",true,\"saved\"]", 0))
+        assertEquals(RelayReply.Ok("id", true, "saved"), session.receive(1, "[\"OK\",\"id\",true,\"saved\"]", 0))
         assertEquals(1, session.events().size)
     }
 
@@ -258,7 +258,7 @@ class RelaySubscriptionTest {
                 })
                 assertEquals("mosimo-$generation", json.readTree(serverFrames.poll(5, TimeUnit.SECONDS))[1].textValue())
                 assertEquals(RelayReply.Closed, replies.poll(5, TimeUnit.SECONDS))
-                assertEquals(RelayReply.Ok("posted-id", false), replies.poll(5, TimeUnit.SECONDS))
+                assertEquals(RelayReply.Ok("posted-id", false, "blocked: local test"), replies.poll(5, TimeUnit.SECONDS))
                 assertNull(session.subscriptionId)
                 assertNull(session.close())
                 session.disconnect()
