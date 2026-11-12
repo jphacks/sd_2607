@@ -167,6 +167,12 @@ class ExchangeTest {
                 assertTrue(receiver.sessions.isEmpty())
             }
         }
+        // Another Mosimo app on the same phone is not a radio neighbour; isolation leaves it connected.
+        val local = LocalLink(emptyList())
+        val receiver = Exchange(MeshEngine(), "b".repeat(16), { now }, { clock }, allowedPeerNode = expected)
+        receiver.connected(local, "local:1:2")
+        receiver.frame(local, "local:1:2", Wire.encode(Control("hello", node = "d".repeat(16), max = 24_000)))
+        assertEquals("d".repeat(16), receiver.sessions.values.single().peerNode)
     }
 
     @Test fun optionalTestAuthorIsolationDoesNotAdvertiseOrSendUnrelatedStoredPosts() {

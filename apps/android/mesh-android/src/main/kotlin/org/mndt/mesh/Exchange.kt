@@ -81,7 +81,8 @@ internal class Exchange(
     private fun control(s: Session, c: Control) {
         if (c.type == "hello") {
             require(s.peerNode == null) { "Duplicate HELLO" }
-            if (c.node == node || allowedPeerNode != null && c.node != allowedPeerNode) { drop(s); return }
+            // Lab isolation picks the radio neighbour; the phone's other Mosimo apps (LocalLink) stay reachable.
+            if (c.node == node || allowedPeerNode != null && c.node != allowedPeerNode && s.link !is LocalLink) { drop(s); return }
             s.peerNode = c.node; s.peerMax = c.max; s.peerDids = c.didCap
             s.link.identified(s.handle, c.node)
             log("hello from ${c.node} on ${s.link.name}:${s.handle}")
