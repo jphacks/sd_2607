@@ -1,5 +1,5 @@
 ---
-import Layout from "../layouts/Layout.astro";
+import LegalDocument from "./LegalDocument.astro";
 import { Content } from "../content/policy.md";
 
 interface Props {
@@ -13,40 +13,12 @@ interface Props {
 // 本文（第1条以降）と最終改定日は全アプリ共通。アプリ内の同じ文面と揃える。
 const revised = "2026年11月13日";
 const { appName, enacted, image, imageAlt } = Astro.props;
-const title = `「${appName}」プライバシーポリシー`;
 ---
 
-<Layout title={title} description={`「${appName}」における利用者の情報の取扱いについて。`} image={image} imageAlt={imageAlt}>
-  <main class="policy">
-    <h1>{title}</h1>
-    <p>制定日：{enacted}<br />最終改定日：{revised}</p>
-    <p>
-      Team JISAKU（以下「当団体」といいます。）は、当団体が提供するアプリケーション「{appName}」（以下「本アプリ」といいます。）における利用者の情報の取扱いについて、以下のとおりプライバシーポリシー（以下「本ポリシー」といいます。）を定めます。
-    </p>
-    <Content />
-  </main>
-</Layout>
-
-<style lang="scss">
-  .policy {
-    max-width: 850px;
-    margin: auto;
-    padding: 5rem 1.5rem 7rem;
-    line-height: 1.9;
-  }
-  .policy :global(h1) {
-    font-size: clamp(2rem, 5vw, 3.5rem);
-    line-height: 1.3;
-    border-bottom: 3px solid;
-    padding-bottom: 1.5rem;
-  }
-  .policy :global(h2) {
-    font-size: 1.35rem;
-    margin-top: 3rem;
-    border-bottom: 1px solid;
-    padding-bottom: 0.5rem;
-  }
-  .policy :global(a) {
-    overflow-wrap: anywhere;
-  }
-</style>
+<LegalDocument title={`「${appName}」プライバシーポリシー`} description={`「${appName}」における利用者の情報の取扱いについて。`}
+  enacted={enacted} revised={revised} image={image} imageAlt={imageAlt}>
+  <p>
+    Team JISAKU（以下「当団体」といいます。）は、当団体が提供するアプリケーション「{appName}」（以下「本アプリ」といいます。）における利用者の情報の取扱いについて、以下のとおりプライバシーポリシー（以下「本ポリシー」といいます。）を定めます。
+  </p>
+  <Content />
+</LegalDocument>
