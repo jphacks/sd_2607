@@ -291,6 +291,12 @@ bool event(Slice payload, BundleInfo& info, std::string& error, std::string* jso
         }
         if (kind == 8173 && i == 0 && j == 2 && equal(name, "t") && first.compare(0, 18, "mosimo.jisaku.dev/") == 0)
             info.topic = first;
+        // delete §1 / report §1: tags[1] is the `e` target, tags[2] a report's `p` author (both 64 lowercase hex).
+        auto isId = [](const std::string& v) {
+            return v.size() == 64 && std::all_of(v.begin(), v.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+        };
+        if ((kind == 5 || kind == 1984) && i == 1 && j >= 2 && equal(name, "e") && isId(first)) info.target = first;
+        if (kind == 1984 && i == 2 && j >= 2 && equal(name, "p") && isId(first)) info.reported = first;
         if (tags.size() > MAX_JSON_BYTES) { error = "tag JSON size limit"; return false; }
     }
     if (!p.end(tagCount)) { error = "invalid tag list end"; return false; }

@@ -190,7 +190,7 @@ void workOnce(TickType_t wait) {
             std::vector<uint8_t>().swap(job->bytes);
             // pds §6: PLC genesis control events go to the directory, never the relay.
             if (info.kind == 8173 && info.topic == "mosimo.jisaku.dev/plc") { std::string().swap(json); job->delivered = registerPlc(info.text); }
-            else if (info.kind == 1 || info.kind == 5 || (info.kind == 8173 && info.topic == "mosimo.jisaku.dev/revocation")) {
+            else if (info.kind == 1 || info.kind == 5 || info.kind == 1984 || (info.kind == 8173 && info.topic == "mosimo.jisaku.dev/revocation")) {
                 std::string().swap(info.text);
                 job->delivered = upload(info.id, json);
             }

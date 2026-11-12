@@ -17,6 +17,9 @@ struct BundleInfo {
     std::string id, text, pubkey;
     // Second `t` tag of a kind 8173 control event, e.g. "mosimo.jisaku.dev/plc".
     std::string topic;
+    // delete §1 / report §1: the `e` target (lowercase hex event ID) of a kind 5 deletion
+    // request or kind 1984 report, and the reported author (`p`) of a report. Empty otherwise.
+    std::string target, reported;
     uint64_t createdAt = 0;
     // Signed delivery deadline (mosimo:exp) in Unix seconds. Untrusted clock:
     // informational only on this device.

@@ -25,6 +25,7 @@ const char* DIRECTORY = "/mesh";
 const char* TEMP = "/mesh/.incoming";
 const char* SEEN = "/mesh-seen"; // Outside /mesh's bundle slot/file budget.
 constexpr size_t SEEN_LIMIT = 1024, SEEN_RECORD = 36;
+constexpr size_t MAX_DELETIONS = 64, MAX_REPORTS = 128;
 const uint8_t SEEN_HEADER[] = {'M','S','E','E','N','1','\r','\n'};
 
 std::array<uint8_t, 32> idBytes(const std::string& id) {
@@ -110,6 +111,7 @@ bool Relay::begin(std::function<bool(const uint8_t*, size_t)> send,
     resetSession();
     entries_.clear(); fileCount_ = diskBytes_ = 0;
     seen_.clear(); seenHealthy_ = true;
+    deletions_.clear(); reports_.clear();
     send_ = std::move(send); note_ = std::move(callback);
     accepted_ = std::move(accepted);
     if (!send_) { note("relay configuration invalid"); return false; }
@@ -215,6 +217,7 @@ bool Relay::restore() {
     if (LittleFS.exists(TEMP) && !LittleFS.remove(TEMP)) { note("store temp cleanup failed"); return false; }
     File root = LittleFS.open(DIRECTORY, "r");
     if (!root || !root.isDirectory()) { note("store directory unreadable"); return false; }
+    std::vector<BundleInfo> requests; // deletion requests and reports, applied once the scan is complete
     File f = root.openNextFile();
     while (f) {
         size_t size = f.size();
@@ -241,12 +244,65 @@ bool Relay::restore() {
             e.path = std::string(DIRECTORY) + "/" + name;
             e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
             e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
-            e.createdAt = info.createdAt; e.topic = info.topic;
+            e.createdAt = info.createdAt; e.topic = info.topic; e.pubkey = info.pubkey;
             entries_.push_back(std::move(e)); // cold=true; no fabricated received timestamp.
+            if (!info.target.empty()) requests.push_back(std::move(info));
         } else note("invalid store file retained");
         f = root.openNextFile();
     }
     root.close();
+    for (const BundleInfo& info : requests) moderate(info);
+    return true;
+}
+// delete §3 / report §2: record the request, then erase its target if it is now stopped.
+void Relay::moderate(const BundleInfo& info) {
+    if (info.target.empty()) return;
+    if (info.kind == 5) {
+        bool known = false;
+        for (const Deletion& d : deletions_) known = known || (d.target == info.target && d.author == info.pubkey);
+        if (!known) {
+            if (deletions_.size() >= MAX_DELETIONS) deletions_.erase(deletions_.begin());
+            deletions_.push_back({info.target, info.pubkey});
+        }
+    } else if (info.kind == 1984 && info.reported != info.pubkey) {
+        bool known = false;
+        for (const Report& r : reports_) known = known || (r.target == info.target && r.reporter == info.pubkey);
+        if (!known) {
+            if (reports_.size() >= MAX_REPORTS) reports_.erase(reports_.begin());
+            reports_.push_back({info.target, info.pubkey});
+        }
+    } else return;
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        if (entries_[i].id != info.target || !stopped(entries_[i].id, entries_[i].pubkey)) continue;
+        dropEntry(i);
+        return;
+    }
+    // Reported enough before arriving: journal it so it is never requested (deletions wait for the author check).
+    if (reporters(info.target, "") >= REPORT_THRESHOLD && !wasSeen(info.target) && seenHealthy_) rememberEvicted(info.target);
+}
+size_t Relay::reporters(const std::string& id, const std::string& author) const {
+    std::vector<const std::string*> distinct;
+    for (const Report& r : reports_) {
+        if (r.target != id || r.reporter == author) continue;
+        bool seen = false;
+        for (const std::string* p : distinct) seen = seen || *p == r.reporter;
+        if (!seen) distinct.push_back(&r.reporter);
+    }
+    return distinct.size();
+}
+bool Relay::stopped(const std::string& id, const std::string& author) const {
+    for (const Deletion& d : deletions_) if (d.target == id && d.author == author) return true;
+    return reporters(id, author) >= REPORT_THRESHOLD;
+}
+bool Relay::dropEntry(size_t index) {
+    const Entry e = entries_[index];
+    // Journal first, as for eviction: a failed journal keeps the file rather than forgetting the ID.
+    if (!wasSeen(e.id) && !rememberEvicted(e.id)) return false;
+    if (!LittleFS.remove(e.path.c_str())) { note("stopped " + e.id.substr(0, 8) + " but remove failed"); return false; }
+    --fileCount_;
+    diskBytes_ -= e.size;
+    entries_.erase(entries_.begin() + index);
+    note("stopped " + e.id.substr(0, 8) + " (deletion request or reports)");
     return true;
 }
 size_t Relay::victim(uint64_t now) const {
@@ -391,7 +447,7 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
     e.path = path;
     e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
     e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
-    e.createdAt = info.createdAt; e.topic = info.topic;
+    e.createdAt = info.createdAt; e.topic = info.topic; e.pubkey = info.pubkey;
     e.receivedMs = receivedMs; e.cold = false;
     entries_.push_back(std::move(e));
     return true;
@@ -405,11 +461,11 @@ bool Relay::eligible(const Entry& e, uint64_t now) const {
         now - e.receivedMs < MAX_RESIDENCE_MS && now - e.receivedMs < e.lifetime - e.age &&
         e.hop < std::min(e.hopLimit, MAX_HOPS);
 }
-// PDS relay profile (pds §4.2, §6): posts, deletions and revocation notices go
+// PDS relay profile (pds §4.2, §6): posts, deletion requests, reports and revocation notices go
 // to the relay; PLC genesis control events are registered with the directory.
 bool Relay::gatewayProtected(const Entry& e) const {
     return gateway_ && !e.delivered &&
-        (e.kind == 1 || e.kind == 5 ||
+        (e.kind == 1 || e.kind == 5 || e.kind == 1984 ||
          (e.kind == 8173 && (e.topic == "mosimo.jisaku.dev/plc" || e.topic == "mosimo.jisaku.dev/revocation")));
 }
 std::vector<std::string> Relay::gatewayPending() const {
@@ -714,6 +770,14 @@ void Relay::finish() {
         return;
     }
     if (find(info.id)) { remember(peerHas_, info.id); reply(msg::ALREADY_HELD, msg::NONE); return; }
+    // delete §3 / report §2: a stopped target is refused by local policy and never requested again.
+    if (stopped(info.id, info.pubkey)) {
+        if (seenHealthy_ && !wasSeen(info.id)) rememberEvicted(info.id);
+        remember(refused_, info.id);
+        note("refused stopped " + info.id.substr(0, 8));
+        reply(msg::REJECTED, msg::POLICY);
+        return;
+    }
     if (!seenHealthy_ || (fileCount_ >= STORE_FILES && victim(clockMs()) == entries_.size())) {
         reply(msg::REJECTED, msg::RESOURCES);
         return;
@@ -723,6 +787,7 @@ void Relay::finish() {
     reply(msg::STORED, msg::NONE);
     note("saved " + info.id.substr(0, 8) + " kind " + std::to_string(info.kind) + " hop " + std::to_string(info.hop) + " " + std::to_string(t->buffer.size()) + "B");
     if (accepted_) accepted_(info);
+    moderate(info);
 }
 
 void Relay::result(const msg::Message& m) {

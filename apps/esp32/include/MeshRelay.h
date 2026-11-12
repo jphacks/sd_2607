@@ -63,6 +63,12 @@ public:
     // Verified entries may be replaced (cold/expired first, then oldest live);
     // evicted IDs are journaled in /mesh-seen (<=1024) BEFORE eviction so they are
     // not requested again. RESULT "stored" is sent only after save + readback.
+    //
+    // delete §3 / report §2 (local policy): a stored target is erased and journaled as
+    // soon as its author's kind 5 deletion request arrives, or once REPORT_THRESHOLD
+    // distinct reporters sent kind 1984 reports. Later copies are refused (reason 5).
+    // The deletion requests and reports themselves keep being stored and forwarded.
+    static constexpr size_t REPORT_THRESHOLD = 2;
 
 private:
     struct Entry {
@@ -72,9 +78,14 @@ private:
         size_t size = 0;
         bool cold = true;
         uint16_t kind = 0;
-        std::string topic;
+        std::string topic, pubkey;
         bool delivered = false;
     };
+    // RAM-only moderation records, rebuilt from the stored requests on begin().
+    struct Deletion { std::string target, author; };
+    struct Report { std::string target, reporter; };
+    std::vector<Deletion> deletions_;
+    std::vector<Report> reports_;
     struct Request { uint64_t id; std::vector<std::string> open; uint64_t sentMs; };
     struct Pending { std::string id; uint64_t request; };
     struct Outgoing {
@@ -140,6 +151,10 @@ private:
     bool seenFailure(const char* stage);
     bool save(const uint8_t* data, size_t size, const BundleInfo& info, uint64_t receivedMs);
     bool read(const Entry& entry, std::vector<uint8_t>& bytes);
+    void moderate(const BundleInfo& info);
+    size_t reporters(const std::string& id, const std::string& author) const;
+    bool stopped(const std::string& id, const std::string& author) const;
+    bool dropEntry(size_t index);
 
     size_t frameLimit() const;
     void push(std::vector<uint8_t> message);
