@@ -109,6 +109,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private val serverMtu = HashMap<String, Int>()
     // ponytail: backoff keyed by device address; phones rotate private addresses (~15 min), which resets it.
     private val backoff = HashMap<String, Pair<Int, Long>>()
+    // Nodes whose stream we rejected: redialing an incompatible build only repeats the failure and holds its radio.
+    private val incompatible = HashMap<String, Long>()
     /** First time each node was seen; lets the tie-break loser dial when the winner cannot see us. */
     private val firstSeen = HashMap<String, Long>()
     /** mesh.adv: our candidate summary and flags, the last advertised summary per node, and the pair recorded at the last sync. */
@@ -210,6 +212,14 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         }
     }
 
+    override fun rejected(peer: String) {
+        synchronized(lock) {
+            val n = peers[peer]?.node ?: return
+            incompatible[n] = SystemClock.elapsedRealtime() + INCOMPATIBLE_MS
+            Log.i(TAG, "not redialing node $n for ${INCOMPATIBLE_MS / 60_000} min: invalid exchange stream")
+        }
+    }
+
     override fun disconnect(peer: String) {
         safe(Unit) { synchronized(lock) { peers[peer]?.let { drop(it) } } }
     }
@@ -225,6 +235,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         if (ad.node == node || peers.size >= MAX_LINKS || allowedPeerNode != null && ad.node != allowedPeerNode) return
         val now = SystemClock.elapsedRealtime()
         ad.summary?.let { lastAdvertSummary[ad.node] = it }
+        if ((incompatible[ad.node] ?: 0) > now) return
         if (!worthConnecting(ad, lastSynced[ad.node], summary)) return
         val waited = now - firstSeen.getOrPut(ad.node) { now } >= ASYMMETRIC_FALLBACK_MS
         // Visibility can be one-way (one phone's scanner misses the other's advert), so the loser dials too after a wait.
@@ -476,6 +487,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         const val ADVERTISE_RESTART_MIN_MS = 5_000L
         const val MAX_ATTRIBUTE = 512
         private val BACKOFF_MS = longArrayOf(5_000, 30_000, 120_000)
+        private const val INCOMPATIBLE_MS = 600_000L
         private const val TAG = "GattLink"
     }
 }

@@ -26,6 +26,12 @@ public protocol Link: AnyObject {
     func disconnect(_ peer: String)
     /// Reconciliation with [peer] completed; a link may remember the peer's advertised summary to skip idle reconnects (mesh.adv §4).
     func synced(_ peer: String)
+    /// [peer] broke the exchange framing (mesh §7, e.g. a pre-v1 build); a link may stop redialing its node for a while.
+    func rejected(_ peer: String)
+}
+
+public extension Link {
+    func rejected(_ peer: String) {}
 }
 
 /// One link connection's contact state (mesh §4-5).
@@ -182,6 +188,7 @@ public final class Exchange {
         } catch {
             log("reject message from \(s.label): \(error)")
             note("不正・制限超過メッセージを拒否")
+            s.link.rejected(s.handle)
             drop(s)
         }
     }

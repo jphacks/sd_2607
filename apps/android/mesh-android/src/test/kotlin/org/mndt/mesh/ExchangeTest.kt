@@ -33,6 +33,8 @@ private class Wired(val chunk: Int = 20) : Link {
         return true
     }
     override fun disconnect(peer: String) { ends.remove(peer) }
+    val rejected = mutableListOf<String>()
+    override fun rejected(peer: String) { rejected += peer }
 }
 
 class ExchangeTest {
@@ -55,6 +57,16 @@ class ExchangeTest {
         return la to lb
     }
     private fun Node.ids() = engine.entries().map { it.event.id }.toSet()
+
+    @Test fun aPreV1StreamIsRejectedAndReportedToTheLink() {
+        val a = node(); val b = node()
+        val (la, _) = connect(a, b)
+        // A pre-v1 build opens with a 4-byte length prefix: the first CBOR item is the integer 0, not a message array.
+        a.exchange.message(la, "ab", byteArrayOf(0x00))
+        pump()
+        assertEquals(listOf("ab"), la.rejected)
+        assertFalse("ab" in la.ends)
+    }
 
     @Test fun storeCarryForwardReachesANodeThatNeverMetTheAuthor() {
         val a = node(); val b = node(); val c = node()

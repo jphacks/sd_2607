@@ -129,6 +129,7 @@ internal class Exchange(
         } catch (e: Exception) {
             log("reject message from ${s.label}: ${e.message}")
             note("不正・制限超過メッセージを拒否")
+            s.link.rejected(s.handle)
             drop(s)
         }
     }

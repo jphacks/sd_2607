@@ -233,6 +233,31 @@ final class CoreTests: XCTestCase {
     }
 }
 
+/// Records what an exchange tells its link when the peer breaks the stream framing.
+final class Recorder: Link {
+    let name = "rec"
+    var rejected = [String](), disconnected = [String]()
+    func start(node: String, listener: LinkListener) {}
+    func stop() {}
+    func send(_ peer: String, _ message: [UInt8]) -> Bool { true }
+    func queued(_ peer: String) -> Int { 0 }
+    func disconnect(_ peer: String) { disconnected.append(peer) }
+    func synced(_ peer: String) {}
+    func rejected(_ peer: String) { rejected.append(peer) }
+}
+
+final class ExchangeRejectTests: XCTestCase {
+    /// A pre-v1 build opens with a 4-byte length prefix: the first CBOR item is the integer 0, not a message array.
+    func testPreV1StreamIsRejectedAndReportedToTheLink() {
+        let link = Recorder()
+        let ex = Exchange(engine: MeshEngine(), now: { 1_800_000_000_000 }, elapsed: { 0 })
+        ex.connected(link, "p", node: nil)
+        ex.message(link, "p", [0x00])
+        XCTAssertEqual(link.rejected, ["p"])
+        XCTAssertEqual(link.disconnected, ["p"])
+    }
+}
+
 /// Delivers each queued message to the other end until both sides go quiet.
 final class Loopback: Link {
     let name = "loop"

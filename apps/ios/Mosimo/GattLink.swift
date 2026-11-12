@@ -50,6 +50,7 @@ final class GattLink: NSObject, Link {
     static let maxLinks = 7, maxQueue = 64, maxAttribute = 512
     static let connectTimeout: TimeInterval = 15, asymmetricFallback: TimeInterval = 10
     private static let backoffSeconds: [TimeInterval] = [5, 30, 120]
+    private static let incompatibleSeconds: TimeInterval = 600
 
     private final class Peer {
         let handle: String
@@ -88,6 +89,8 @@ final class GattLink: NSObject, Link {
     private var peers = [String: Peer]()
     // ponytail: backoff keyed by CoreBluetooth peripheral UUID, which is stable per pairing of devices.
     private var backoff = [UUID: (Int, Date)]()
+    // Nodes whose stream we rejected: redialing an incompatible build only repeats the failure and holds its radio.
+    private var incompatible = [String: Date]()
     /// First time each peer was seen; lets the tie-break loser (or a node-less background peer) dial after a wait.
     private var firstSeen = [String: Date]()
     /// mesh.adv: our candidate summary, the last advertised summary per node, and the pair recorded at the last sync.
@@ -149,6 +152,14 @@ final class GattLink: NSObject, Link {
 
     func queued(_ peer: String) -> Int { queue.sync { peers[peer]?.out.count ?? 0 } }
 
+    func rejected(_ peer: String) {
+        queue.async { [self] in
+            guard let n = peers[peer]?.node else { return }
+            incompatible[n] = Date().addingTimeInterval(Self.incompatibleSeconds)
+            trace("not redialing node \(n) for \(Int(Self.incompatibleSeconds / 60)) min: invalid exchange stream")
+        }
+    }
+
     func synced(_ peer: String) {
         queue.async { [self] in
             guard let n = peers[peer]?.node, let s = lastAdvertSummary[n] else { return }
@@ -206,6 +217,7 @@ final class GattLink: NSObject, Link {
         // Node-less (backgrounded iOS) peers are dialed too; Exchange enforces the lab peer at HELLO.
         if let allowed = allowedPeerNode, let n = ad.node, n != allowed { return }
         if let n = ad.node, let s = ad.summary { lastAdvertSummary[n] = s }
+        if let n = ad.node, let until = incompatible[n], until > Date() { return }
         if let n = ad.node, !worthConnecting(ad, lastSynced: lastSynced[n], ownSummary: summary) { return }
         let key = ad.node ?? peripheral.identifier.uuidString
         let now = Date()

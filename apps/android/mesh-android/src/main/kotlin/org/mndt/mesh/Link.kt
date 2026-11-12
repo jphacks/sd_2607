@@ -33,6 +33,8 @@ internal interface Link {
     fun synced(peer: String) {}
     /** [peer] sent a valid HELLO; LocalLink uses it to tell a Mosimo holder from another app on its port. */
     fun hello(peer: String) {}
+    /** [peer] broke the exchange framing (mesh §7, e.g. a pre-v1 build); a link may stop redialing its node for a while. */
+    fun rejected(peer: String) {}
 }
 
 /**
