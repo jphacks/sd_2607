@@ -2,9 +2,9 @@ import CryptoKit
 import XCTest
 @testable import MosimoCore
 
-/// Ports of the Android bundle-core vectors (SignatureTest, MeshEngineTest) that pin byte-level behaviour.
+/// Ports of the Android bundle-core / mesh-android vectors that pin byte-level behaviour.
 final class CoreTests: XCTestCase {
-    func author() throws -> Author { try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid") }
+    func author(_ n: UInt8 = 3) throws -> Author { try Author(keys: SecretKeys(nostr: key(n), atproto: key(n + 1), plc: key(n + 2)), pdsEndpoint: "https://pds.invalid") }
     let now: Int64 = 1_792_195_200_000
 
     func testBip340VectorZero() throws {
@@ -15,24 +15,26 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(Secp.verifySchnorr(try unhex(sig, 64), [UInt8](repeating: 0, count: 32), try unhex(pub, 32)))
     }
 
-    func testNip01UnicodeAndEscapeVector() throws {
-        let event = NostrEvent(id: "8ccfd0d228af4d6011d9ee15d1829f9d5e8e8708934a078cf120e3f4df242e66",
-            pubkey: "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9", createdAt: 1760000000, kind: 1,
-            tags: [["x", "順序\\\"\n", "\u{08}\t\u{0c}\r\u{01}"], ["t", "mndt-experimental-v1"]],
-            content: "日本語😀 / \" \\ \n\r\t\u{08}\u{0c}\u{00}\u{1f}\u{2028}",
-            sig: "58a034351b44064679259d7bb9fc490f9ab0f23c59c66a40ee2da510d76409e85f237726d4c4b48e3502303a45c0998cacaa5b7c1695fcd9a86984f0937fbe99")
-        XCTAssertTrue(event.verify())
-        XCTAssertEqual(try NostrEvent.fromJson(try event.toJson()), event)
-        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(event)), event)
-        XCTAssertFalse(NostrEvent(id: event.id, pubkey: event.pubkey, createdAt: event.createdAt, kind: 1, tags: event.tags.reversed(), content: event.content, sig: event.sig).verify())
-    }
-
-    func testCborCanonicalRules() throws {
+    func testCborCanonicalRulesAndLenientDecode() throws {
         for bad in ["1801", "9fff", "f90000", "a2616101616102", "0100", "5b7fffffffffffffff", "61ff", "d82a4100"] {
             XCTAssertThrowsError(try CanonicalCbor.decode(try unhex(bad)), bad)
         }
-        XCTAssertThrowsError(try CanonicalCbor.decode([UInt8](repeating: 0x81, count: 18) + [0]))
         XCTAssertEqual(hex(try CanonicalCbor.encode(.map(["aa": .int(1), "b": .int(2)]))), "a261620262616101")
+        // Non-minimal integer heads are accepted only leniently (other implementations' exchange messages).
+        XCTAssertEqual(try CanonicalCbor.decode(try unhex("1801"), canonical: false), .int(1))
+        XCTAssertThrowsError(try CanonicalCbor.decode(try unhex("9fff"), canonical: false))
+    }
+
+    func testCborSequenceCutsArbitraryChunks() throws {
+        let a = try Messages.encode(.want(requestId: 1, ids: [[UInt8](repeating: 7, count: 32)]))
+        let b = try Messages.encode(.data(transferId: 300, fragment: [UInt8](repeating: 1, count: 700)))
+        let stream = a + b
+        var reader = CborSequenceReader(limit: 1024)
+        var out = [[UInt8]]()
+        for chunk in stream.chunked(17) { out += try reader.feed(chunk) }
+        XCTAssertEqual(out, [a, b])
+        var small = CborSequenceReader(limit: 100)
+        XCTAssertThrowsError(try small.feed(Array(b.prefix(10))))
     }
 
     func testMstRootsMatchAtprotoReference() throws {
@@ -46,161 +48,198 @@ final class CoreTests: XCTestCase {
         }
     }
 
-    func testPostRestoresChainsAndCarriesExtensions() throws {
+    func testPostUsesFixedTagOrderAndRestores() throws {
         let a = try author()
-        let ext = [Extensions.origin(Origin(latitudeMicrodegrees: 35_681_236, longitudeMicrodegrees: 139_767_125, accuracyMillimeters: 5000)),
-                   Extensions.validity(endsAt: "2026-10-17T06:00:00Z")]
+        let ext = [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125, acc: 5000)), Extensions.validity(until: "2026-10-17T06:00:00Z")]
         let first = try a.createPost("［安全］本文", nowMillis: now, extensions: ext)
         let tags = first.event.tags
-        XCTAssertEqual(tags.prefix(7).map { $0[0] }, ["t", "mosimo.oriom.dev:version", "mosimo.oriom.dev:commit", "mosimo.oriom.dev:base",
-                                                       "mosimo.oriom.dev:path", "mosimo.oriom.dev:created-at", "mosimo.oriom.dev:delivery-expires-at"])
-        XCTAssertEqual(tags[5][1], "2026-10-17T00:00:00Z")
-        XCTAssertEqual(tags[7][0], "mosimo.oriom.dev:ext:dev.oriom.mosimo.defs#origin")
+        XCTAssertEqual(tags.prefix(6).map { $0[0] }, ["t", "mosimo:v", "mosimo:commit", "mosimo:base", "mosimo:rkey", "mosimo:exp"])
+        XCTAssertEqual(tags[0], ["t", "mosimo.jisaku.dev"])
+        XCTAssertEqual(tags[3][1], "")
+        XCTAssertEqual(tags[5][1], "2026-10-18T00:00:00Z") // default deadline: created + 24 h
+        XCTAssertEqual(tags[6][0], "mosimo:ext:dev.jisaku.mosimo.geo#origin")
         let change = try AtRepository.restore(first.event, atprotoPubkey: a.atprotoPubkey)
         XCTAssertEqual(first.repository.records[change.path], change.recordCid)
-        XCTAssertEqual(Extensions.decode(first.event).origin?.accuracyMillimeters, 5000)
-        let second = try a.createPost("追記", nowMillis: now - 1000, previous: first.repository)
-        XCTAssertEqual(try AtRepository.restore(second.event).applyFromCommit, first.repository.previousCommit)
-        XCTAssertGreaterThan(try AtRepository.restore(second.event).path, change.path)
+        XCTAssertEqual(first.repository.previousCommit, change.commitCid)
+        let second = try a.createPost("二件目", nowMillis: now, previous: first.repository)
+        XCTAssertEqual(second.event.tags[3][1], first.repository.previousCommit)
+        XCTAssertGreaterThan(second.event.tags[4][1], first.event.tags[4][1])
+        let decoded = Extensions.decode(first.event)
+        XCTAssertEqual(decoded.origin, Origin(lat: 35_681_236, lon: 139_767_125, acc: 5000))
+        XCTAssertEqual(decoded.validity, Validity(from: nil, until: "2026-10-17T06:00:00Z"))
         XCTAssertEqual(AtRepository.did(first.event), a.did)
-        XCTAssertEqual(a.did, try author().did)
-        XCTAssertEqual(try AtRepository.plcDid(a.initialOperationJson), a.did)
-        let genesis = try a.createPlcGenesisEvent(nowMillis: now)
-        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(genesis)), genesis)
-        XCTAssertEqual(try MeshEngine().originate(genesis, nowMillis: now, elapsedMillis: 0).event, genesis)
+        // Swapping two base tags breaks the fixed order even with a valid signature.
+        XCTAssertFalse(AtRepository.verifyEnvelope(try resign(a, first.event) { t in t.swapAt(3, 4) }))
     }
 
-    func testIdentityMatchesAndroidDeterministicDid() throws {
-        // ECDSA is RFC 6979 deterministic in both libsecp256k1 builds, so key(3,4,5) yields one genesis and DID.
+    func testMeshPayloadTypesTagsReversibly() throws {
         let a = try author()
-        let op = try Json.parse(a.initialOperationJson)
-        XCTAssertEqual(op.object!.map(\.0), ["type", "rotationKeys", "verificationMethods", "alsoKnownAs", "services", "prev", "sig"])
-        XCTAssertTrue(a.did.hasPrefix("did:plc:"))
-        XCTAssertEqual(a.did.count, 32)
+        let post = try a.createPost("本文", nowMillis: now, extensions: [Extensions.circle(lat: 1, lon: 2, r: 3)]).event
+        let payload = try EventCodec.encode(post)
+        guard let arr = try CanonicalCbor.decode(payload).array, let tags = arr[4].array else { return XCTFail() }
+        // t and mosimo:v omitted; commit/ext bytes, base empty bytes, rkey uint, exp delta.
+        XCTAssertEqual(tags.count, post.tags.count - 2)
+        XCTAssertNotNil(tags[0].array?[1].bytes)
+        XCTAssertEqual(tags[1].array?[1], .bytes([]))
+        XCTAssertNotNil(tags[2].array?[1].int)
+        XCTAssertEqual(tags[3].array?[1], .int(86400))
+        XCTAssertNotNil(tags[4].array?[1].bytes)
+        XCTAssertEqual(try EventCodec.decode(payload), post)
+        // A value that does not round-trip stays a string ("001" is never an integer).
+        let odd = try a.signEvent(4, [["mosimo:rkey", "001"], ["mosimo:commit", "AA=="]], "x", nowMillis: now)
+        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(odd)), odd)
+        let plc = try a.createPlcGenesisEvent(nowMillis: now)
+        XCTAssertEqual(AtRepository.controlTopic(plc), AtRepository.plcTopic)
+        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(plc)), plc)
     }
 
-    func testMeshEngineCarriesAcrossThreeNodesAndLimitsHops() throws {
+    /// delete §1-2: the request carries the commit of the repository without the post, and the next post builds on it.
+    func testDeletionCarriesRemovalCommit() throws {
         let a = try author()
-        let post = try a.createPost("hello", nowMillis: now)
-        let n1 = MeshEngine(clockConfidence: .trusted), n2 = MeshEngine(clockConfidence: .trusted), n3 = MeshEngine(clockConfidence: .trusted)
-        try n1.originate(post.event, nowMillis: now, elapsedMillis: 0)
-        let b1 = try XCTUnwrap(n1.forward(post.event.id, nowMillis: now, elapsedMillis: 1000))
-        let e2 = try XCTUnwrap(try n2.accept(b1, nowMillis: now, elapsedMillis: 50))
-        XCTAssertEqual(e2.hop, 1)
-        let b2 = try XCTUnwrap(n2.forward(post.event.id, nowMillis: now, elapsedMillis: 2000))
-        let e3 = try XCTUnwrap(try n3.accept(b2, nowMillis: now, elapsedMillis: 0))
-        XCTAssertEqual(e3.hop, 2)
-        XCTAssertEqual(try Bundle.unmarshal(b2).age, 1000 + 1950)
-        XCTAssertEqual(n3.inventory(nowMillis: now, elapsedMillis: 0), [post.event.id])
-        XCTAssertEqual(n3.inventory(nowMillis: now + 2 * 86_400_000, elapsedMillis: 0), [])
+        let first = try a.createPost("残す", nowMillis: now)
+        let target = try a.createPost("消す", nowMillis: now + 1, previous: first.repository)
+        let del = try a.createDeletion(target.event, nowMillis: now + 2000, previous: target.repository)
+        XCTAssertEqual(del.event.kind, 5)
+        XCTAssertEqual(del.event.tags.map { $0[0] }, ["t", "e", "k", "mosimo:commit", "mosimo:base", "mosimo:rkey", "mosimo:exp"])
+        let parsed = try XCTUnwrap(AtRepository.deletion(del.event))
+        XCTAssertEqual(parsed.target, target.event.id)
+        XCTAssertEqual(parsed.change?.applyFromCommit, target.repository.previousCommit)
+        let removed = try AtRepository.restore(target.event).path
+        XCTAssertNil(del.repository.records[removed])
+        XCTAssertEqual(del.repository.records.count, 1)
+        // The removal commit's MST root is the root of the remaining records, signed by the atproto key.
+        let commit = try XCTUnwrap(try CanonicalCbor.decode(parsed.change!.commitBytes).map)
+        XCTAssertEqual(commit["data"], .cid(try AtRepository.mstRoot(del.repository.records)))
+        var unsigned = commit; unsigned["sig"] = nil
+        XCTAssertTrue(Secp.verify(commit["sig"]!.bytes!, sha256(try CanonicalCbor.encode(.map(unsigned))), a.atprotoPubkey))
+        let next = try a.createPost("次", nowMillis: now + 3000, previous: del.repository)
+        XCTAssertEqual(next.event.tags[3][1], cid(parsed.change!.commitBytes))
+        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(del.event)), del.event)
+        XCTAssertTrue(DiskState.relayWants(DiskState.pdsRelay, del.event))
+        XCTAssertThrowsError(try author(10).createDeletion(target.event, nowMillis: now, previous: RepositoryState()))
     }
 
-    func testAndroidOriginatedBundleBytesMatchTheVendoredMarshal() throws {
-        // valid_bundle_hex (fixtures.json) is Android's MeshEngine output; re-originating its event must give the same bytes
-        // apart from the source EID, which that fixture fixed to node.example.
-        let f = try fixture("apps/esp32/test_bundle/fixtures.json")
-        let bytes = try unhex(f["valid_bundle_hex"]!.string!)
-        let original = try Bundle.unmarshal(bytes)
-        let event = try EventCodec.decode(original.payloadData!)
-        let engine = MeshEngine()
-        let mine = try Bundle.unmarshal(try engine.originate(event, nowMillis: 0, elapsedMillis: 0).bytes)
-        XCTAssertEqual(mine.blocks, original.blocks)
-        XCTAssertEqual(mine.primary.lifetime, original.primary.lifetime)
-        XCTAssertEqual(mine.primary.flags, original.primary.flags)
+    /// delete §3 and report §2: deletion by the author stops at once; reports stop at two distinct reporters.
+    func testModerationStopsTargets() throws {
+        let a = try author(), b = try author(10), c = try author(20)
+        let post = try a.createPost("対象", nowMillis: now)
+        let m = Moderation()
+        // A stranger's deletion request has no effect.
+        let forged = try b.signEvent(5, [AtRepository.topicTag, ["e", post.event.id], ["k", "1"]], "", nowMillis: now)
+        m.absorb(forged)
+        XCTAssertFalse(m.stopped(post.event))
+        let r1 = try b.createReport(post.event, type: "spam", nowMillis: now)
+        XCTAssertEqual(AtRepository.report(r1)?.type, "spam")
+        m.absorb(r1); m.absorb(try b.createReport(post.event, type: "other", nowMillis: now + 1000))
+        XCTAssertFalse(m.stopped(post.event), "one reporter counts once")
+        let r3 = try c.createReport(post.event, type: "illegal", comment: "理由", nowMillis: now)
+        m.absorb(r3)
+        XCTAssertTrue(m.stopped(post.event) && m.skip(post.event.id))
+        // delete §5: withdrawing a report drops it from the count.
+        m.absorb(try c.createDeletion(r3, nowMillis: now + 2000, previous: RepositoryState()).event)
+        XCTAssertFalse(m.stopped(post.event))
+        XCTAssertThrowsError(try a.createReport(post.event, type: "spam", nowMillis: now))
+        XCTAssertThrowsError(try b.createReport(post.event, type: "bogus", nowMillis: now))
+        let deletion = try a.createDeletion(post.event, nowMillis: now + 1000, previous: post.repository).event
+        m.absorb(deletion)
+        XCTAssertTrue(m.deleted(post.event))
+        XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(r3)), r3)
     }
 
-    func testWireAndFrames() throws {
-        let hello = try Wire.encode(Control(type: "hello", node: "0123456789abcdef", max: 24000))
-        XCTAssertEqual(String(decoding: hello, as: UTF8.self), #"{"v":1,"type":"hello","node":"0123456789abcdef","max":24000,"dids":1}"#)
-        let id = String(repeating: "a", count: 64)
-        let inv = try Wire.encode(Control(type: "inventory", ids: [id], dids: [""]))
-        XCTAssertEqual(try Wire.decode(inv), Control(type: "inventory", ids: [id], dids: [""]))
-        XCTAssertThrowsError(try Wire.decode(Array(#"{"v":1,"type":"want","ids":[],"x":1}"#.utf8)))
-        var reader = FrameReader()
-        let framed = try Frames.encode(hello) + Frames.encode([0x9f, 0xff])
-        var out = [[UInt8]]()
-        for b in framed { out += try reader.feed([b]) }
-        XCTAssertEqual(out, [hello, [0x9f, 0xff]])
-        XCTAssertThrowsError(try reader.feed([0, 0, 0x80, 1]))
+    func testNegentropyFindsSymmetricDifference() throws {
+        var rng = SystemRandomNumberGenerator()
+        func item(_ t: Int64) throws -> Negentropy.Item { try Negentropy.Item(timestamp: t, id: (0..<32).map { _ in UInt8.random(in: 0...255, using: &rng) }) }
+        for (shared, onlyA, onlyB) in [(0, 0, 0), (0, 3, 0), (10, 0, 4), (300, 40, 70), (2000, 1, 1)] {
+            let common = try (0..<shared).map { _ in try item(1_700_000_000 + Int64.random(in: 0..<5000)) }
+            let a = try (0..<onlyA).map { _ in try item(1_700_000_000 + Int64.random(in: 0..<5000)) }
+            let b = try (0..<onlyB).map { _ in try item(42) }
+            for frame in [1000, 4096] {
+                let initiator = try Negentropy(common + a, frameSizeLimit: frame)
+                var msg: [UInt8]? = initiator.initiate()
+                var rounds = 0
+                while let m = msg {
+                    XCTAssertLessThanOrEqual(m.count, frame)
+                    let reply = try Negentropy(common + b, frameSizeLimit: frame).reconcile(m)!
+                    XCTAssertLessThanOrEqual(reply.count, frame)
+                    msg = try initiator.reconcile(reply)
+                    rounds += 1; XCTAssertLessThan(rounds, 500)
+                }
+                XCTAssertEqual(Set(initiator.haveIds), Set(a.map(\.id)))
+                XCTAssertEqual(Set(initiator.needIds), Set(b.map(\.id)))
+            }
+        }
+        // Reference implementation: version 0x61, infinity bound, IdList with 0 IDs.
+        XCTAssertEqual(try Negentropy([]).initiate(), [0x61, 0, 0, 2, 0])
     }
 
-    func testInstantFormatting() {
-        XCTAssertEqual(Instant(epochMillis: 1_792_195_200_000).description, "2026-10-17T00:00:00Z")
-        XCTAssertEqual(Instant(epochMillis: 1_792_195_200_120).description, "2026-10-17T00:00:00.120Z")
-        XCTAssertEqual(Instant.parse("2026-10-17T09:00:00+09:00"), Instant(epochSecond: 1_792_195_200))
-        XCTAssertNil(Instant.parse("2026-02-30T00:00:00Z"))
+    func testMessagesRoundTrip() throws {
+        let id = [UInt8](repeating: 9, count: 32)
+        let all: [Msg] = [
+            .hello(nonce: [1, 2, 3, 4, 5, 6, 7, 8], maxBundleBytes: 65536, routes: 3, initialCredit: 4096, maxMessageBytes: 16384,
+                   extensions: [["$type": .text(Messages.timeHint), "now": .int(1), "confidence": .int(2)]]),
+            .inventory(ids: [id]), .want(requestId: 3, ids: [id]), .begin(transferId: 1, requestId: 3, target: id, length: 10, fragment: [1]),
+            .begin(transferId: 2, requestId: 3, target: id, length: 10, fragment: nil), .data(transferId: 1, fragment: [2, 3]),
+            .credit(transferId: 1, limit: 10), .result(target: .transfer(side: 1, transferId: 1), code: 0, reason: 0),
+            .result(target: .event(side: 0, requestId: 3, id: id), code: 3, reason: 6), .reconcile(id: 0, message: [0x61]), .fetch(requestId: 4, hashes: [id]),
+        ]
+        for m in all { XCTAssertEqual(try Messages.decode(try Messages.encode(m)), m) }
+        XCTAssertEqual(try Messages.decode(try CanonicalCbor.encode(.array([.int(99), .int(1)]))), .unknown(type: 99))
+        XCTAssertThrowsError(try Messages.decode(try CanonicalCbor.encode(.array([.int(1), .array([.bytes(id), .bytes(id)])]))))
     }
 
-    func testPdsGetsOnlyPostsAndDeletions() {
-        XCTAssertTrue(DiskState.relayWants(DiskState.pdsRelay, kind: 1))
-        XCTAssertTrue(DiskState.relayWants(DiskState.pdsRelay, kind: 5))
-        XCTAssertFalse(DiskState.relayWants(DiskState.pdsRelay, kind: 4))
-        XCTAssertFalse(DiskState.relayWants(DiskState.pdsRelay, kind: 0))
-        XCTAssertTrue(DiskState.relayWants("wss://nos.lol", kind: 4))
+    /// Two exchanges over an in-memory link: HELLO → RECONCILE → WANT/INVENTORY → BEGIN/DATA/CREDIT → RESULT, both ways,
+    /// with a 1 KiB peer message limit and a small initial credit so CREDIT and multi-fragment DATA are exercised.
+    func testExchangeLoopbackSyncsBothWays() throws {
+        let clock = { self.now }
+        let x = MeshEngine(clockConfidence: .trusted), y = MeshEngine(clockConfidence: .trusted)
+        let a = try author(3), b = try author(10)
+        var repo = RepositoryState()
+        for i in 0..<5 {
+            let p = try a.createPost(String(repeating: "あ", count: 400) + "\(i)", nowMillis: now + Int64(i), previous: repo)
+            repo = p.repository
+            try x.originate(p.event, nowMillis: now, elapsedMillis: 0)
+        }
+        try y.originate(try b.createPost("Bから", nowMillis: now).event, nowMillis: now, elapsedMillis: 0)
+        try x.originate(try a.createDeletion(x.entries()[0].event, nowMillis: now, previous: repo).event, nowMillis: now, elapsedMillis: 0)
+        let link = Loopback()
+        let ex = Exchange(engine: x, now: clock, elapsed: { 0 }, messageLimit: 1024, initialCredit: 512)
+        let ey = Exchange(engine: y, now: clock, elapsed: { 0 }, messageLimit: 4096, initialCredit: 0)
+        link.ends = [("x", ex), ("y", ey)]
+        ex.connected(link, "x", node: nil); ey.connected(link, "y", node: nil)
+        link.run()
+        XCTAssertEqual(Set(x.entries().map(\.event.id)), Set(y.entries().map(\.event.id)))
+        XCTAssertEqual(y.entries().count, 7)
+        XCTAssertEqual(x.summary(nowMillis: now, elapsedMillis: 0), y.summary(nowMillis: now, elapsedMillis: 0))
+    }
+
+    private func resign(_ a: Author, _ e: NostrEvent, _ edit: (inout [[String]]) -> Void) throws -> NostrEvent {
+        var tags = e.tags; edit(&tags)
+        let digest = sha256(nostrSigningBytes(e.pubkey, e.createdAt, e.kind, tags, e.content))
+        return NostrEvent(id: hex(digest), pubkey: e.pubkey, createdAt: e.createdAt, kind: e.kind, tags: tags, content: e.content,
+                          sig: hex(try Secp.signSchnorr(digest, a.keys.nostr)))
     }
 }
 
-final class StoreTests: XCTestCase {
-    func testEncryptedStoreRoundTripsStateAndBundles() throws {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("mosimo-\(UUID().uuidString).aesgcm")
-        defer { try? FileManager.default.removeItem(at: file) }
-        let secret = SymmetricKey(size: .bits256)
-        let store = EncryptedStore(file: file) { secret }
-        let a = try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid")
-        var state = DiskState(keys: a.keys, pdsEndpoint: "https://pds.oriom.dev")
-        let post = try a.createPost("保存", nowMillis: 1_792_195_200_000)
-        state.repository = post.repository
-        state.blockedDids = ["did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"]
-        state.relayAccepted = [DiskState.pdsRelay: [post.event.id]]
-        let engine = MeshEngine()
-        let entry = try engine.originate(post.event, nowMillis: 1_792_195_200_000, elapsedMillis: 5)
-        try store.save(state, [entry], bootTime: 42)
-        let loaded = try XCTUnwrap(try store.load())
-        XCTAssertEqual(loaded.keys.nostr, a.keys.nostr)
-        XCTAssertEqual(loaded.repository, post.repository)
-        XCTAssertEqual(loaded.blockedDids, state.blockedDids)
-        XCTAssertEqual(loaded.relayAccepted, state.relayAccepted)
-        XCTAssertEqual(loaded.bundles.first?.bytes, entry.bytes)
-        XCTAssertEqual(loaded.bundles.first?.downtime(currentBoot: 42, elapsed: 105), 100)
-        XCTAssertNotNil(try MeshEngine().restore(loaded.bundles[0].bytes, receivedAtMillis: 0, nowMillis: 0, elapsedMillis: 0))
-        XCTAssertThrowsError(try EncryptedStore(file: file) { SymmetricKey(size: .bits256) }.load())
-    }
-
-    func testShippedTrustAssetParses() throws {
-        let config = try PublicIngress.config(try fixture("apps/android/mesh-android/src/main/assets/mosimo-public-trust.json").serialized)
-        XCTAssertEqual(config.roots.filter(\.enabled).count, 1)
-        XCTAssertEqual(config.selected.count, 28)
-    }
-
-    func testRelaySubscriptionKeepsOnlyVerifiedTaggedEvents() throws {
-        let a = try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid")
-        let event = try a.createPost("relay", nowMillis: 1_792_195_200_000).event
-        let json = try event.toJson()
-        let sub = RelaySubscription()
-        let req = try XCTUnwrap(sub.open(7))
-        XCTAssertTrue(req.hasPrefix(##"["REQ","mndt-7",{"kinds":[1],"#t":["mosimo.oriom.dev"],"limit":32}"##))
-        XCTAssertEqual(try sub.receive(7, #"["EVENT","mndt-7",\#(json)]"#, 0), .event(event))
-        XCTAssertNil(try sub.receive(7, #"["EVENT","mndt-7",\#(json)]"#, 1))
-        XCTAssertEqual(try sub.receive(7, #"["OK","\#(event.id)",true,""]"#, 2), .ok(id: event.id, accepted: true))
-        XCTAssertEqual(try sub.receive(7, #"["EOSE","mndt-7"]"#, 3), .eose)
-        XCTAssertEqual(sub.events(), [event])
-    }
-
-    func testContentFilterNormalizesWidthCaseAndKana() throws {
-        let filter = ContentFilter(base64: try JSONEncoder().encode(["テスト語", "abc"]).base64EncodedString())
-        XCTAssertTrue(filter.blocks("ＡＢＣ"))
-        XCTAssertTrue(filter.blocks("それは てすと語 です"))
-        XCTAssertTrue(filter.blocks("ﾃｽﾄ語"))
-        XCTAssertFalse(filter.blocks("テスト"))
-    }
-
-    func testShippedContentFilterDecodesAndSparesDisasterPosts() throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../..").standardized
-        let filter = ContentFilter(base64: try String(contentsOf: root.appendingPathComponent("apps/ios/Mosimo/blocked-words.b64"), encoding: .utf8))
-        XCTAssertFalse(filter.words.isEmpty)
-        XCTAssertFalse(filter.blocks("パチンコ店の駐車場が冠水"))
-        XCTAssertFalse(filter.blocks("Mizu ga arimashita. Hanashite kudasai"))
-        XCTAssertFalse(filter.blocks("問い合わせが殺到しています"))
-        XCTAssertFalse(filter.blocks("［避難所］水がたりていません"))
+/// Delivers each queued message to the other end until both sides go quiet.
+final class Loopback: Link {
+    let name = "loop"
+    var ends = [(String, Exchange)]()
+    private var queue = [(String, [UInt8])]()
+    func start(node: String, listener: LinkListener) {}
+    func stop() {}
+    func send(_ peer: String, _ message: [UInt8]) -> Bool { queue.append((peer, message)); return true }
+    func queued(_ peer: String) -> Int { 0 }
+    func disconnect(_ peer: String) { XCTFail("disconnected \(peer)") }
+    func synced(_ peer: String) {}
+    func run() {
+        var steps = 0
+        while !queue.isEmpty {
+            let (from, message) = queue.removeFirst()
+            let (to, ex) = ends.first { $0.0 != from }!
+            ex.message(self, to, message)
+            steps += 1
+            if steps > 10_000 { XCTFail("no convergence"); return }
+            if queue.isEmpty { for (h, e) in ends { e.drained(self, h) } }
+        }
     }
 }

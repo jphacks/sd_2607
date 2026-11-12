@@ -38,20 +38,23 @@ final class MapModel: ObservableObject {
 
     func publish(_ mesh: MeshCoordinator, fix: CLLocation?, address: String?) {
         guard let c = category, let point = picked ?? fix?.coordinate else { return }
-        // Manual points carry no accuracy; a fix carries its own.
-        let accuracy = picked == nil && (fix?.horizontalAccuracy ?? -1) >= 0 ? Int64((fix!.horizontalAccuracy * 1000).rounded()) : nil
         let ends = Int64(Date().timeIntervalSince1970) + Int64(hours) * 3600
         let detailText = detail.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = c.prefix + (detailText.isEmpty ? (picked == nil ? address ?? "" : "") : detailText)
-        var ext = [Extensions.origin(Origin(latitudeMicrodegrees: micro(point.latitude), longitudeMicrodegrees: micro(point.longitude), accuracyMillimeters: accuracy))]
-        if radius > 0 {
-            ext.append(Extensions.circle(latitudeMicrodegrees: micro(point.latitude), longitudeMicrodegrees: micro(point.longitude), radiusMillimeters: Int64(radius) * 1000))
+        var ext = [[String: Cbor]]()
+        // geo §1: #origin is where this device is; a point picked on the map is what the post is about, so it goes into #area.
+        if picked == nil, let fix {
+            ext.append(Extensions.origin(Origin(lat: micro(point.latitude), lon: micro(point.longitude),
+                                                acc: fix.horizontalAccuracy >= 0 ? Int64((fix.horizontalAccuracy * 1000).rounded()) : nil)))
         }
-        ext.append(Extensions.validity(endsAt: Instant(epochSecond: ends).description))
+        let areaMeters = radius > 0 ? radius : picked != nil ? 200 : 0
+        if areaMeters > 0 { ext.append(Extensions.circle(lat: micro(point.latitude), lon: micro(point.longitude), r: Int64(areaMeters) * 1000)) }
+        // validity is independent of the delivery deadline, which keeps the app default.
+        ext.append(Extensions.validity(until: Instant(epochSecond: ends).description))
         sentAttempt = mesh.state.publishAttempt
         sentId = mesh.state.lastPublishedId
         sending = true
-        mesh.publish(text, extensions: ext, deliveryExpiresAtSeconds: ends)
+        mesh.publish(text, extensions: ext)
     }
 
     /// The coordinator bumps publishAttempt once per attempt; a new lastPublishedId means it was signed and stored.

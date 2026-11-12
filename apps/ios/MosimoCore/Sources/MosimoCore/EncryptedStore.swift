@@ -18,8 +18,14 @@ public struct DiskState: Sendable {
     public static let defaultRelays = [pdsRelay, "wss://relay.damus.io", "wss://nos.lol"]
     public static let maxRelays = 8
     public static let maxBlocked = 1024
-    /// The PDS accepts kinds 1 and 5 only; other kinds (DMs, profiles) still go to general relays.
-    public static func relayWants(_ relay: String, kind: Int) -> Bool { relay != pdsRelay || kind == 1 || kind == 5 }
+    public static let maxRevocations = 4096
+    /// PDS §4.2 / §6 and DM §5: PLC genesis control events stay in the mesh; the PDS relay takes posts, deletion
+    /// requests, reports and revocation notices; general relays take everything else (DMs, profiles) too.
+    public static func relayWants(_ relay: String, _ event: NostrEvent) -> Bool {
+        let topic = AtRepository.controlTopic(event)
+        if event.kind == AtRepository.controlKind && topic != AtRepository.revocationTopic { return false }
+        return relay != pdsRelay || [1, 5, 1984].contains(event.kind) || topic == AtRepository.revocationTopic
+    }
 
     public var keys: SecretKeys
     public var repository = RepositoryState()
@@ -30,10 +36,14 @@ public struct DiskState: Sendable {
     public var plcRegistered = false
     public var pdsEndpoint = "https://pds.invalid"
     public var onlineEnabled = true
-    public var publicTrust = PublicIngress.Memory()
+    /// Import-time importer authorization records by event ID (attest.importer §3).
     public var publicAudit: [String: String] = [:]
-    /// Author DIDs whose events are never stored; never peers or links.
-    public var blockedDids: [String] = []
+    /// Author Nostr public keys whose events are never stored (mesh §10); never peers or links.
+    public var blockedPubkeys: [String] = []
+    /// Verified revocation notices (attest.revocation §6); never rolled back.
+    public var revocations: [Attest.Revocation] = []
+    /// Issuer domain → last successful revocation-list fetch (epoch seconds); the UI's "失効情報の確認時点".
+    public var revocationChecked: [String: Int64] = [:]
 
     public init(keys: SecretKeys, pdsEndpoint: String) { self.keys = keys; self.pdsEndpoint = pdsEndpoint }
 }
@@ -84,19 +94,29 @@ public final class EncryptedStore {
         state.relays = relays.compactMap(\.string)
         state.plcRegistered = n["plcRegistered"]?.bool ?? false
         state.onlineEnabled = n["onlineEnabled"]?.bool ?? true
-        if let trust = n["publicTrust"] {
-            guard trust.keys == ["snapshots", "serials"], let snaps = trust["snapshots"]?.object, snaps.count <= PublicIngress.maxRoots,
-                  let serials = trust["serials"]?.object, serials.count <= PublicIngress.maxSerials else { throw CoreError("Invalid trust history") }
-            state.publicTrust = PublicIngress.Memory(
-                snapshots: Dictionary(try snaps.map { id, v in
-                    guard let s = v.string, let d = Data(base64Encoded: s), (1...32768).contains(d.count) else { throw CoreError("Invalid snapshot") }
-                    return (id, Array(d))
-                }, uniquingKeysWith: { a, _ in a }),
-                serials: Dictionary(try serials.map { id, v in guard let s = v.string else { throw CoreError("Invalid serial") }; return (id, s) },
-                                    uniquingKeysWith: { a, _ in a }))
-        }
         state.publicAudit = Dictionary((n["publicAudit"]?.object ?? []).compactMap { id, v in v.string.map { (id, $0) } }, uniquingKeysWith: { a, _ in a })
-        state.blockedDids = (n["blockedDids"]?.array ?? []).compactMap(\.string)
+        // Pre-overhaul DID blocks are dropped: blocking is now by Nostr key (mesh §10).
+        state.blockedPubkeys = try (n["blockedPubkeys"]?.array ?? []).map { v in
+            guard let s = v.string, (try? unhex(s, 32)) != nil else { throw CoreError("Invalid blocked key") }
+            return s
+        }
+        guard let revocations = (n["revocations"] ?? .array([])).array, revocations.count <= DiskState.maxRevocations else { throw CoreError("Invalid revocations") }
+        state.revocations = try revocations.map { r in
+            func key(_ name: String) throws -> [UInt8] {
+                guard let s = r[name]?.string, s.utf8.count == 64 || s.utf8.count == 66 else { throw CoreError("Invalid revocation key") }
+                return try unhex(s)
+            }
+            guard let issued = r["issuedAt"]?.string.flatMap(Instant.parse), let effective = r["effectiveAt"]?.string.flatMap(Instant.parse),
+                  let id = r["id"]?.string else { throw CoreError("Invalid revocation") }
+            return try Attest.Revocation(id: try unhex(id, 32), issuer: try key("issuer"), subject: try key("subject"), issuedAt: issued, effectiveAt: effective,
+                                         pendingActivation: r["pendingActivation"]?.string.flatMap { Data(base64Encoded: $0) }.map(Array.init),
+                                         pendingSig: r["pendingSig"]?.string.flatMap { Data(base64Encoded: $0) }.map(Array.init))
+        }
+        guard let checked = (n["revocationChecked"] ?? .object([])).object, checked.count <= 64 else { throw CoreError("Invalid revocationChecked") }
+        state.revocationChecked = Dictionary(try checked.map { domain, at in
+            guard domain.utf8.count <= 253, let t = at.int else { throw CoreError("Invalid revocationChecked") }
+            return (domain, t)
+        }, uniquingKeysWith: { a, _ in a })
         return state
     }
 
@@ -109,10 +129,15 @@ public final class EncryptedStore {
             ("previous", state.repository.previousCommit.map { .string($0) } ?? .null), ("lastRev", .int(state.repository.lastRevMicros)),
             ("clockId", .int(Int64(state.repository.clockId))),
             ("publicAudit", .object(state.publicAudit.sorted { $0.key < $1.key }.map { ($0.key, .string($0.value)) })),
-            ("publicTrust", .object([("snapshots", .object(state.publicTrust.snapshots.sorted { $0.key < $1.key }.map { ($0.key, b64($0.value)) })),
-                                     ("serials", .object(state.publicTrust.serials.sorted { $0.key < $1.key }.map { ($0.key, .string($0.value)) }))])),
             ("relays", .array(state.relays.map { .string($0) })),
-            ("blockedDids", .array(state.blockedDids.map { .string($0) })),
+            ("blockedPubkeys", .array(state.blockedPubkeys.map { .string($0) })),
+            ("revocations", .array(state.revocations.map { r in
+                var o: [(String, Json)] = [("id", .string(hex(r.id))), ("issuer", .string(hex(r.issuer))), ("subject", .string(hex(r.subject))),
+                                           ("issuedAt", .string(r.issuedAt.description)), ("effectiveAt", .string(r.effectiveAt.description))]
+                if let a = r.pendingActivation, let sig = r.pendingSig { o += [("pendingActivation", b64(a)), ("pendingSig", b64(sig))] }
+                return .object(o)
+            })),
+            ("revocationChecked", .object(state.revocationChecked.sorted { $0.key < $1.key }.map { ($0.key, .int($0.value)) })),
             ("records", .object(state.repository.records.sorted { $0.key < $1.key }.map { ($0.key, .string($0.value)) })),
             ("bundles", .array(entries.map { .object([("bytes", b64($0.bytes)), ("received", .int($0.receivedAtMillis)),
                                                       ("elapsed", .int($0.receivedElapsedMillis)), ("boot", bootTime.map { .int($0) } ?? .null)]) })),

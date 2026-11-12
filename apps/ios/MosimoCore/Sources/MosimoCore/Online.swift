@@ -8,7 +8,7 @@ public enum RelayReply: Equatable {
 
 /// Serialized by the coordinator. Display cache only: never a MeshEngine ingress or disk store.
 public final class RelaySubscription {
-    // TODO(undecided): demo retrieval filter and local limits, not a shared relay profile.
+    /// PDS §4.3: the discovery topic. Local limits below are not a shared relay profile.
     public static let tag = AtRepository.namespace
     public static let initialLimit = 32
     public static let maxEvents = PublicDownload.maxEvents
@@ -34,7 +34,7 @@ public final class RelaySubscription {
         connection = generation
         eose = false
         if full { return nil }
-        let id = "mndt-\(generation)"
+        let id = "mosimo-\(generation)"
         subscriptionId = id
         return Json.array([.string("REQ"), .string(id), .object([("kinds", .array([.int(1)])), ("#t", .array([.string(Self.tag)])),
                                                                 ("limit", .int(Int64(Self.initialLimit)))])]).serialized
@@ -129,22 +129,27 @@ public enum PublicDownload {
     }
 
     public static func request(_ id: String, priority: Bool, limit: Int = limit, until: Int64? = nil) -> String {
-        var filter: [(String, Json)] = [("kinds", .array([.int(1)])), ("#t", .array([.string("mosimo.oriom.dev")])), ("limit", .int(Int64(limit)))]
+        var filter: [(String, Json)] = [("kinds", .array([.int(1)])), ("#t", .array([.string(AtRepository.namespace)])), ("limit", .int(Int64(limit)))]
         if let until { filter.append(("until", .int(until))) }
         let msg: Json = priority ? .array([.string("MOSIMO-REQ"), .string(id), .object([("order", .string("priority-v1")), ("filter", .object(filter))])])
             : .array([.string("REQ"), .string(id), .object(filter)])
         return msg.serialized
     }
 
-    public static func snapshot(_ root: PublicIngress.Root) async throws -> [UInt8] {
-        guard let url = URL(string: root.snapshotUrl) else { throw CoreError("Invalid snapshot URL") }
+    /// attest.revocation.list §2: default full response bound.
+    public static let maxRevocationListBytes = 1_048_576
+    /// attest.revocation.list §1: `https://D/.well-known/mosimo/attest/revocations` as canonical CBOR, no redirects.
+    public static func revocationList(domain: String) async throws -> [UInt8] {
+        let pattern = try! NSRegularExpression(pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+        try require(matches(pattern, domain) && domain.utf8.count <= 253, "Invalid issuer domain")
+        guard let url = URL(string: "https://\(domain)/.well-known/mosimo/attest/revocations") else { throw CoreError("Invalid issuer domain") }
         var req = URLRequest(url: url)
         req.setValue("application/cbor", forHTTPHeaderField: "Accept")
         let (data, response) = try await NoRedirect.session.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.url?.scheme == "https" else { throw CoreError("Snapshot HTTPS failure") }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.url?.scheme == "https" else { throw CoreError("Revocation list HTTPS failure") }
         let type = http.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased()
-        try require(type == "application/cbor", "Snapshot must be application/cbor")
-        try require(data.count <= 32768, "Snapshot size limit")
+        try require(type == "application/cbor", "Revocation list must be application/cbor")
+        try require(data.count <= maxRevocationListBytes, "Revocation list size limit")
         return Array(data)
     }
 
@@ -213,7 +218,7 @@ public enum PublicDownload {
                 case "EVENT":
                     try require(a.count == 3)
                     let event = try NostrEvent.fromJson(a[2])
-                    try require(event.kind == 1 && event.tags.contains(["t", "mosimo.oriom.dev"]))
+                    try require(event.kind == 1 && event.tags.contains(AtRepository.topicTag))
                     if events[event.id] == nil {
                         let size = try event.toJson().utf8.count
                         try require(events.count < limit && size <= RelaySubscription.maxBytes - total, "Public request capacity")

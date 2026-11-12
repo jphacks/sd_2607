@@ -3,17 +3,24 @@ import Foundation
 import MosimoCore
 import os
 
-/// What a node advertises: Android/ESP32 put an 8-byte node id + flags in Service Data; iOS cannot, so it uses the local name.
+/// What a node advertises (mesh §3.1 + mesh.adv §1): Android/ESP32 put an 8-byte node id, flags and optionally the
+/// 3-byte candidate summary with extension flags in Service Data; iOS cannot, so it uses the local name.
 struct GattAdvert: Equatable {
     let node: String?
     let peripheralOnly: Bool
     /// Android/ESP32 only dial peers whose Service Data they can read, so they never dial iOS: we must.
     let mustDial: Bool
+    var summary: [UInt8]? = nil
+    var extFlags = 0
+    var urgent: Bool { extFlags & 1 != 0 }
 }
 
 func parseGattAdvert(serviceData: Data?, localName: String?) -> GattAdvert? {
-    if let d = serviceData, d.count >= 9 {
-        return GattAdvert(node: d.prefix(8).map { String(format: "%02x", $0) }.joined(), peripheralOnly: d[d.startIndex + 8] & 1 != 0, mustDial: true)
+    if let data = serviceData, data.count >= 9 {
+        let d = Array(data)
+        let ext = d.count >= 13
+        return GattAdvert(node: d.prefix(8).map { String(format: "%02x", $0) }.joined(), peripheralOnly: d[8] & 1 != 0, mustDial: true,
+                          summary: ext ? Array(d[9..<12]) : nil, extFlags: ext ? Int(d[12]) : 0)
     }
     if let name = localName, name.count == 16, name.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) {
         return GattAdvert(node: name, peripheralOnly: false, mustDial: false)
@@ -22,14 +29,21 @@ func parseGattAdvert(serviceData: Data?, localName: String?) -> GattAdvert? {
     return GattAdvert(node: nil, peripheralOnly: false, mustDial: false)
 }
 
-/// BLE GATT link (mndt §9.1): GATT server + advertiser and scanner + central at once, Android-compatible UUIDs and framing.
-/// Byte streams are [Frames.encode] frames cut into ATT-sized chunks; central writes RX with response, server notifies TX;
-/// one chunk in flight per peer. Peer handles are "c:UUID" (we are central) and "p:UUID" (we are server).
+/// mesh.adv §4: skip connecting when the peer's advertised summary and our own summary are both unchanged since the
+/// last reconciliation with that node; an urgent flag (bit0) always permits a connection.
+func worthConnecting(_ peer: GattAdvert, lastSynced: (peer: [UInt8], own: [UInt8])?, ownSummary: [UInt8]) -> Bool {
+    guard let summary = peer.summary, let lastSynced, !peer.urgent else { return true }
+    return !(lastSynced.peer == summary && lastSynced.own == ownSummary)
+}
+
+/// BLE GATT link (mesh §3): GATT server + advertiser and scanner + central at once.
+/// Each direction is the CBOR sequence of exchange messages (mesh §7) cut into min(ATT MTU - 3, 512) chunks: the central
+/// writes RX without response (flow-controlled by canSendWriteWithoutResponse), the server notifies TX. Peer handles are "c:UUID" (we are central) and "p:UUID" (we are server).
 /// All state lives on [queue]; listener calls hop to the main queue.
 final class GattLink: NSObject, Link {
     let name = "ble"
     static let service = CBUUID(string: "b5e89a01-f9da-45c2-9111-2de7a7441d24")
-    /// central -> peripheral, write (with response on Android).
+    /// central -> peripheral, write without response.
     static let rx = CBUUID(string: "483c3867-c832-4c60-9a96-7018059eaf74")
     /// peripheral -> central, notify.
     static let tx = CBUUID(string: "49d60590-c23f-4a0a-a58e-f2f2f606f94d")
@@ -44,7 +58,7 @@ final class GattLink: NSObject, Link {
         var node: String?
         var connected = false
         var chunk = 20
-        var reader = FrameReader()
+        var reader = CborSequenceReader(limit: Exchange.messageLimit)
         var out = [[UInt8]]()
         var offset = 0
         var inFlight = 0
@@ -76,6 +90,12 @@ final class GattLink: NSObject, Link {
     private var backoff = [UUID: (Int, Date)]()
     /// First time each peer was seen; lets the tie-break loser (or a node-less background peer) dial after a wait.
     private var firstSeen = [String: Date]()
+    /// mesh.adv: our candidate summary, the last advertised summary per node, and the pair recorded at the last sync.
+    private var summary = [UInt8](repeating: 0, count: 3)
+    private var lastAdvertSummary = [String: [UInt8]]()
+    private var lastSynced = [String: (peer: [UInt8], own: [UInt8])]()
+    /// Last advert with Service Data per peripheral: a discovery before the scan response arrives lacks it.
+    private var lastAdvert = [UUID: GattAdvert]()
     private let allowedPeerNode: String?
     init(allowedPeerNode: String? = nil) { self.allowedPeerNode = allowedPeerNode }
     /// Called on the main queue whenever radio availability changes.
@@ -112,23 +132,32 @@ final class GattLink: NSObject, Link {
             peripheralManager?.stopAdvertising()
             advertisedNode = nil
             for p in Array(peers.values) { drop(p) }
-            firstSeen.removeAll()
+            firstSeen.removeAll(); lastSynced.removeAll(); lastAdvertSummary.removeAll()
             listener = nil
         }
     }
 
-    func send(_ peer: String, _ frame: [UInt8]) -> Bool {
-        guard let encoded = try? Frames.encode(frame) else { return false }
+    func send(_ peer: String, _ message: [UInt8]) -> Bool {
+        guard !message.isEmpty, message.count <= Messages.maxMessageBytes else { return false }
         return queue.sync {
             guard let p = peers[peer], p.connected, p.out.count < Self.maxQueue else { return false }
-            p.out.append(encoded)
+            p.out.append(message)
             pump(p)
             return peers[peer] === p
         }
     }
 
-    // Inbound (p:) links only learn their node here; without it we would also dial that node after the wait.
-    func identified(_ peer: String, node: String) { queue.async { [self] in peers[peer]?.node = node } }
+    func queued(_ peer: String) -> Int { queue.sync { peers[peer]?.out.count ?? 0 } }
+
+    func synced(_ peer: String) {
+        queue.async { [self] in
+            guard let n = peers[peer]?.node, let s = lastAdvertSummary[n] else { return }
+            lastSynced[n] = (s, summary)
+        }
+    }
+
+    /// mesh.adv: iOS cannot advertise Service Data, so the summary only decides whether we dial (§4).
+    func setSummary(_ value: [UInt8]) { queue.async { [self] in summary = Array(value.prefix(3)) } }
 
     func disconnect(_ peer: String) { queue.async { [self] in if let p = peers[peer] { drop(p) } } }
 
@@ -176,6 +205,8 @@ final class GattLink: NSObject, Link {
         guard running, ad.node != node, peers.count < Self.maxLinks else { return }
         // Node-less (backgrounded iOS) peers are dialed too; Exchange enforces the lab peer at HELLO.
         if let allowed = allowedPeerNode, let n = ad.node, n != allowed { return }
+        if let n = ad.node, let s = ad.summary { lastAdvertSummary[n] = s }
+        if let n = ad.node, !worthConnecting(ad, lastSynced: lastSynced[n], ownSummary: summary) { return }
         let key = ad.node ?? peripheral.identifier.uuidString
         let now = Date()
         let waited = now.timeIntervalSince(firstSeen[key] ?? { firstSeen[key] = now; return now }()) >= Self.asymmetricFallback
@@ -201,16 +232,17 @@ final class GattLink: NSObject, Link {
         p.connected = true
         trace("connected \(p.handle) chunk \(p.chunk)")
         if let id = p.peripheral?.identifier { backoff[id] = nil }
-        emit { [weak self] in if let self { $0.onConnected(self, p.handle) } }
+        let node = p.node
+        emit { [weak self] in if let self { $0.onConnected(self, p.handle, node: node) } }
     }
 
     private func received(_ p: Peer?, _ value: Data?) {
         guard let p, let value else { return }
         connected(p) // a notification can race ahead of our subscription callback
         do {
-            for f in try p.reader.feed(Array(value)) { emit { [weak self] in if let self { $0.onFrame(self, p.handle, f) } } }
+            for m in try p.reader.feed(Array(value)) { emit { [weak self] in if let self { $0.onMessage(self, p.handle, m) } } }
         } catch {
-            trace("bad framing from \(p.handle)"); drop(p)
+            trace("bad CBOR sequence from \(p.handle)"); drop(p)
         }
     }
 
@@ -218,6 +250,7 @@ final class GattLink: NSObject, Link {
         guard p.inFlight != 0 else { return }
         p.offset += p.inFlight; p.inFlight = 0
         if p.offset >= p.out[0].count { p.out.removeFirst(); p.offset = 0 }
+        if p.out.isEmpty { emit { [weak self] in if let self { $0.onDrained(self, p.handle) } } }
         pump(p)
     }
 
@@ -227,10 +260,17 @@ final class GattLink: NSObject, Link {
         let chunk = Data(frame[p.offset..<min(frame.count, p.offset + size)])
         if let peripheral = p.peripheral {
             guard let rx = p.rx else { drop(p); return }
-            p.inFlight = chunk.count
-            peripheral.writeValue(chunk, for: rx, type: rx.properties.contains(.write) ? .withResponse : .withoutResponse)
-            // Without-response writes get no callback; flow control is canSendWriteWithoutResponse.
-            if !rx.properties.contains(.write) { sent(p) }
+            // Mesh §3.3: Write Without Response. Such writes get no callback; flow control is canSendWriteWithoutResponse,
+            // and peripheralIsReady resumes the pump.
+            if rx.properties.contains(.writeWithoutResponse) {
+                guard peripheral.canSendWriteWithoutResponse else { return }
+                p.inFlight = chunk.count
+                peripheral.writeValue(chunk, for: rx, type: .withoutResponse)
+                sent(p)
+            } else {
+                p.inFlight = chunk.count
+                peripheral.writeValue(chunk, for: rx, type: .withResponse)
+            }
         } else if let central = p.central, let pm = peripheralManager, let tx = p.tx ?? txCharacteristic {
             // Notifications have no per-chunk callback: false means the queue is full, retried in isReady.
             if pm.updateValue(chunk, for: tx, onSubscribedCentrals: [central]) { p.inFlight = chunk.count; sent(p) }
@@ -272,7 +312,9 @@ extension GattLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
         let serviceData = (advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data])?[Self.service]
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        guard let ad = parseGattAdvert(serviceData: serviceData, localName: name) else { return }
+        guard var ad = parseGattAdvert(serviceData: serviceData, localName: name) else { return }
+        if ad.mustDial { lastAdvert[peripheral.identifier] = ad } else if ad.node == nil, let known = lastAdvert[peripheral.identifier] { ad = known }
+        if lastAdvert.count > 256 { lastAdvert.removeAll() }
         connect(peripheral, ad)
     }
 
@@ -309,7 +351,7 @@ extension GattLink: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard let p = peer(peripheral) else { return }
         if error == nil && characteristic.isNotifying {
-            // ATT MTU - 3: larger "with response" writes would become prepared writes, which Android refuses.
+            // ATT MTU - 3 (at most 512): larger writes would become prepared writes, which peers refuse.
             p.chunk = peripheral.maximumWriteValueLength(for: .withoutResponse)
             connected(p)
         } else { drop(p) }

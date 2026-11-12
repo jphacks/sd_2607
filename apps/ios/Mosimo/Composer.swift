@@ -42,7 +42,7 @@ struct Composer: View {
                             .font(.titleMedium).foregroundStyle(Mosimo.textPrimary)
                         Text(point == nil ? "地図をタップして投稿する位置を指定してください"
                              : fromFix ? (["GPS"] + (fix!.horizontalAccuracy >= 0 ? ["精度 \(accuracyLabel(fix!.horizontalAccuracy))"] : []) + ["この位置がそのまま付きます"]).joined(separator: "・")
-                             : "地図で指定した位置・この位置がそのまま付きます")
+                             : "地図で指定した位置・この地点の周辺（範囲）として付きます")
                             .font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
                     }
                     Spacer(minLength: 4)

@@ -1,9 +1,11 @@
 import Foundation
 
-// TODO(undecided): local resource policy; destination is the provisional EID proposed in protocol/mndt.md §9.
+/// Mesh §2.2 / §6 limits plus local storage policy (§11 defaults).
 public enum MeshPolicy {
-    public static let destination = "dtn://mosimo.oriom.dev/~post"
-    public static let maxBundleBytes = 24_000
+    public static let destination = "dtn://mosimo.jisaku.dev/~post"
+    /// §6: event payload (the 7-element CBOR array) and whole encoded Bundle.
+    public static let maxPayloadBytes = 32_768
+    public static let maxBundleBytes = 65_536
     // Internal snapshots may grow by at most eight bytes as the CBOR Bundle Age integer grows.
     public static let maxSavedBundleBytes = maxBundleBytes + 8
     public static let maxEntries = 128
@@ -41,8 +43,10 @@ public final class MeshEngine {
     public var relayed: (String) -> Bool = { _ in false }
     /// Local retention policy, independent of mesh forwarding eligibility and relay priority.
     public var canEvict: (StoredBundle) -> Bool = { _ in true }
-    /// Author-DID block filter; refused events are never stored, so they are never advertised or forwarded either.
+    /// Author block filter (mesh §10, by Nostr pubkey); refused events are never stored, so they are never advertised or forwarded either.
     public var admit: (NostrEvent) -> Bool = { _ in true }
+    /// Held but no longer offered or forwarded: author-deleted (core §11) or revoked (attest.chain §4.2) events.
+    public var suppressed: (NostrEvent) -> Bool = { _ in false }
     private var rates = [String: [Int64]]()
     private var sendRates = [String: [Int64]]()
 
@@ -111,6 +115,19 @@ public final class MeshEngine {
         entries().filter { eligible($0, nowMillis, elapsedMillis) }.map(\.event.id)
     }
 
+    /// Mesh §5.5 reconciliation set: forwardable events as `(created_at, id)` items.
+    public func candidates(nowMillis: Int64, elapsedMillis: Int64) -> [Negentropy.Item] {
+        entries().filter { eligible($0, nowMillis, elapsedMillis) }.compactMap { e in
+            (try? unhex(e.event.id, 32)).flatMap { try? Negentropy.Item(timestamp: e.event.createdAt, id: $0) }
+        }
+    }
+
+    /// mesh.adv §2: SHA-256 over the sorted candidate IDs, first 3 bytes.
+    public func summary(nowMillis: Int64, elapsedMillis: Int64) -> [UInt8] {
+        let ids = candidates(nowMillis: nowMillis, elapsedMillis: elapsedMillis).map(\.id).sorted { $0.lexicographicallyPrecedes($1) }
+        return Array(sha256(ids.flatMap { $0 }).prefix(3))
+    }
+
     /// Each retry derives a fresh send view; it never increments the stored hop count.
     public func forward(_ id: String, nowMillis: Int64, elapsedMillis: Int64) -> [UInt8]? {
         guard let entry = stored[id], eligible(entry, nowMillis, elapsedMillis) else { return nil }
@@ -140,6 +157,7 @@ public final class MeshEngine {
         try require(!bundle.blocks.contains { $0.type == 11 || $0.type == 12 }, "BPSec not supported by this profile")
         guard let hop = bundle.hop else { throw CoreError("missing hop count") }
         guard let age = bundle.age else { throw CoreError("missing age") }
+        try require(bundle.payloadData!.count <= MeshPolicy.maxPayloadBytes, "payload size limit")
         let event = try EventCodec.decode(bundle.payloadData!)
         try require(event.verify(), "invalid author signature")
         _ = try expiry(event)
@@ -184,7 +202,8 @@ public final class MeshEngine {
     }
 
     private func eligible(_ entry: StoredBundle, _ nowMillis: Int64, _ elapsedMillis: Int64) -> Bool {
-        guard let bundle = try? parse(entry.bytes, saved: true), let hop = bundle.hop, let age = try? currentAge(entry, elapsedMillis) else { return false }
+        guard !suppressed(entry.event), let bundle = try? parse(entry.bytes, saved: true), let hop = bundle.hop,
+              let age = try? currentAge(entry, elapsedMillis) else { return false }
         return deadline(entry.event, nowMillis: nowMillis) != .expired && hop.count < min(hop.limit, MeshPolicy.maxHops) &&
             age < bundle.primary.lifetime && creationTimeEligible(bundle, nowMillis)
     }

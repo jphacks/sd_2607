@@ -84,12 +84,20 @@ func nostrSigningBytes(_ pubkey: String, _ createdAt: Int64, _ kind: Int, _ tags
     Array(("[0," + quoteJson(pubkey) + "," + String(createdAt) + "," + String(kind) + "," + tagsJson(tags) + "," + quoteJson(content) + "]").utf8)
 }
 
+func expTag(_ deliveryExpiresAtSeconds: Int64) throws -> [String] {
+    let exp = Instant(epochSecond: deliveryExpiresAtSeconds).description
+    try require(matches(AtRepository.secondsTimestamp, exp), "Deadline outside the basic Timestamp form")
+    return [AtRepository.tagExp, exp]
+}
+
 public final class Author: @unchecked Sendable {
     public let keys: SecretKeys
+    /// Derived offline; this is NOT a claim of PLC registration or DID authentication.
     public let did: String
     public let initialOperationJson: String
     public let nostrPubkey: String
-    public let bindingJson: String
+    /// attest.chain binding declaration signed by both keys (data-model map).
+    public let binding: [String: Cbor]
     /// Compressed atproto signing key; what a PDS would read from the DID document.
     public let atprotoPubkey: [UInt8]
 
@@ -98,25 +106,62 @@ public final class Author: @unchecked Sendable {
         (did, initialOperationJson) = try AtRepository.identity(keys, pdsEndpoint)
         nostrPubkey = hex(try Secp.xOnlyPublicKey(keys.nostr))
         atprotoPubkey = try Secp.compressedPublicKey(keys.atproto)
-        bindingJson = try AtRepository.binding(keys, did, nostrPubkey)
+        binding = try AtRepository.binding(keys, did, nostrPubkey)
     }
 
     public func createPost(_ text: String, nowMillis: Int64, previous: RepositoryState = RepositoryState(),
                            deliveryExpiresAtSeconds: Int64? = nil, extensions: [[String: Cbor]] = []) throws -> CreatedPost {
         let expires = deliveryExpiresAtSeconds ?? nowMillis / 1000 + 86400
         try require(nowMillis >= 0 && text.utf8.count <= 16384)
-        try require(expires > nowMillis / 1000 && expires <= 999999999999999, "Invalid delivery deadline")
+        try require(expires > nowMillis / 1000 && expires <= 253402300799, "Invalid delivery deadline")
         let (tags, repository) = try AtRepository.create(keys, did, text, nowMillis, previous, expires, extensions)
         return CreatedPost(event: try sign(1, tags, text, nowMillis), repository: repository)
     }
 
-    /// 0001 §1.1.1 exception path: the signed genesis operation as its own control event, never inside posts,
-    /// for online nodes to submit unchanged. Only the signed delivery deadline the mesh requires is added.
+    /// PDS §6: the signed genesis operation as its own control event, never inside posts, for online nodes to
+    /// submit unchanged. Tags: protocol topic, `mosimo.jisaku.dev/plc`, and the signed delivery deadline.
     public func createPlcGenesisEvent(nowMillis: Int64, deliveryExpiresAtSeconds: Int64? = nil) throws -> NostrEvent {
         let expires = deliveryExpiresAtSeconds ?? nowMillis / 1000 + 86400
-        try require(nowMillis >= 0 && expires > nowMillis / 1000 && expires <= 999999999999999)
-        let tags = [[AtRepository.tagPrefix + "delivery-expires-at", Instant(epochSecond: expires).description]]
-        return try sign(AtRepository.plcGenesisKind, tags, initialOperationJson, nowMillis)
+        try require(nowMillis >= 0 && expires > nowMillis / 1000)
+        return try sign(AtRepository.controlKind, [AtRepository.topicTag, ["t", AtRepository.plcTopic], try expTag(expires)], initialOperationJson, nowMillis)
+    }
+
+    /// delete §1-2: NIP-09 deletion request for one of this author's events. A post also carries the commit of the
+    /// repository without it, which every later post builds on; the returned state must be saved before sending.
+    public func createDeletion(_ target: NostrEvent, nowMillis: Int64, previous: RepositoryState) throws -> CreatedPost {
+        try require(target.pubkey == nostrPubkey, "Only this author's events can be deleted")
+        let expires = Self.moderationDeadline(target, nowMillis)
+        var tags = [AtRepository.topicTag, ["e", target.id], ["k", String(target.kind)]]
+        var repository = previous
+        if target.kind == 1 {
+            let rkey = try AtRepository.restore(target).path.split(separator: "/").last.map(String.init) ?? ""
+            let (commit, base, next) = try AtRepository.delete(keys, did, rkey, nowMillis, previous)
+            tags += [[AtRepository.tagCommit, B64.encode(commit)], [AtRepository.tagBase, base], [AtRepository.tagRkey, rkey]]
+            repository = next
+        }
+        return CreatedPost(event: try sign(5, tags + [try expTag(expires)], "", nowMillis), repository: repository)
+    }
+
+    /// report §1: NIP-56 report of another author's event; [type] is a NIP-56 report type.
+    public func createReport(_ target: NostrEvent, type: String, comment: String = "", nowMillis: Int64) throws -> NostrEvent {
+        try require(target.pubkey != nostrPubkey, "Own events are not reported")
+        try require(Moderation.reportTypes.contains(type) && comment.utf8.count <= 280, "Invalid report")
+        let tags = [AtRepository.topicTag, ["e", target.id, type], ["p", target.pubkey, type], try expTag(Self.moderationDeadline(target, nowMillis))]
+        return try sign(1984, tags, comment, nowMillis)
+    }
+
+    /// delete §1 / report §1: no earlier than the target's own deadline, else 24 h from now.
+    static func moderationDeadline(_ target: NostrEvent, _ nowMillis: Int64) -> Int64 {
+        max(AtRepository.deliveryExpiresAt(target)?.epochSecond ?? 0, nowMillis / 1000 + 86400)
+    }
+
+    /// Any non-post kind (e.g. another app's DM, kind 4). Only the signed delivery deadline the mesh requires is appended.
+    public func signEvent(_ kind: Int, _ tags: [[String]], _ content: String, nowMillis: Int64, deliveryExpiresAtSeconds: Int64? = nil) throws -> NostrEvent {
+        let expires = deliveryExpiresAtSeconds ?? nowMillis / 1000 + 86400
+        try require(kind != 1, "Use createPost")
+        try require(nowMillis >= 0 && expires > nowMillis / 1000)
+        try require(!tags.contains { $0.first == AtRepository.tagExp }, "Deadline is appended here")
+        return try sign(kind, tags + [try expTag(expires)], content, nowMillis)
     }
 
     private func sign(_ kind: Int, _ tags: [[String]], _ content: String, _ nowMillis: Int64) throws -> NostrEvent {
@@ -128,42 +173,86 @@ public final class Author: @unchecked Sendable {
     }
 }
 
-/// protocol/0012 §4.2 mesh encoding v1: fixed 7-element array with the §4.2 reversible tag-value typing.
+/// Mesh §2.1 CBOR v1 payload: the fixed 7-element array, the §2.1.1 reversible tag-value typing and the §2.1.2
+/// omitted tags. Attestation references (§2.1.3) are not produced or accepted: this node does not announce the
+/// capability, so a payload must arrive fully expanded.
 public enum EventCodec {
-    static let commit = AtRepository.tagPrefix + "commit"
-    static let version = AtRepository.tagPrefix + "version"
+    public static let version: Int64 = 1
     static func bytesTag(_ name: String) -> Bool {
-        name == commit || name.hasPrefix(AtRepository.extPrefix) && name.count > AtRepository.extPrefix.count
+        name == AtRepository.tagCommit || name.hasPrefix(AtRepository.extPrefix) && name.count > AtRepository.extPrefix.count
+    }
+
+    /// The tags a payload omits for this kind; they are reinserted at the front on decode.
+    static func omitted(_ kind: Int) -> [[String]] {
+        switch kind {
+        case 1: return [AtRepository.topicTag, AtRepository.versionTag]
+        case AtRepository.controlKind: return [AtRepository.topicTag]
+        default: return []
+        }
     }
 
     public static func encode(_ event: NostrEvent) throws -> [UInt8] {
         try require(event.verify(), "Invalid Nostr event")
-        let tags: [Cbor] = event.tags.map { tag in
-            if tag.count != 2 { return .array(tag.map { .text($0) }) }
-            if bytesTag(tag[0]) { return .array([.text(tag[0]), B64.decode(tag[1]).map { .bytes($0) } ?? .text(tag[1])]) }
-            if tag[0] == version && tag[1] == "1" { return .array([.text(tag[0]), .int(1)]) }
-            return .array(tag.map { .text($0) })
+        let fixed = omitted(event.kind)
+        try require(Array(event.tags.prefix(fixed.count)) == fixed, "Event does not follow the fixed tag order")
+        let tags: [Cbor] = event.tags.dropFirst(fixed.count).map { tag in
+            tag.count != 2 ? .array(tag.map { .text($0) }) : .array([.text(tag[0]), typed(tag[0], tag[1], event.createdAt)])
         }
-        return try CanonicalCbor.encode(.array([.int(1), .bytes(try unhex(event.pubkey, 32)), .int(event.createdAt), .int(Int64(event.kind)),
+        return try CanonicalCbor.encode(.array([.int(version), .bytes(try unhex(event.pubkey, 32)), .int(event.createdAt), .int(Int64(event.kind)),
                                                 .array(tags), .text(event.content), .bytes(try unhex(event.sig, 64))]))
     }
 
+    /// Mesh §2.1.1: a value is typed only when the typed form restores exactly the original string.
+    static func typed(_ name: String, _ value: String, _ createdAt: Int64) -> Cbor {
+        if bytesTag(name) { return B64.decode(value).map { .bytes($0) } ?? .text(value) }
+        if name == AtRepository.tagBase { return value.isEmpty ? .bytes([]) : Multibase32.decode(value).map { .bytes($0) } ?? .text(value) }
+        if name == AtRepository.tagRkey { return AtRepository.tidValue(value).map { .int(Int64($0)) } ?? .text(value) }
+        if name == AtRepository.tagExp, let delta = expDelta(value, createdAt) { return .int(delta) }
+        return .text(value)
+    }
+    static func expDelta(_ value: String, _ createdAt: Int64) -> Int64? {
+        guard matches(AtRepository.secondsTimestamp, value), let seconds = Instant.parse(value)?.epochSecond else { return nil }
+        let delta = seconds - createdAt
+        return delta >= 0 && expString(createdAt, delta) == value ? delta : nil
+    }
+    static func expString(_ createdAt: Int64, _ delta: Int64) -> String? {
+        let (sum, overflow) = createdAt.addingReportingOverflow(delta)
+        guard !overflow, sum <= 253402300799 else { return nil }
+        let s = Instant(epochSecond: sum).description
+        return matches(AtRepository.secondsTimestamp, s) ? s : nil
+    }
+
     public static func decode(_ bytes: [UInt8]) throws -> NostrEvent {
-        guard let a = try CanonicalCbor.decode(bytes).array, a.count == 7, a[0] == .int(1) else { throw CoreError("Expected payload array") }
-        guard let pub = a[1].bytes, pub.count == 32, let created = a[2].int, let kind = a[3].int, (0...65535).contains(kind),
+        try require(bytes.count <= MeshPolicy.maxPayloadBytes, "payload size limit")
+        // Only the CDDL shape is fixed (mesh §2.1); signed inner bytes (commit, extensions) stay strictly canonical.
+        guard let a = try CanonicalCbor.decode(bytes, canonical: false).array, a.count == 7, a[0] == .int(version) else {
+            throw CoreError("Unsupported mesh encoding version")
+        }
+        guard let pub = a[1].bytes, pub.count == 32, let created = a[2].int, created >= 0, let kind = a[3].int, (0...65535).contains(kind),
               let tagValues = a[4].array, let content = a[5].text, let sig = a[6].bytes, sig.count == 64 else { throw CoreError("Invalid payload") }
         let tags: [[String]] = try tagValues.map { t in
             guard let tag = t.array, let name = tag.first?.text else { throw CoreError("Expected tag array") }
             return try tag.enumerated().map { i, v in
                 if let s = v.text { return s }
-                if i == 1 && tag.count == 2, let b = v.bytes, bytesTag(name) { return B64.encode(b) }
-                if i == 1 && tag.count == 2 && v == .int(1) && name == version { return "1" }
+                guard i == 1 && tag.count == 2 else { throw CoreError("Typed value outside position 1 of a two-element tag") }
+                if let b = v.bytes, bytesTag(name) { return B64.encode(b) }
+                if let b = v.bytes, name == AtRepository.tagBase { return b.isEmpty ? "" : Multibase32.encode(b) }
+                if let n = v.int, n >= 0, name == AtRepository.tagRkey {
+                    let s = AtRepository.tidOf(UInt64(n))
+                    try require(matches(AtRepository.tidPattern, s), "Invalid record key")
+                    return s
+                }
+                if let n = v.int, n >= 0, name == AtRepository.tagExp {
+                    guard let s = expString(created, n) else { throw CoreError("Deadline outside the Timestamp range") }
+                    return s
+                }
                 throw CoreError("Unexpected typed tag value")
             }
         }
         let pubkey = hex(pub)
-        let id = hex(sha256(nostrSigningBytes(pubkey, created, Int(kind), tags, content)))
-        let event = NostrEvent(id: id, pubkey: pubkey, createdAt: created, kind: Int(kind), tags: tags, content: content, sig: hex(sig))
+        let full = omitted(Int(kind)) + tags
+        let id = hex(sha256(nostrSigningBytes(pubkey, created, Int(kind), full, content)))
+        let event = NostrEvent(id: id, pubkey: pubkey, createdAt: created, kind: Int(kind), tags: full, content: content, sig: hex(sig))
         try require(event.verify(), "Invalid Nostr signature")
         return event
     }

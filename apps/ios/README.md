@@ -3,10 +3,10 @@
 SwiftUI port of the Android app (`apps/android`, 0.2.2 feature set) for iOS 17+, iPhone and iPad.
 
 - `MosimoCore/` — Swift package, the protocol core ported from `bundle-core` + the pure parts of `mesh-android`:
-  canonical CBOR, secp256k1 (libsecp256k1 via `swift-secp256k1`), NIP-01 events, atproto record/MST/commit,
-  PLC DID, mesh payload v1 (0012 §4), BPv7 bundles byte-compatible with the vendored dtn7-kotlin,
-  `MeshEngine`, wire-v1 `PublicIngress` (0020), provisional mndt §9 wire (JSON control + BPv7 frames),
-  relay subscription, public-information download, PLC directory, encrypted state file.
+  the `dev.jisaku.mosimo` protocol (`protocol/mosimo`): canonical CBOR, secp256k1 (libsecp256k1 via `swift-secp256k1`),
+  NIP-01 events with the core §7.2 fixed tag order, atproto record/MST/commit, PLC DID, mesh CBOR v1 payload (mesh §2),
+  BPv7 bundles, `MeshEngine`, the mesh §5 exchange messages over CBOR sequences with Negentropy reconciliation,
+  `attest` chains and revocations, importer ingress (`attest.importer`), relay subscription, PLC directory, encrypted state file.
 - `Mosimo/` — the app: SwiftUI screens, `MeshCoordinator` (single main-actor owner of mesh/relay/disk state),
   `GattLink` (Core Bluetooth), `LanLink` (Network.framework Bonjour `_mosimo._tcp` + TCP), location.
 
@@ -36,8 +36,9 @@ xcrun devicectl device process launch --console --terminate-existing --device <u
 
 ## iOS-specific behaviour (vs Android)
 
-- **BLE discovery.** iOS cannot advertise 128-bit Service Data, which Android/ESP32 require before dialing.
-  iOS therefore always dials Android/ESP32 (as central) and advertises its node id as the local name;
+- **BLE discovery.** iOS cannot advertise 128-bit Service Data (node ID + mesh.adv summary), which Android/ESP32 require before dialing.
+  iOS therefore always dials Android/ESP32 (as central), skipping peers whose mesh.adv summary is unchanged since the last sync,
+  and advertises its node id as the local name;
   two iOS devices use the normal tie-break on that name. Android → iOS dialing would need Android to read the
   local name (not changed here).
 - **Background.** No foreground service: `bluetooth-central`/`bluetooth-peripheral` background modes and

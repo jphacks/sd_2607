@@ -54,17 +54,41 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         #endif
         return [gatt, lan]
     }
-    private lazy var exchange = Exchange(engine: engine, node: node, now: { Self.now() }, elapsed: { Self.elapsed() },
+    private lazy var exchange = Exchange(engine: engine, now: { Self.now() }, elapsed: { Self.elapsed() },
         note: { [weak self] in self?.note($0) }, log: { [weak self] text in
             self?.log.info("\(text, privacy: .public)")
             #if DEBUG
             print("[exchange] \(text)")
             #endif
         },
-        allowedPeerNode: allowedPeerNode, blocked: { [weak self] in self?.blocked.contains($0) ?? false },
-        accepted: { [weak self] entry in try self?.persist(); self?.drainRelay(); if entry.event.kind == 1 { self?.received(online: false) } })
+        allowedPeerNode: allowedPeerNode,
+        forwarded: { [weak self] id, peer in self?.forwarded[id, default: []].insert(peer) },
+        accepted: { [weak self] entry in
+            guard let self else { return }
+            self.seenAt[entry.event.id] = self.seenAt[entry.event.id] ?? Instant(epochMillis: Self.now())
+            self.absorbControl(entry.event)
+            try self.persist(); self.drainRelay()
+            if entry.event.kind == 1 { self.received(online: false) }
+        },
+        timeHint: { [weak self] in self?.timeHint() }, onTimeHint: { [weak self] peer, delta, confidence in self?.noteSkew(peer, delta, confidence) },
+        skip: { [weak self] in self?.moderation.skip($0) ?? false })
     private var lastSync: Int64 = 0
-    private var blocked: [String] { disk?.blockedDids ?? [] }
+    private var blocked: [String] { disk?.blockedPubkeys ?? [] }
+    // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
+    private var forwarded = [String: Set<String>]()
+    /// Posts reported from this device in this run (the report events themselves are in the store).
+    private var reported = Set<String>()
+    private var revocations = PublicIngress.RevocationStore()
+    /// Event ID → when this device first observed it; `seenAt` in the revocation rules.
+    private var seenAt = [String: Instant]()
+    private var chainCache = [String: PublicIngress.ChainView?]()
+    private var lastChainFlush: Int64 = 0
+    private var revocationBusy = false
+    private var revocationNext: Int64 = 0
+    private var clockSkews = [ClockSkew]()
+    /// Deletion requests (delete §3) and reports (report §2) seen so far; rebuilt from the store at launch.
+    private let moderation = Moderation()
+    private static let revocationIntervalMs: Int64 = 15 * 60_000
     private var hideExpired: Bool { defaults.object(forKey: "hideExpired") as? Bool ?? true }
     private let filter = ContentFilter(base64: Bundle.main.url(forResource: "blocked-words", withExtension: "b64").flatMap { try? String(contentsOf: $0, encoding: .utf8) })
     private let bootTime = MeshCoordinator.kernelBootTime()
@@ -72,7 +96,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private let pathMonitor = NWPathMonitor()
     private var network = false
 
-    // Public information (0020) download and ingress.
+    // Public information download and importer ingress (attest.importer §3).
     private var publicConfig = PublicIngress.Config()
     private var publicGeneration: Int64 = 0
     private var publicBusy = false
@@ -96,7 +120,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var relayLastAttempt = [String: String]()
     private var didCache = [String: String?]()
 
-    // PLC registration (0001 §1.1.1) and proxy registration of genesis events carried over the mesh.
+    // PLC registration (PDS §6) and proxy registration of genesis events carried over the mesh.
     private var registrationBusy = false
     private var registrationRetryAt: Int64 = 0
     private var registrationFailures = 0
@@ -110,13 +134,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         #endif
         engine.clockConfidence = defaults.object(forKey: "clockTrusted") as? Bool ?? true ? .trusted : .unknown
         engine.relayed = { [unowned self] id in disk?.relayAccepted.values.contains { $0.contains(id) } == true }
-        // Author-DID block: such events never enter the store, so they are never advertised or relayed either.
-        engine.admit = { [unowned self] e in !blocked.contains(AtRepository.did(e) ?? "") }
+        // Author block (mesh §10, by Nostr key): such events never enter the store, so they are never advertised or relayed either.
+        // Stopped targets (deleted by their author, or reported enough) are refused too (delete §3, report §2).
+        engine.admit = { [unowned self] e in !blocked.contains(e.pubkey) && !moderation.stopped(e) }
+        engine.suppressed = { [unowned self] e in moderation.stopped(e) || chainOf(e)?.revocation == .revoked }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
         engine.canEvict = { [unowned self] entry in
             // Kinds the PDS never accepts would otherwise be pinned forever and fill the store.
             entry.event.pubkey != author?.nostrPubkey
-                || (!DiskState.relayWants(DiskState.pdsRelay, kind: entry.event.kind) && entry.event.kind != AtRepository.plcGenesisKind)
+                || !DiskState.relayWants(DiskState.pdsRelay, entry.event)
                 || disk?.relayAccepted[DiskState.pdsRelay]?.contains(entry.event.id) == true
         }
         gatt.onState = { [weak self] on in self?.bluetooth(on) }
@@ -133,9 +159,14 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         #if DEBUG
         // Lab-only: `-mosimo.test.post "text"` publishes one located post at launch (device mesh test loop).
         if let text = defaults.string(forKey: "mosimo.test.post") {
-            publish("［安全］" + text, extensions: [Extensions.origin(Origin(latitudeMicrodegrees: 35_681_236, longitudeMicrodegrees: 139_767_125))],
+            publish("［安全］" + text, extensions: [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125))],
                     deliveryExpiresAtSeconds: Self.now() / 1000 + 3600)
         }
+        // `-mosimo.test.report <id prefix>` / `-mosimo.test.delete <id prefix>` act on a held event.
+        if let p = defaults.string(forKey: "mosimo.test.report"), let e = engine.entries().first(where: { $0.event.id.hasPrefix(p) }) {
+            report(e.event.id, type: "spam", comment: "試験", block: false)
+        }
+        if let p = defaults.string(forKey: "mosimo.test.delete"), let e = engine.entries().first(where: { $0.event.id.hasPrefix(p) }) { delete(e.event.id) }
         #endif
     }
 
@@ -152,6 +183,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             #endif
             disk = saved
             author = try Author(keys: saved.keys, pdsEndpoint: saved.pdsEndpoint)
+            revocations = PublicIngress.RevocationStore(saved.revocations)
             let wall = Self.now(), monotonic = Self.elapsed()
             // One unreadable bundle (e.g. after a policy change) must not take the rest of the store down.
             var lost = 0
@@ -161,6 +193,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
                 catch is BlockedAuthor {} catch { lost += 1 }
             }
             if lost > 0 { note("保存済み Bundle \(lost) 件を読めず破棄") }
+            for e in engine.entries() {
+                seenAt[e.event.id] = seenAt[e.event.id] ?? Instant(epochMillis: e.receivedAtMillis)
+                absorbControl(e.event, quiet: true)
+            }
             try persist(saved)
             note("インストール固有の3鍵・DIDを準備済み")
             reloadPublicConfig()
@@ -220,16 +256,19 @@ final class MeshCoordinator: ObservableObject, LinkListener {
 
     // MARK: LinkListener (links hop to the main queue before calling these)
 
-    nonisolated func onConnected(_ link: Link, _ peer: String) {
-        MainActor.assumeIsolated { if running { exchange.connected(link, peer) } else { link.disconnect(peer) }; refresh() }
+    nonisolated func onConnected(_ link: Link, _ peer: String, node: String?) {
+        MainActor.assumeIsolated { if running { exchange.connected(link, peer, node: node) } else { link.disconnect(peer) }; refresh() }
     }
-    nonisolated func onFrame(_ link: Link, _ peer: String, _ frame: [UInt8]) {
+    nonisolated func onMessage(_ link: Link, _ peer: String, _ message: [UInt8]) {
         MainActor.assumeIsolated {
             guard running else { return }
-            exchange.frame(link, peer, frame)
+            exchange.message(link, peer, message)
             if fatal { stopInternal() }
             refresh()
         }
+    }
+    nonisolated func onDrained(_ link: Link, _ peer: String) {
+        MainActor.assumeIsolated { if running { exchange.drained(link, peer) } }
     }
     nonisolated func onDisconnected(_ link: Link, _ peer: String) {
         MainActor.assumeIsolated { exchange.disconnected(link, peer); refresh() }
@@ -253,14 +292,114 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     func setClockConfidence(_ value: ClockConfidence) {
         defaults.set(value == .trusted, forKey: "clockTrusted")
         // A display-only download under the old clock must not throttle the authorized one.
-        if engine.clockConfidence != value { cancelPublicDownload(); publicNext = 0 }
+        if engine.clockConfidence != value { cancelPublicDownload(); publicNext = 0; chainCache.removeAll() }
         engine.clockConfidence = value
         exchange.broadcastInventory()
         if value == .trusted { requestPublic(manual: false) }
         refresh()
     }
 
-    /// [extensions]: protocol/0011 maps (see [Extensions]); [deliveryExpiresAtSeconds] defaults to 24 h.
+    /// mesh.time §1: our hint, with the confidence the operator's clock setting justifies. Never used as a clock.
+    private func timeHint() -> [String: Cbor] {
+        // iOS keeps network time by default; an operator-trusted clock is "recently synchronized" at best.
+        ["$type": .text(Messages.timeHint), "now": .int(Self.now() / 1000), "confidence": .int(engine.clockConfidence == .trusted ? 2 : 0)]
+    }
+    private func noteSkew(_ peer: String, _ delta: Int64, _ confidence: Int) {
+        clockSkews.removeAll { $0.peer == peer }
+        clockSkews.insert(ClockSkew(peer: peer, deltaSeconds: delta, confidence: confidence), at: 0)
+        if clockSkews.count > 8 { clockSkews.removeLast() }
+        // mesh.time §2: only a warning, never a clock. Two or more confident peers far off hint at our own clock.
+        let suspicious = clockSkews.filter { $0.confidence >= 2 && abs($0.deltaSeconds) > 300 }
+        if suspicious.count >= 2 {
+            note("近隣端末 \(suspicious.count) 台と時刻が\(suspicious.map { abs($0.deltaSeconds) }.max()! / 60)分以上ずれています（時計の確認を推奨）")
+        }
+    }
+
+    /// attest.chain verification, memoized per event; the cache is dropped when roots, revocations or the clock change.
+    private func chainOf(_ event: NostrEvent) -> PublicIngress.ChainView? {
+        if let hit = chainCache[event.id] { return hit }
+        if chainCache.count > 1024 { chainCache.removeAll() }
+        let view = PublicIngress.chainView(event, roots: publicConfig.roots, revocations: revocations,
+                                           now: PublicDownload.ingressClock(engine.clockConfidence, Self.now()),
+                                           seenAt: seenAt[event.id] ?? Instant(epochMillis: Self.now()))
+        chainCache[event.id] = .some(view)
+        return view
+    }
+    /// Applies control data held in the store: deletion requests and reports (delete §3, report §2, recorded even
+    /// before their target arrives) and revocation control events (attest.revocation §5, verified by their inner
+    /// signatures only).
+    private func absorbControl(_ event: NostrEvent, quiet: Bool = false) {
+        if let target = moderation.absorb(event) {
+            if pruneStopped() && !quiet { note("\(event.kind == 5 ? "削除要求" : "報告") により \(target.prefix(8)) の表示・中継を停止") }
+            return
+        }
+        guard let revocation = (try? Attest.revocationOf(event)) ?? nil else { return }
+        if (try? revocations.add(revocation)) == true {
+            chainCache.removeAll()
+            dirty = true
+            if !quiet { note("失効通知を受信・永続保存（配送候補を再評価）") }
+        }
+    }
+
+    /// Erases stopped posts (delete §3, report §2). Our own stays held, hidden and off the mesh, only until the PDS
+    /// has it: the PDS needs it to verify the removal commit and every later post.
+    @discardableResult
+    private func pruneStopped() -> Bool {
+        let me = author?.nostrPubkey
+        let atPds = disk?.relayAccepted[DiskState.pdsRelay] ?? []
+        let removed = engine.remove { moderation.stopped($0.event) && ($0.event.pubkey != me || atPds.contains($0.event.id)) }
+        if removed { dirty = true }
+        return removed
+    }
+
+    /// delete §1-2: asks for deletion of our own post with the commit of the repository without it. Other holders
+    /// may keep copies; this is a request, not erasure.
+    func delete(_ eventId: String) {
+        defer { refresh() }
+        guard !fatal, let me = author, var current = disk else { return }
+        guard let target = engine.entries().first(where: { $0.event.id == eventId })?.event, target.pubkey == me.nostrPubkey else {
+            issue("自分の投稿だけ削除を依頼できます"); return
+        }
+        do {
+            let request = try me.createDeletion(target, nowMillis: Self.now(), previous: current.repository)
+            try engine.originate(request.event, nowMillis: Self.now(), elapsedMillis: Self.elapsed())
+            seenAt[request.event.id] = Instant(epochMillis: Self.now())
+            // The removal commit is the next base: save it before anything leaves the device.
+            current.repository = request.repository
+            try persist(current)
+            absorbControl(request.event)
+        } catch { issue("削除要求を保存できませんでした（容量・発信頻度の制限）"); return }
+        try? persist()
+        note("削除要求を署名・配送 \(eventId.prefix(8))（受信済みの端末から消える保証はありません）")
+        exchange.broadcastInventory()
+        drainRelay()
+    }
+
+    /// report §1: publishes a NIP-56 report of another author's post; [block] also blocks its key on this device.
+    func report(_ eventId: String, type: String, comment: String, block: Bool) {
+        defer { refresh() }
+        guard !fatal, let me = author else { return }
+        let held = engine.entries().first(where: { $0.event.id == eventId })?.event
+        guard let target = held ?? (relaySubscription.events() + publicEvents).first(where: { $0.id == eventId }), target.pubkey != me.nostrPubkey else {
+            issue("この投稿は報告できません"); return
+        }
+        var text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.utf8.count > 280 { text.removeLast() }
+        do {
+            let event = try me.createReport(target, type: type, comment: text, nowMillis: Self.now())
+            try engine.originate(event, nowMillis: Self.now(), elapsedMillis: Self.elapsed())
+            seenAt[event.id] = Instant(epochMillis: Self.now())
+            absorbControl(event)
+            reported.insert(eventId)
+        } catch { issue("報告を保存できませんでした（容量・発信頻度の制限）"); return }
+        try? persist()
+        note("報告を署名・配送 \(eventId.prefix(8))")
+        exchange.broadcastInventory()
+        drainRelay()
+        if block { self.block(target.pubkey) }
+    }
+
+    /// [extensions]: official extension maps (see [Extensions]); [deliveryExpiresAtSeconds] defaults to 24 h.
     func publish(_ text: String, extensions: [[String: Cbor]] = [], deliveryExpiresAtSeconds: Int64? = nil) {
         defer { state.publishAttempt += 1; refresh() }
         do {
@@ -273,6 +412,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
                 issue("投稿の保存容量・配送条件・サイズ・発信頻度の制限に達しました。保存・発信はしていません")
                 return
             }
+            seenAt[post.event.id] = Instant(epochMillis: Self.now())
             // The repository head is saved before anything leaves the device, so a crash cannot reuse a TID/commit.
             current.repository = post.repository
             try persist(current)
@@ -312,25 +452,25 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         note("リレー削除 \(endpoint)")
     }
 
-    /// Hides one author's posts everywhere; their device still relays other authors' posts to us.
-    func block(_ did: String) {
+    /// Hides one author's posts everywhere (mesh §10, by Nostr key); their device still relays other authors' posts to us.
+    func block(_ pubkey: String) {
         defer { refresh() }
-        guard !fatal, var current = disk, did != author?.did, did.hasPrefix("did:plc:"), !current.blockedDids.contains(did),
-              current.blockedDids.count < DiskState.maxBlocked else { return }
-        engine.remove { $0.did == did }
-        current.blockedDids.append(did)
+        guard !fatal, var current = disk, (try? unhex(pubkey, 32)) != nil, pubkey != author?.nostrPubkey,
+              !current.blockedPubkeys.contains(pubkey), current.blockedPubkeys.count < DiskState.maxBlocked else { return }
+        engine.remove { $0.event.pubkey == pubkey }
+        current.blockedPubkeys.append(pubkey)
         try? persist(current)
-        note("ブロック \(did)")
+        note("ブロック \(pubkey.prefix(8))")
         exchange.broadcastInventory()
     }
 
-    func unblock(_ did: String) {
+    func unblock(_ pubkey: String) {
         defer { refresh() }
         guard !fatal, var current = disk else { return }
-        current.blockedDids.removeAll { $0 == did }
+        current.blockedPubkeys.removeAll { $0 == pubkey }
         try? persist(current)
         exchange.forgetRefused()
-        note("ブロック解除 \(did)")
+        note("ブロック解除 \(pubkey.prefix(8))")
     }
 
     func setOnlineEnabled(_ enabled: Bool) {
@@ -358,6 +498,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         if running { return }
         running = true
         for link in links { link.start(node: node, listener: self) }
+        advertiseSummary()
         // DEBUG lab isolation persists across launches; name it, or a later interop test silently finds no peers.
         let lab = [allowedPeerNode.map { "peer \($0) のみ" }, Self.lab("mosimo.test.links").map { "\($0) のみ" }].compactMap { $0 }
         note("BLE・LAN の探索と中継を開始（node \(node)\(lab.isEmpty ? "" : "／ラボ隔離 " + lab.joined(separator: "・"))）")
@@ -371,21 +512,29 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         running = false
         for link in links { link.stop() }
         exchange.clear()
+        clockSkews.removeAll()
         if !onlineAllowed() { goOffline() }
         note("中継を停止。保存済み投稿とリレー設定は保持")
     }
 
+    /// The local trust configuration as shown in settings: roots and the Bot/type pairs selected for ingress.
+    func trustRoots() -> [TrustRoot] {
+        guard let json = Self.trustAsset(), let n = try? Json.parse(json) else { return [] }
+        return (n["roots"]?.array ?? []).compactMap { r in
+            guard let name = r["name"]?.string, let key = r["pubkey"]?.string else { return nil }
+            return TrustRoot(name: name, pubkey: key, roles: (r["roles"]?.array ?? []).compactMap(\.string), enabled: r["enabled"]?.bool == true)
+        }
+    }
+
     func trustSources() -> [TrustSource] {
         guard let json = Self.trustAsset(), let n = try? Json.parse(json) else { return [] }
-        var selected = [String: [String]]()
-        for s in n["selected"]?.array ?? [] { if let d = s["botDid"]?.string, let t = s["type"]?.string { selected[d, default: []].append(t) } }
-        return (n["roots"]?.array ?? []).filter { $0["enabled"]?.bool == true }.flatMap { root -> [TrustSource] in
-            let org = (root["scope"]?["orgIds"]?.array ?? []).compactMap(\.string).joined(separator: " / ")
-            return (root["scope"]?["bsaf"]?.array ?? []).compactMap { bot in
-                guard let did = bot["botDid"]?.string else { return nil }
-                return TrustSource(org: org, botDid: did, types: (bot["types"]?.array ?? []).compactMap(\.string).filter { selected[did]?.contains($0) == true })
-            }
+        var order = [String](), types = [String: [String]]()
+        for s in n["selected"]?.array ?? [] {
+            guard let d = s["botDid"]?.string, let t = s["type"]?.string else { continue }
+            if types[d] == nil { order.append(d) }
+            types[d, default: []].append(t)
         }
+        return order.map { TrustSource(botDid: $0, types: types[$0]!) }
     }
 
     private static func trustAsset() -> String? {
@@ -400,16 +549,25 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         let ids = Set(entries.map(\.event.id))
         clean.publicAudit = clean.publicAudit.filter { ids.contains($0.key) }
         clean.relayAccepted = clean.relayAccepted.filter { clean.relays.contains($0.key) }.mapValues { $0.intersection(ids) }
+        clean.revocations = revocations.all()
         let wall = Self.now(), monotonic = Self.elapsed()
         do {
             try store.save(clean, try entries.map { try engine.checkpoint($0, nowMillis: wall, elapsedMillis: monotonic) }, bootTime: bootTime)
             disk = clean; dirty = false
+            seenAt = seenAt.filter { ids.contains($0.key) }
+            advertiseSummary()
         } catch {
             fatal = true
             stopInternal()
             issue("永続化に失敗。未保存データを送信せず停止しました（再起動が必要）")
             throw error
         }
+    }
+
+    /// mesh.adv: keep the summary we compare against advertised ones in step with the store.
+    private func advertiseSummary() {
+        guard running else { return }
+        gatt.setSummary(engine.summary(nowMillis: Self.now(), elapsedMillis: Self.elapsed()))
     }
 
     private func didOf(_ event: NostrEvent) -> String? {
@@ -448,10 +606,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             case .unknown: return registrationBusy ? "現在状態確認中" : "現在状態不明（オフライン・未設定・未確認）"
             }
         }() + " / PDS 受入・公開未確認"
-        // HELLO-completed peers only, one entry per node: the same phone may be reachable over BLE and LAN (or two BLE links) at once.
+        // HELLO-completed peers only, one entry per peer: the same phone may be reachable over BLE and LAN at once.
         var links = [String: [String]](), nodes = [String]()
-        for session in exchange.sessions {
-            guard let node = session.peerNode else { continue }
+        for session in exchange.sessions where session.ready {
+            let node = session.label
             if links[node] == nil { nodes.append(node) }
             links[node, default: []].append(session.link.name)
         }
@@ -463,7 +621,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             var posts = engine.entries().reversed().filter { $0.event.kind == 1 }.map { e in
                 PostView(id: e.event.id, pubkey: e.event.pubkey, content: e.event.content, hop: e.hop, relayAccepted: acceptedAnywhere(e.event.id),
                          deliveryDeadline: engine.deadline(e.event, nowMillis: now), acceptedBy: accepted.filter { $0.value.contains(e.event.id) }.map(\.key),
-                         publicAuthorization: disk?.publicAudit[e.event.id], did: e.did, createdAt: e.event.createdAt, ext: Extensions.of(e.event))
+                         publicAuthorization: disk?.publicAudit[e.event.id], did: e.did, createdAt: e.event.createdAt, ext: Extensions.of(e.event),
+                         chain: chainOf(e.event))
             }
             let meshIds = Set(posts.map(\.id))
             var seen = Set<String>()
@@ -472,13 +631,24 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             posts += online.reversed().filter { !meshIds.contains($0.id) }.map {
                 PostView(id: $0.id, pubkey: $0.pubkey, content: $0.content, hop: nil, relayAccepted: false,
                          sourceRelay: publicIds.contains($0.id) ? DiskState.pdsRelay : activeRelay, volatile: true,
-                         deliveryDeadline: engine.deadline($0, nowMillis: now), did: didOf($0), createdAt: $0.createdAt, ext: Extensions.of($0))
+                         deliveryDeadline: engine.deadline($0, nowMillis: now), did: didOf($0), createdAt: $0.createdAt, ext: Extensions.of($0),
+                         chain: chainOf($0))
             }
             let hide = hideExpired
-            s.posts = posts.filter { !blocked.contains($0.did ?? "") && !(hide && $0.deliveryDeadline == .expired) && !filter.blocks($0.content) }
+            let stopped = Set(engine.entries().map(\.event).filter(moderation.stopped).map(\.id) + online.filter(moderation.stopped).map(\.id))
+            s.posts = posts.filter { !blocked.contains($0.pubkey) && !stopped.contains($0.id) &&
+                !(hide && $0.deliveryDeadline == .expired) && !filter.blocks($0.content) }
         }
         s.publicBusy = publicBusy
-        s.blockedDids = blocked
+        s.blockedPubkeys = blocked
+        s.roots = publicConfig.roots
+        s.revocationCount = revocations.size
+        s.revocationChecked = disk?.revocationChecked ?? [:]
+        s.clockSkews = clockSkews
+        s.reported = reported
+        let live = Set(engine.entries().map(\.event.id))
+        forwarded = forwarded.filter { live.contains($0.key) }
+        s.forwardedTo = forwarded.mapValues(\.count)
         s.hideExpired = hideExpired
         if s != state { state = s }
     }
@@ -514,6 +684,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         cancelPublicDownload()
         publicGeneration += 1
         publicConfig = PublicIngress.Config()
+        chainCache.removeAll()
         do {
             guard let json = Self.trustAsset() else { throw CoreError("missing asset") }
             publicConfig = try PublicIngress.config(json)
@@ -542,37 +713,21 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         publicGeneration += 1
         let generation = publicGeneration
         let config = publicConfig
-        let startingMemory = disk!.publicTrust
         let confidence = engine.clockConfidence
+        let held = revocations
         state.publicStatus = "PDS relay から priority-v1 取得中…"
         state.publicResults = []
         publicTask = Task.detached(priority: .utility) { [weak self] in
             // Network IO and crypto run off the main actor; results are applied back on it under the generation fence.
-            var snapshots = [String: [UInt8]]()
-            for root in config.roots where root.enabled {
-                if let bytes = try? await PublicDownload.snapshot(root) { snapshots[root.rootId] = bytes }
-            }
             let batch: Result<PublicDownload.Batch, Error>
             do { batch = .success(try await PublicDownload.fetch(token: generation)) } catch { batch = .failure(error) }
             if Task.isCancelled { return }
             let clock = PublicDownload.ingressClock(confidence, MeshCoordinator.now())
-            var memory = startingMemory
-            var failures = [String]()
-            for root in config.roots where root.enabled {
-                if let bytes = snapshots[root.rootId] {
-                    do { memory = try PublicIngress.acceptSnapshot(root, bytes, memory, clock) }
-                    catch { failures.append("snapshot \(root.rootId.prefix(8)): \(error)") }
-                } else { failures.append("snapshot \(root.rootId.prefix(8)): 取得失敗（有効な保存 snapshot のみ利用可）") }
-            }
-            var decisions = [(NostrEvent, PublicIngress.Decision)]()
-            for event in (try? batch.get())?.events ?? [] {
-                let d = PublicIngress.verify(event, config, memory, clock)
-                memory = d.memory
-                decisions.append((event, d))
-            }
+            // Decisions are made against the revocations held at request time; insertion re-checks them.
+            var decisions = ((try? batch.get())?.events ?? []).map { ($0, PublicIngress.verify($0, config, held, clock)) }
             decisions.sort { ($0.1.receipt?.priority ?? min(PublicIngress.priority($0.0), 1)) > ($1.1.receipt?.priority ?? min(PublicIngress.priority($1.0), 1)) }
-            let finalMemory = memory, finalFailures = failures, finalDecisions = decisions
-            await self?.completePublic(generation, batch, finalMemory, finalFailures, finalDecisions, clock == nil)
+            let finalDecisions = decisions
+            await self?.completePublic(generation, batch, finalDecisions, clock == nil)
             guard case .success(let first) = batch else { return }
             let pages = await PublicDownload.more(token: generation, first: first)
             await self?.completePages(generation, first, pages)
@@ -585,19 +740,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             (clockUnknown ? " / 時計 unknown・認可保留" : "")
     }
 
-    private func completePublic(_ generation: Int64, _ batch: Result<PublicDownload.Batch, Error>, _ memory: PublicIngress.Memory,
-                                _ failures: [String], _ decisions: [(NostrEvent, PublicIngress.Decision)], _ clockUnknown: Bool) {
+    private func completePublic(_ generation: Int64, _ batch: Result<PublicDownload.Batch, Error>,
+                                _ decisions: [(NostrEvent, PublicIngress.Decision)], _ clockUnknown: Bool) {
         defer { refresh() }
-        guard generation == publicGeneration, !fatal, onlineAllowed(), var current = disk else { return }
+        guard generation == publicGeneration, !fatal, onlineAllowed(), disk != nil else { return }
         // A successful first batch stays busy while display-only older pages load.
         if case .failure = batch { publicBusy = false; publicTask = nil }
-        // Atomically write high-water, sticky CRL and serial history BEFORE considering any ingress.
-        current.publicTrust = memory
-        guard (try? persist(current)) != nil else { return }
         switch batch {
         case .failure(let e):
             state.publicStatus = "公的情報取得失敗: \(e)"
-            state.publicResults = failures
         case .success(let result):
             let known = Set(publicEvents.map(\.id) + engine.entries().map(\.event.id))
             if result.events.contains(where: { !known.contains($0.id) }) { received(online: true) }
@@ -605,14 +756,18 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             var reports = [String](), imported = 0
             for (event, decision) in decisions {
                 if fatal { break }
-                let insertion = engine.clockConfidence == .trusted ? Instant(epochMillis: Self.now()) : nil
+                let insertion = PublicDownload.ingressClock(engine.clockConfidence, Self.now())
                 let outcome: String
                 if let receipt = decision.receipt {
-                    if !PublicIngress.readyToInsert(receipt, event, disk!.publicTrust, insertion) { outcome = "投入保留: 待機中に証明・snapshot・期限・時計が無効化" }
+                    // importer §3: re-check the whole authorization (incl. revocations learned meanwhile) at insertion.
+                    if !PublicIngress.readyToInsert(receipt, event, insertion) || PublicIngress.verify(event, publicConfig, revocations, insertion).receipt == nil {
+                        outcome = "投入保留: 待機中に証明・失効・期限・時計が無効化"
+                    }
                     else if engine.entries().contains(where: { $0.event.id == event.id }) { outcome = "既存 event ID / 重複投入なし" }
                     else {
                         do {
                             try engine.originate(event, nowMillis: Self.now(), elapsedMillis: Self.elapsed())
+                            seenAt[event.id] = Instant(epochMillis: Self.now())
                             var d = disk!
                             d.publicAudit[event.id] = "取込時の転載者認可（現在の公式認証ではない）: \(receipt)"
                             try persist(d)
@@ -621,10 +776,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
                         } catch { outcome = "通常 mesh 資源制限: \(error)" }
                     }
                 } else { outcome = "投入拒否/保留: \(decision.reason)" }
-                reports.append("\(event.id.prefix(8)) \(outcome)\n\(decision.status)")
+                reports.append("\(event.id.prefix(8)) \(outcome)\n\(decision.chain?.reason ?? decision.reason)")
             }
             state.publicStatus = publicSummary(result.fallback, imported, clockUnknown) + (result.events.count >= PublicDownload.limit ? " / 続きを取得中…" : "")
-            state.publicResults = Array((failures + reports).prefix(40))
+            state.publicResults = Array(reports.prefix(40))
             if imported > 0 { exchange.broadcastInventory(); drainRelay() }
         }
     }
@@ -640,15 +795,61 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         state.publicStatus = publicSummary(first.fallback, 0, engine.clockConfidence != .trusted) + (pages.failure.map { " / 続き取得中断: \($0)" } ?? "")
     }
 
-    // MARK: relay export (mndt §6)
+    /// attest.revocation.list §5: with Internet access, fetch the revocation lists of the issuer domains seen in held
+    /// chains, verify each notice and keep it permanently. A failed fetch keeps the previous state.
+    private func fetchRevocations() {
+        guard !fatal, disk != nil, !revocationBusy, onlineAllowed(), network, Self.elapsed() >= revocationNext else { return }
+        var domains = [String]()
+        for e in engine.entries() {
+            for chain in (try? Attest.chains(e.event)) ?? [] {
+                for a in chain.attestations { if let d = a.issuerDomain, !domains.contains(d) { domains.append(d) } }
+            }
+        }
+        domains = Array(domains.prefix(8))
+        if domains.isEmpty { return }
+        revocationNext = Self.elapsed() + Self.revocationIntervalMs
+        revocationBusy = true
+        Task.detached(priority: .utility) { [weak self] in
+            var fetched = [(String, Result<[Attest.Revocation], Error>)]()
+            for d in domains {
+                do { fetched.append((d, .success(try Attest.revocationList(try await PublicDownload.revocationList(domain: d))))) }
+                catch { fetched.append((d, .failure(error))) }
+            }
+            let results = fetched
+            await self?.completeRevocations(results)
+        }
+    }
+
+    private func completeRevocations(_ fetched: [(String, Result<[Attest.Revocation], Error>)]) {
+        defer { refresh() }
+        revocationBusy = false
+        guard !fatal, var current = disk else { return }
+        var added = 0
+        for (domain, result) in fetched {
+            switch result {
+            case .success(let list):
+                current.revocationChecked[domain] = Self.now() / 1000
+                for r in list where (try? revocations.add(r)) == true { added += 1 }
+            case .failure(let e): note("失効リスト取得失敗 \(domain): \(e)")
+            }
+        }
+        if added > 0 || current.revocationChecked != disk?.revocationChecked {
+            chainCache.removeAll()
+            try? persist(current)
+            if added > 0 { note("失効通知 \(added) 件を取得・永続保存（配送候補を再評価）") }
+        }
+    }
+
+    // MARK: relay export (mesh §12)
 
     private func backoff(_ attempts: Int) -> Int64 { min(1000 << Int64(min(max(attempts, 0), 6)), 60_000) + Int64.random(in: 0..<1000) }
 
-    // Genesis control events stay in the mesh: relays accept only kinds 1 and 5, and online nodes submit them to PLC.
     private func pendingFor(_ relay: String) -> [StoredBundle] {
         guard let d = disk else { return [] }
         let done = d.relayAccepted[relay] ?? []
-        return engine.entries().filter { $0.event.kind != AtRepository.plcGenesisKind && DiskState.relayWants(relay, kind: $0.event.kind) && !done.contains($0.event.id) }
+        // A stopped post (our own, kept for the PDS) goes to the PDS relay only (delete §3).
+        return engine.entries().filter { DiskState.relayWants(relay, $0.event) && !done.contains($0.event.id) &&
+            (relay == DiskState.pdsRelay || !moderation.stopped($0.event)) }
     }
 
     /// Rotate actual attempts so a disconnecting or rejecting first event cannot starve the queue.
@@ -690,7 +891,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         note("リレー未受理。キューを保持し、次のリレーで再試行")
     }
 
-    /// Rotates through the configured relays so every one eventually receives every held event (mndt §6).
+    /// Rotates through the configured relays so every one eventually receives every held event (mesh §12).
     private func drainRelay() {
         guard let current = disk, onlineAllowed(), !current.relays.isEmpty else { return }
         let now = Self.elapsed()
@@ -775,6 +976,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         current.relayAccepted[activeRelay, default: []].insert(id)
         disk = current
         dirty = true
+        pruneStopped()
         relayFailures[activeRelay] = nil
         relayRetryAt[activeRelay] = nil
         relayDeferred[activeRelay]?[id] = nil
@@ -816,14 +1018,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         }
     }
 
-    /// Unregistered with posts held: carry the signed genesis operation as its own control event (0001 §1.1.1).
+    /// Unregistered with posts held: carry the signed genesis operation as its own control event (PDS §6).
     private func originateGenesisIfUnregistered() {
         guard let current = disk, let me = author, !current.plcRegistered, configuredHttps(current.pdsEndpoint) != nil else { return }
         let own = engine.entries().filter { $0.event.pubkey == me.nostrPubkey }
-        if !own.contains(where: { $0.event.kind == 1 }) || own.contains(where: { $0.event.kind == AtRepository.plcGenesisKind }) { return }
+        if !own.contains(where: { $0.event.kind == 1 }) || own.contains(where: { AtRepository.controlTopic($0.event) == AtRepository.plcTopic }) { return }
         // A rate-limited or rejected attempt is retried on a later tick.
         guard let event = try? me.createPlcGenesisEvent(nowMillis: Self.now()),
               (try? engine.originate(event, nowMillis: Self.now(), elapsedMillis: Self.elapsed())) != nil else { return }
+        seenAt[event.id] = Instant(epochMillis: Self.now())
         try? persist()
         note("PLC 未登録のため署名済み初期操作をメッシュで配送（代理登録用）")
         exchange.broadcastInventory()
@@ -833,7 +1036,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private func proxyRegister() {
         guard !fatal, allowRegistration, !proxyBusy, network else { return }
         let clock = Self.elapsed()
-        let candidates = engine.entries().filter { $0.event.kind == AtRepository.plcGenesisKind && $0.event.pubkey != author?.nostrPubkey }
+        let candidates = engine.entries().filter { AtRepository.controlTopic($0.event) == AtRepository.plcTopic && $0.event.pubkey != author?.nostrPubkey }
         guard let (did, operation) = candidates.lazy.compactMap({ e in (try? AtRepository.plcDid(e.event.content)).map { ($0, e.event.content) } })
                 .first(where: { clock >= (self.proxyNext[$0.0]?.1 ?? 0) }) else { return }
         proxyBusy = true
@@ -842,7 +1045,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             let confirmed = await PlcDirectory.check(directory: directory, did: did, genesisJson: operation, previouslyConfirmed: false, allowRegistration: true).genesisConfirmed
             guard let self else { return }
             self.proxyBusy = false
-            // ponytail: per-DID retry forever at most once a minute; add a give-up rule once 0003 defines load limits.
+            // ponytail: per-DID retry forever at most once a minute; add a give-up rule once load limits are defined.
             let failures = confirmed ? 0 : (self.proxyNext[did]?.0 ?? 0) + 1
             self.proxyNext[did] = (failures, confirmed ? Int64.max : Self.elapsed() + self.backoff(failures))
             self.note(confirmed ? "PLC 代理登録: \(did) の初期操作をディレクトリで確認" : "PLC 代理登録: \(did) 未確認。再試行")
@@ -857,13 +1060,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         registerIfConfigured()
         originateGenesisIfUnregistered()
         proxyRegister()
+        fetchRevocations()
         let clock = Self.elapsed()
+        if clock - lastChainFlush >= 60_000 { lastChainFlush = clock; chainCache.removeAll() }
         if relayDeadline > 0 && clock >= relayDeadline { relayFailure() }
         if relayReadDeadline > 0 && clock >= relayReadDeadline { closeRelayRead() }
         drainRelay()
         guard running else { return }
         exchange.dropStale()
-        if clock - lastSync >= 10_000 { lastSync = clock; exchange.broadcastInventory() }
+        if clock - lastSync >= 10_000 { lastSync = clock; exchange.broadcastInventory(); advertiseSummary() }
     }
 }
 

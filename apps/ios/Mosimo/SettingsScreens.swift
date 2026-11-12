@@ -9,7 +9,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         let state = mesh.state
-        let sources = mesh.trustSources()
+        let roots = mesh.trustRoots().filter(\.enabled)
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("設定").font(.titleLarge).foregroundStyle(Mosimo.textPrimary).padding(.top, 16).padding(.bottom, 8)
@@ -17,11 +17,14 @@ struct SettingsScreen: View {
                 Header(text: "通信（もしもプロトコル）")
                 Group_ {
                     SettingRow(icon: "checkmark.shield", tint: Mosimo.safe, title: "公式情報とみなす発信元",
-                               subtitle: unique(sources.map(\.org)).joined(separator: " / ").nilIfEmpty, value: "\(sources.count)件", action: { nav.push(.trust) })
-                    // Release keeps every switch at its default (all on) and hides the developer-facing diagnostics (App Review 2.1).
-                    #if DEBUG
+                               subtitle: roots.map(\.name).joined(separator: " / ").nilIfEmpty ?? "信頼する root 鍵が未設定", value: "\(roots.count)件",
+                               action: { nav.push(.trust) })
                     Line()
-                    SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "オフライン中継・端末時計・リレー・診断", action: { nav.push(.advanced) })
+                    // Release shows only the usage-statistics switch there; the developer-facing switches and diagnostics stay DEBUG-only (App Review 2.1).
+                    #if DEBUG
+                    SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "利用状況・オフライン中継・端末時計・リレー・診断", action: { nav.push(.advanced) })
+                    #else
+                    SettingRow(icon: "slider.horizontal.3", tint: Mosimo.textSecondary, title: "詳細設定", subtitle: "利用状況の送信", action: { nav.push(.advanced) })
                     #endif
                 }
                 Header(text: "あなたの情報")
@@ -29,11 +32,11 @@ struct SettingsScreen: View {
                     SettingRow(icon: "key", tint: Mosimo.primary, title: "署名鍵とID",
                                subtitle: state.ready ? "\(shortDid(state.did.nilIfEmpty, state.publicKey))・端末で安全に保管" : "準備中", action: { nav.push(.identity) })
                     Line()
-                    SettingRow(icon: "nosign", tint: Mosimo.danger, title: "ブロックリスト", value: "\(state.blockedDids.count)件", action: { nav.push(.blocked) })
+                    SettingRow(icon: "nosign", tint: Mosimo.danger, title: "ブロックリスト", value: "\(state.blockedPubkeys.count)件", action: { nav.push(.blocked) })
                 }
                 Header(text: "このアプリについて")
                 Group_ {
-                    SettingRow(icon: "hand.raised", tint: Mosimo.textSecondary, title: "プライバシーポリシー", action: { openURL(policyURL) })
+                    SettingRow(icon: "hand.raised", tint: Mosimo.textSecondary, title: "プライバシーポリシー", action: { nav.push(.policy) })
                     Line()
                     SettingRow(icon: "doc.text", tint: Mosimo.textSecondary, title: "利用規約", action: { nav.push(.terms) })
                     Line()
@@ -233,18 +236,42 @@ private struct NoneText: View {
 struct TrustScreen: View {
     @EnvironmentObject private var mesh: MeshCoordinator
     var body: some View {
-        let sources = mesh.trustSources()
+        let state = mesh.state
+        let roots = mesh.trustRoots(), sources = mesh.trustSources()
         SubScreen(title: "公式情報とみなす発信元") {
-            if sources.isEmpty { NoneText() }
+            Text("信頼の起点はこの端末の設定だけで決まります。受信したデータから追加されることはありません。").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+            Header(text: "信頼する root 鍵 \(roots.filter(\.enabled).count)")
+            if roots.isEmpty { Group_ { NoneText(text: "なし（公的情報の投入は無効）") } }
+            ForEach(roots) { root in
+                Group_ {
+                    SettingRow(icon: "checkmark.shield", tint: root.enabled ? Mosimo.safe : Mosimo.textTertiary, title: root.name,
+                               subtitle: "鍵 \(root.pubkey.prefix(16))…", value: root.enabled ? "有効" : "無効")
+                    Line()
+                    detail("許可する役割: \(root.roles.joined(separator: "・").nilIfEmpty ?? "なし")")
+                }
+            }
+            Header(text: "取り込みを選択した Bot と種別")
+            if sources.isEmpty { Group_ { NoneText() } }
             ForEach(sources) { source in
                 Group_ {
-                    SettingRow(icon: "checkmark.shield", tint: Mosimo.safe, title: source.org.isEmpty ? "発信元" : source.org, subtitle: source.botDid)
+                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.botDid, value: "\(source.types.count)種別")
                     Line()
-                    Text(source.types.map(bsafLabel).joined(separator: "・").nilIfEmpty ?? "選択なし").font(.bodyMedium)
-                        .foregroundStyle(Mosimo.textSecondary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    detail(source.types.map(bsafLabel).joined(separator: "・"))
+                }
+            }
+            Header(text: "失効情報")
+            Group_ {
+                SettingRow(icon: "nosign", tint: Mosimo.textSecondary, title: "保持している失効通知", value: "\(state.revocationCount)件")
+                if !state.revocationChecked.isEmpty {
+                    Line()
+                    detail(state.revocationChecked.sorted { $0.key < $1.key }.map { "\($0.key): \(dateTime($0.value)) に確認" }.joined(separator: "\n"))
                 }
             }
         }
+    }
+
+    private func detail(_ text: String) -> some View {
+        Text(text).font(.bodyMedium).foregroundStyle(Mosimo.textSecondary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -252,13 +279,25 @@ struct TermsScreen: View {
     var body: some View { SubScreen(title: "利用規約") { TermsText().padding(.top, 8) } }
 }
 
+struct PolicyScreen: View {
+    var body: some View { SubScreen(title: "プライバシーポリシー") { PolicyText().padding(.top, 8) } }
+}
+
 struct AdvancedScreen: View {
     @EnvironmentObject private var mesh: MeshCoordinator
     @State private var relay = ""
+    /// Privacy policy §3: anonymous usage statistics, on unless the user turns them off. Nothing is sent yet.
+    @AppStorage(UsageStats.key) private var usageStats = true
 
     var body: some View {
         let state = mesh.state
         SubScreen(title: "詳細設定") {
+            Header(text: "利用状況")
+            Group_ {
+                SwitchRow(icon: "chart.bar", tint: Mosimo.info, title: "利用状況の統計を送信",
+                          subtitle: "個人を識別しない利用状況を送信し、アプリの改善と統計に使います", isOn: $usageStats, id: "settings.usageStats")
+            }
+            #if DEBUG
             Header(text: "通信")
             Group_ {
                 SwitchRow(icon: "arrow.left.arrow.right", tint: Mosimo.info, title: "オフライン中継を有効にする", subtitle: "圏外時に近くの端末と情報を交換",
@@ -293,8 +332,8 @@ struct AdvancedScreen: View {
             }
             Header(text: "表示")
             Group_ {
-                SwitchRow(icon: "eye.slash", tint: Mosimo.info, title: "失効した Nostr イベントを非表示",
-                          subtitle: "配信期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
+                SwitchRow(icon: "eye.slash", tint: Mosimo.info, title: "配送期限を過ぎた投稿を非表示",
+                          subtitle: "配送期限を過ぎた投稿を一覧・地図に出さない（端末時計を信頼しているときのみ）",
                           isOn: Binding(get: { mesh.state.hideExpired }, set: { mesh.setHideExpired($0) }))
             }
             Header(text: "近隣端末 \(state.neighbors.count)")
@@ -317,12 +356,26 @@ struct AdvancedScreen: View {
                 }
                 .font(.bodySmall).textSelection(.enabled).padding(16).frame(maxWidth: .infinity, alignment: .leading)
             }
+            if !state.clockSkews.isEmpty {
+                Header(text: "近隣端末の時刻ヒント（未検証）")
+                Group_ {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(state.clockSkews, id: \.peer) { s in
+                            Text("\(s.peer.prefix(12)): \(s.deltaSeconds >= 0 ? "+" : "")\(s.deltaSeconds)秒（申告 confidence \(s.confidence)）")
+                                .foregroundStyle(Mosimo.textSecondary)
+                        }
+                        Text("相手の自己申告であり、時計の同期・証明には使いません。").font(.labelSmall).foregroundStyle(Mosimo.textTertiary)
+                    }
+                    .font(.bodySmall).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             Header(text: "診断")
             Group_ {
                 Text(state.diagnostics.suffix(16).joined(separator: "\n").nilIfEmpty ?? "なし")
                     .font(.system(size: 12, design: .monospaced)).foregroundStyle(Mosimo.textSecondary).textSelection(.enabled)
                     .padding(16).frame(maxWidth: .infinity, alignment: .leading)
             }
+            #endif
         }
     }
 
@@ -362,20 +415,26 @@ struct BlockedScreen: View {
     var body: some View {
         let state = mesh.state
         SubScreen(title: "ブロックリスト") {
-            Text("投稿者 DID 単位で非表示にします。端末・中継は遮断しません。").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
-            if state.blockedDids.isEmpty {
+            Text("発信鍵（Nostr 公開鍵）単位で非表示にし、中継もしません。相手の端末との通信は遮断しません。").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+            if state.blockedPubkeys.isEmpty {
                 Text("ブロック中の投稿者はいません").font(.bodyMedium).foregroundStyle(Mosimo.textTertiary).padding(.vertical, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Group_ {
-                    ForEach(Array(state.blockedDids.enumerated()), id: \.element) { i, did in
+                    ForEach(Array(state.blockedPubkeys.enumerated()), id: \.element) { i, key in
                         if i > 0 { Line() }
-                        SettingRow(icon: "nosign", tint: Mosimo.danger, title: did, trailing: {
-                            Button("解除") { mesh.unblock(did) }.font(.labelLarge).disabled(!state.ready)
+                        SettingRow(icon: "nosign", tint: Mosimo.danger, title: "鍵 \(key.prefix(16))…", trailing: {
+                            Button("解除") { mesh.unblock(key) }.font(.labelLarge).disabled(!state.ready)
                         })
                     }
                 }
             }
         }
     }
+}
+
+/// Privacy policy §3 switch, shared with a future usage reporter (none sends yet).
+enum UsageStats {
+    static let key = "usageStats"
+    static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 }

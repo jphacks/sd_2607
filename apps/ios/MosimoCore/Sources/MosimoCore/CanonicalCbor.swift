@@ -76,7 +76,10 @@ public enum CanonicalCbor {
         return out
     }
 
-    public static func decode(_ bytes: [UInt8]) throws -> Cbor {
+    /// [canonical] (the default) additionally requires the bytes to be the deterministic re-encoding of the value,
+    /// which signed objects and mesh payloads must satisfy. Exchange messages from other implementations are
+    /// decoded leniently (definite lengths only; floats, tags other than CID and duplicate keys still rejected).
+    public static func decode(_ bytes: [UInt8], canonical: Bool = true) throws -> Cbor {
         try require(bytes.count <= maxBytes, "CBOR size limit")
         var pos = 0
         var items = 0
@@ -136,8 +139,56 @@ public enum CanonicalCbor {
             }
         }
         let value = try read(0)
-        try require(pos == bytes.count && (try encode(value)) == bytes, "Non-canonical/trailing CBOR")
+        try require(pos == bytes.count, "Trailing CBOR")
+        try require(!canonical || (try encode(value)) == bytes, "Non-canonical CBOR")
         return value
+    }
+
+    /// Length of the first complete CBOR data item in [bytes] starting at [from], or nil while it is still incomplete.
+    /// Used to cut CBOR sequences (RFC 8742) on byte streams. Throws when the head is malformed, indefinite, or claims
+    /// more than [limit] bytes, so the link can close rather than resynchronize.
+    public static func itemLength(_ bytes: [UInt8], from: Int, end: Int, limit: Int) throws -> Int? {
+        var at = from
+        var steps = 0
+        // Each pending container contributes its remaining item count (map entries counted twice).
+        var pending: [Int64] = [1]
+        while !pending.isEmpty {
+            try require(at - from <= limit, "Message exceeds limit")
+            if at + 1 > end { return nil }
+            let head = bytes[at]
+            let major = head >> 5
+            let ai = head & 31
+            try require(ai != 31, "Indefinite CBOR")
+            let width: Int
+            switch ai { case 0...23: width = 0; case 24: width = 1; case 25: width = 2; case 26: width = 4; case 27: width = 8
+            default: throw CoreError("Reserved CBOR") }
+            if at + 1 + width > end { return nil }
+            var n: Int64 = 0
+            for i in 0..<width {
+                let b = Int64(bytes[at + 1 + i])
+                try require(n <= (Int64.max - b) / 256, "CBOR integer overflow")
+                n = n * 256 + b
+            }
+            if width == 0 { n = Int64(ai) }
+            at += 1 + width
+            let top = pending.removeLast() - 1
+            if top > 0 { pending.append(top) }
+            switch major {
+            case 2, 3:
+                try require(n <= Int64(limit), "Message exceeds limit")
+                if at + Int(n) > end { return nil }
+                at += Int(n)
+            case 4: try require(n <= Int64(limit), "CBOR container limit"); if n > 0 { pending.append(n) }
+            case 5: try require(n <= Int64(limit / 2), "CBOR container limit"); if n > 0 { pending.append(n * 2) }
+            case 6: pending.append(1)
+            case 7: try require((20...24).contains(ai), "Unsupported CBOR simple value")
+            default: break
+            }
+            steps += 1
+            try require(steps <= 1_000_000, "CBOR resource limit")
+        }
+        try require(at - from <= limit, "Message exceeds limit")
+        return at - from
     }
 }
 
@@ -191,7 +242,7 @@ func cidBytes(_ s: String, allowRaw: Bool = false) throws -> [UInt8] {
     return out
 }
 
-/// protocol/0012 §3.5: RFC 4648 standard alphabet, no padding, one canonical spelling.
+/// Core §3.3: RFC 4648 standard alphabet, no padding, one canonical spelling.
 public enum B64 {
     public static func encode(_ bytes: [UInt8]) -> String { Data(bytes).base64EncodedString().replacingOccurrences(of: "=", with: "") }
     public static func decode(_ s: String) -> [UInt8]? {
@@ -205,5 +256,22 @@ public enum B64 {
     public static func padded(_ bytes: [UInt8]) -> String { Data(bytes).base64EncodedString() }
     public static func urlUnpadded(_ bytes: [UInt8]) -> String {
         encode(bytes).replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+    }
+}
+
+/// Multibase `b` (lowercase base32, no padding) as used by CID strings; only exact round trips decode.
+public enum Multibase32 {
+    public static func encode(_ bytes: [UInt8]) -> String { "b" + base32(bytes) }
+    public static func decode(_ s: String) -> [UInt8]? {
+        let chars = Array(s)
+        guard chars.count >= 2, chars[0] == "b", chars.count <= CanonicalCbor.maxBytes else { return nil }
+        var out = [UInt8](); var acc = 0; var bits = 0
+        for c in chars.dropFirst() {
+            guard let n = b32.firstIndex(of: c) else { return nil }
+            acc = (acc << 5) | n; bits += 5
+            if bits >= 8 { bits -= 8; out.append(UInt8((acc >> bits) & 0xff)) }
+            acc &= 0xfff
+        }
+        return encode(out) == s ? out : nil
     }
 }

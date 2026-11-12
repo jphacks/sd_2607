@@ -22,6 +22,13 @@ struct PostView: Identifiable, Equatable {
     /// Nostr created_at (seconds) and decoded known extensions.
     var createdAt: Int64 = 0
     var ext = PostExtensions()
+    /// attest.chain verification of the sender, nil when the post carries no chain.
+    var chain: PublicIngress.ChainView? = nil
+}
+
+/// mesh.time §2: an unverified peer clock difference, for diagnostics only.
+struct ClockSkew: Equatable {
+    let peer: String, deltaSeconds: Int64, confidence: Int
 }
 
 struct MeshState: Equatable {
@@ -46,7 +53,8 @@ struct MeshState: Equatable {
     var publicBusy = false
     var publicStatus = "公的情報: trust config 未読込"
     var publicResults: [String] = []
-    var blockedDids: [String] = []
+    /// Author Nostr public keys hidden from this device (mesh §10).
+    var blockedPubkeys: [String] = []
     /// Display-only filter for posts past their signed delivery deadline; on by default.
     var hideExpired = true
     /// Last time any post arrived (wall ms) and whether it came online (relay/PDS) rather than over the mesh.
@@ -54,10 +62,26 @@ struct MeshState: Equatable {
     var lastReceivedOnline = false
     /// Bluetooth radio usable (powered on and authorized); false shows the 「中継が止まっています」 banner.
     var bluetoothAllowed = true
+    /// How many peers took each held event from us this run.
+    var forwardedTo: [String: Int] = [:]
+    /// Trusted roots from the local config, held revocations, and the last revocation-list check per issuer domain.
+    var roots: [Attest.Root] = []
+    var revocationCount = 0
+    var revocationChecked: [String: Int64] = [:]
+    /// Unverified peer clock hints, newest first (mesh.time).
+    var clockSkews: [ClockSkew] = []
+    /// Posts reported from this device in this run.
+    var reported: Set<String> = []
 }
 
-/// One trusted Bot DID under an enabled root, with the BSAF types selected for it.
+/// A locally trusted root key from the trust config.
+struct TrustRoot: Identifiable {
+    let name: String, pubkey: String, roles: [String], enabled: Bool
+    var id: String { pubkey }
+}
+
+/// One Bot DID selected for ingress, with the BSAF types selected for it.
 struct TrustSource: Identifiable {
-    let org: String, botDid: String, types: [String]
+    let botDid: String, types: [String]
     var id: String { botDid }
 }
