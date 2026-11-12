@@ -1,0 +1,26 @@
+---
+import { bySlug, dependentsOf, urlOf, type Protocol } from '../data/protocols';
+
+interface Props { protocol: Protocol }
+const { protocol } = Astro.props;
+const deps = protocol.deps.map((s) => bySlug.get(s)!).filter(Boolean);
+const dependents = dependentsOf(protocol.slug);
+const short = (n: string) => n.replace(/^dev\.jisaku\.mosimo\.?/, '') || 'core';
+---
+<div class="pos" role="img" aria-label={`${protocol.title} の位置づけ。前提: ${deps.map((d) => d.title).join('、') || 'なし'}。これを前提とする: ${dependents.map((d) => d.title).join('、') || 'なし'}。`}>
+  <div class="pos-col">
+    <p class="pos-title">前提とするプロトコル</p>
+    {deps.length === 0 && <span class="pos-none">なし（独立した仕様）</span>}
+    {deps.map((d) => <a class="pos-chip" href={urlOf(d.slug)}><b>{d.title}</b><small>{short(d.nsid)}</small></a>)}
+  </div>
+  <div class="pos-mid">
+    <span class="pos-arrow" aria-hidden="true">→</span>
+    <div class="pos-self">{protocol.title}<small>{short(protocol.nsid)}</small></div>
+    <span class="pos-arrow" aria-hidden="true">→</span>
+  </div>
+  <div class="pos-col">
+    <p class="pos-title">これを前提とするプロトコル</p>
+    {dependents.length === 0 && <span class="pos-none">なし</span>}
+    {dependents.map((d) => <a class="pos-chip" href={urlOf(d.slug)}><b>{d.title}</b><small>{short(d.nsid)}</small></a>)}
+  </div>
+</div>

@@ -1,0 +1,199 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { protocols, groups, readingPaths, bySlug, urlOf } from '../../data/protocols';
+import { listLexicons } from '../../lib/lexicons';
+import { specOf } from '../../lib/specs';
+import '../../styles/protocol.scss';
+
+export const prerender = true;
+
+const core = specOf('');
+const CoreContent = core.Content;
+const coreToc = core.getHeadings().filter((h) => h.depth === 2);
+const coreProtocol = bySlug.get('')!;
+const lexicons = listLexicons();
+const short = (n: string) => n.replace(/^dev\.jisaku\.mosimo\.?/, '') || 'core';
+const withLexicon = new Set(lexicons.map((l) => l.slug));
+
+const flow = [
+  { no: '01', title: '発信アプリ', text: '本文と拡張を作り、配送期限を確定する。レコードを追加して MST を更新し、atproto commit に署名する。', refs: [''] , cls: '' },
+  { no: '02', title: 'Nostr イベント', text: '本文・レコード・path・commit・適用元 CID を単一の kind 1 イベントに表し、Nostr 鍵で署名する。', refs: [''], cls: '' },
+  { no: '03', title: 'メッシュ用 CBOR と BPv7', text: 'イベントを 7 要素の CBOR 配列へ可逆に変換し、Bundle の payload として BLE・LAN で接触した端末へ渡す。', refs: ['mesh'], cls: 'y' },
+  { no: '04', title: '保存・中継', text: '接触ごとに差分を照合し、欠けている Bundle を交換する。署名対象は変えず、未知の拡張も保持する。', refs: ['mesh', 'priority', 'geo'], cls: 'y' },
+  { no: '05', title: 'ゲートウェイ', text: 'インターネットに接続できた端末が元の Nostr イベントをそのままリレーへ投稿する。', refs: ['mesh', 'attest/chain'], cls: '' },
+  { no: '06', title: 'リレー・PDS', text: '物理 PDS がレコードと commit から MST を再構築し、署名済み commit と照合して論理 PDS として公開する。', refs: ['pds'], cls: '' },
+  { no: '07', title: 'AppView・公開', text: '対応 AppView が索引・一覧・地図を提供する。公的情報は認可された経路でメッシュへ戻る。', refs: ['public', 'attest/importer'], cls: 'ink' },
+];
+---
+<Layout title="プロトコル仕様 — Mosimo Protocol" description="もしもプロトコル（dev.jisaku.mosimo）の全仕様。コア、投稿の拡張、BPv7 メッシュ配送、PDS、発信者証明、公的情報の取り込み、個別通信と、各 Lexicon JSON。">
+  <main class="spec">
+    <section class="spec-hero" aria-labelledby="spec-title">
+      <div class="wrap">
+        <div>
+          <p class="label">SPECIFICATION / dev.jisaku.mosimo</p>
+          <h1 id="spec-title">もしもプロトコル<br /><span>仕様書</span></h1>
+          <p>災害時に、インターネットが使えない地域でも、異なるアプリの間で署名付きの投稿を共有するためのプロトコル群である。コアの識別子は <code>dev.jisaku.mosimo</code>、管理ドメインは <code>mosimo.jisaku.dev</code> とし、各拡張はその下位の識別子を持つ。</p>
+          <p>識別子とディレクトリは一対一に対応し、各プロトコルは一つの文書と、型が確定していれば Lexicon JSON を持つ。本サイトはリポジトリの文書から生成している。</p>
+          <div class="actions">
+            <a class="btn btn-yellow" href="#core">コアから読む <span aria-hidden="true">↓</span></a>
+            <a class="btn" href="#map">全仕様の一覧 <span aria-hidden="true">↓</span></a>
+            <a class="btn" href="#lexicons">Lexicon <span aria-hidden="true">↓</span></a>
+          </div>
+        </div>
+        <div class="stats" aria-label="仕様の規模">
+          <div class="stat"><b>{protocols.length}</b><span>PROTOCOLS</span></div>
+          <div class="stat"><b>{lexicons.length}</b><span>LEXICON FILES</span></div>
+          <div class="stat"><b>{groups.length}</b><span>FAMILIES</span></div>
+          <div class="stat"><b>v1</b><span>BASE VERSION</span></div>
+        </div>
+      </div>
+    </section>
+    <div class="spec-ticker" aria-hidden="true">
+      <span>ATPROTO RECORD</span><span>✳</span><span>NOSTR EVENT</span><span>✳</span><span>MESH CBOR</span><span>✳</span><span>BPV7 BUNDLE</span><span>✳</span><span>RELAY / PDS</span><span>✳</span><span>APPVIEW</span>
+    </div>
+
+    <section class="spec-section" aria-labelledby="flow-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="label label-red">01 / INFORMATION FLOW</p>
+            <h2 id="flow-title">一つの投稿が<br />公開されるまで</h2>
+          </div>
+          <p>端末で署名した atproto リポジトリを正本とし、Nostr と BPv7 がその配送を担う。中継者は署名対象を変えず、同じイベントを運ぶ。</p>
+        </div>
+        <div class="flow" role="list">
+          {flow.map((s) => (
+            <div class={`flow-step ${s.cls}`} role="listitem">
+              <span class="flow-no">STEP {s.no}</span>
+              <h3 class="flow-title">{s.title}</h3>
+              <p class="flow-text">{s.text}</p>
+              <div class="flow-ref">{s.refs.map((r) => <a class="chip" href={urlOf(r)}>{short(bySlug.get(r)!.nsid)}</a>)}</div>
+            </div>
+          ))}
+        </div>
+        <p class="flow-note">インターネットからメッシュへの投入は、信頼する取り込みサーバーの投稿等に限る条件付きの経路として<a href="/protocol/public/">公的情報</a>が定める。</p>
+      </div>
+    </section>
+
+    <section class="spec-section alt" id="map" aria-labelledby="map-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="label label-red">02 / ALL PROTOCOLS</p>
+            <h2 id="map-title">{protocols.length} の仕様、<br />{groups.length} の系統</h2>
+          </div>
+          <p>各仕様は独立した関心を扱い、前提とする仕様を冒頭に示す。拡張は任意であり、未対応の拡張を含む投稿も本文は読める。</p>
+        </div>
+        {groups.map((g) => {
+          const members = protocols.filter((p) => p.group === g.id);
+          return (
+            <div class="group" id={g.id}>
+              <div class="group-head">
+                <p class="label label-red">{g.no} / {g.en}</p>
+                <h3>{g.title}</h3>
+                <p>{g.lead}</p>
+              </div>
+              <div class="cards">
+                {members.map((p, i) => (
+                  <a class={`card ${i === 0 && members.length > 1 ? 'card-yellow' : ''}`} href={urlOf(p.slug)}>
+                    <div class="card-top"><span>{p.kind}</span><span aria-hidden="true">↗</span></div>
+                    <span class="card-nsid">{p.nsid}</span>
+                    <h4>{p.title}</h4>
+                    <p>{p.tagline}</p>
+                    <div class="card-foot">
+                      {withLexicon.has(p.slug) && <span class="tag tag-lx">LEXICON</span>}
+                      {p.deps.length > 0 && <span class="tag">前提 {p.deps.length}</span>}
+                      {p.slug === '' && <span class="tag">このページ下部</span>}
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+
+    <section class="spec-section yellow" aria-labelledby="paths-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="label label-red">03 / WHERE TO START</p>
+            <h2 id="paths-title">実装の立場ごとの<br />読む順序</h2>
+          </div>
+          <p>一つの実装が複数の役割を持てる。本文を表示するだけのクライアントは、コアの署名検証と本文表示だけで参加できる。</p>
+        </div>
+        <div class="paths">
+          {readingPaths.map((rp) => (
+            <div class="path">
+              <div class="path-role">{rp.role}</div>
+              <div class="path-steps">
+                {rp.path.map((s, i) => (<>{i > 0 && <span class="arrow" aria-hidden="true">→</span>}<a class="chip" href={urlOf(s)}>{bySlug.get(s)!.title}</a></>))}
+              </div>
+              {rp.note && <p class="path-note">{rp.note}</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="spec-section" id="lexicons" aria-labelledby="lx-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="label label-red">04 / LEXICONS</p>
+            <h2 id="lx-title">Lexicon JSON</h2>
+          </div>
+          <p>型が確定した仕様は atproto Lexicon を持つ。各ファイルは仕様のディレクトリと同じパスでそのまま配信している。</p>
+        </div>
+        <div class="lx-list">
+          <div class="lx-row head"><span>ID</span><span>DEFS</span><span>FILE</span></div>
+          {lexicons.map((l) => (
+            <div class="lx-row">
+              <span><a href={urlOf(l.slug)}><code>{l.id}</code></a></span>
+              <span class="lx-defs-inline">{l.defs.map((d) => `#${d}`).join(' ')}</span>
+              <a class="chip chip-ink" href={l.url}>{l.url.split('/').pop()} ↗</a>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="spec-section alt" id="core" aria-labelledby="core-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="label label-red">05 / CORE · {coreProtocol.nsid}</p>
+            <h2 id="core-title">{coreProtocol.title}<br />基本プロトコル</h2>
+          </div>
+          <p>{coreProtocol.summary}</p>
+        </div>
+        <div class="spec-body" style="padding:0">
+          <div class="wrap" style="width:100%;padding:0">
+            <article class="main">
+              <section class="overview" aria-labelledby="core-overview-title">
+                <div class="ov-head"><span id="core-overview-title">OVERVIEW / 要点</span><span>01 CORE</span></div>
+                <div class="ov-grid" style="grid-template-columns:1fr">
+                  <div class="ov-points" style="border-right:0"><ol>{coreProtocol.points.map((pt) => <li>{pt}</li>)}</ol></div>
+                </div>
+              </section>
+              <div class="doc"><CoreContent /></div>
+            </article>
+            <aside class="side">
+              <nav class="toc" aria-label="コアの目次">
+                <div class="toc-title">CORE · CONTENTS</div>
+                <ol>{coreToc.map((h) => <li><a href={`#${h.slug}`}>{h.text}</a></li>)}</ol>
+              </nav>
+              <div class="side-links">
+                <a class="btn btn-dark" href="/protocol/post.json">post.json <span aria-hidden="true">↗</span></a>
+                <a class="btn btn-dark" href="/protocol/getFeed.json">getFeed.json <span aria-hidden="true">↗</span></a>
+                <a class="btn" href="/protocol/glossary/">用語集 <span aria-hidden="true">→</span></a>
+                <a class="btn" href="https://github.com/jphacks/sd_2607/blob/main/protocol/mosimo/README.md" rel="noopener">GitHub で原文を見る <span aria-hidden="true">↗</span></a>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</Layout>

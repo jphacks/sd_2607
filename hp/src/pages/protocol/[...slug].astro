@@ -1,0 +1,134 @@
+---
+import { Code } from 'astro:components';
+import Layout from '../../layouts/Layout.astro';
+import Position from '../../components/Position.astro';
+import { protocols, bySlug, groups, urlOf } from '../../data/protocols';
+import { lexiconsOf } from '../../lib/lexicons';
+import { specOf } from '../../lib/specs';
+import { renderDiagram } from '../../lib/mermaid.mjs';
+import '../../styles/protocol.scss';
+
+export const prerender = true;
+
+export function getStaticPaths() {
+  return protocols.filter((p) => p.slug !== '').map((p) => ({ params: { slug: p.slug } }));
+}
+
+const slug = Astro.params.slug ?? '';
+const protocol = bySlug.get(slug)!;
+const group = groups.find((g) => g.id === protocol.group)!;
+const spec = specOf(slug);
+const Content = spec.Content;
+const toc = spec.getHeadings().filter((h) => h.depth === 2 || h.depth === 3);
+const lexicons = lexiconsOf(slug);
+const index = protocols.findIndex((p) => p.slug === slug);
+const prev = protocols[index - 1];
+const next = protocols[index + 1];
+const source = `https://github.com/jphacks/sd_2607/blob/main/protocol/mosimo/${slug}/README.md`;
+const parentSlug = slug.includes('/') ? slug.slice(0, slug.lastIndexOf('/')) : '';
+const parent = bySlug.get(parentSlug);
+const figure = protocol.figure ? renderDiagram(protocol.figure.source, { caption: protocol.figure.caption }) : null;
+---
+<Layout title={`${protocol.title} — ${protocol.nsid}`} description={`${protocol.nsid}: ${protocol.tagline}`}>
+  <main class="spec">
+    <header class="spec-head">
+      <div class="wrap">
+        <nav class="crumbs" aria-label="パンくず">
+          <a href="/protocol/">PROTOCOL</a>
+          <span aria-hidden="true">/</span>
+          <a href={`/protocol/#${group.id}`}>{group.no} {group.title}</a>
+          {parent && parent.slug !== '' && (<><span aria-hidden="true">/</span><a href={urlOf(parent.slug)}>{parent.title}</a></>)}
+          <span aria-hidden="true">/</span>
+          <span aria-current="page">{protocol.title}</span>
+        </nav>
+        <div class="head-grid">
+          <div>
+            <span class="nsid">{protocol.nsid}</span>
+            <h1>{protocol.title}<small>{protocol.en} · {protocol.kind}</small></h1>
+            <p class="summary">{protocol.summary}</p>
+          </div>
+          <aside class="meta" aria-label="仕様の情報">
+            <dl>
+              <div><dt>識別子</dt><dd><code>{protocol.nsid}</code></dd></div>
+              <div><dt>種別</dt><dd>{protocol.kind}</dd></div>
+              {protocol.types && <div><dt>$type</dt><dd>{protocol.types.map((t) => <code>{t}</code>)}</dd></div>}
+              <div><dt>前提</dt><dd>{protocol.deps.length === 0 ? 'なし' : protocol.deps.map((d) => <a class="chip" href={urlOf(d)}>{bySlug.get(d)!.title}</a>)}</dd></div>
+              <div><dt>Lexicon</dt><dd>{lexicons.length === 0 ? '型定義なし' : lexicons.map((l) => <a class="chip chip-ink" href={l.url}>{l.url.split('/').pop()}</a>)}</dd></div>
+              <div><dt>原文</dt><dd><a href={source} rel="noopener">GitHub で README.md を見る ↗</a></dd></div>
+            </dl>
+          </aside>
+        </div>
+      </div>
+    </header>
+
+    <div class="spec-body">
+      <div class="wrap">
+        <article class="main">
+          <section class="overview" aria-labelledby="overview-title">
+            <div class="ov-head"><span id="overview-title">OVERVIEW / 要点</span><span>{group.no} {group.en}</span></div>
+            <div class="ov-grid">
+              <div class="ov-points">
+                <ol>{protocol.points.map((pt) => <li>{pt}</li>)}</ol>
+              </div>
+              <div class="ov-pos">
+                <p class="label" style="margin-bottom:12px">位置づけ</p>
+                <Position protocol={protocol} />
+              </div>
+            </div>
+            {figure && <div class="doc ov-figure" set:html={figure} />}
+          </section>
+
+          <div class="doc">
+            <Content />
+          </div>
+
+          {lexicons.length > 0 && (
+            <section class="lexicon" aria-labelledby="lexicon-title">
+              <div class="lx-head">
+                <h2 id="lexicon-title">Lexicon</h2>
+                <p class="label">正規の型定義</p>
+              </div>
+              {lexicons.map((l) => (
+                <>
+                  <div class="lx-defs">
+                    <span class="chip chip-yellow">{l.id}</span>
+                    {l.defs.map((d) => <span class="chip">#{d}</span>)}
+                    <a class="chip chip-ink" href={l.url}>{l.url} ↗</a>
+                  </div>
+                  <details>
+                    <summary>{l.file} を表示</summary>
+                    <Code code={l.json} lang="json" theme="github-light" />
+                  </details>
+                </>
+              ))}
+            </section>
+          )}
+
+          <nav class="pager" aria-label="前後の仕様">
+            {prev ? (
+              <a class="prev" href={urlOf(prev.slug)}><span class="pg-label">← PREV</span><span class="pg-title">{prev.title}</span><span class="pg-nsid">{prev.nsid}</span></a>
+            ) : <span />}
+            {next && (
+              <a class="next" href={urlOf(next.slug)}><span class="pg-label">NEXT →</span><span class="pg-title">{next.title}</span><span class="pg-nsid">{next.nsid}</span></a>
+            )}
+          </nav>
+        </article>
+
+        <aside class="side">
+          <nav class="toc" aria-label="目次">
+            <div class="toc-title">CONTENTS</div>
+            <ol>
+              <li><a href="#overview-title">要点</a></li>
+              {toc.map((h) => <li class={`d${h.depth}`}><a href={`#${h.slug}`}>{h.text}</a></li>)}
+              {lexicons.length > 0 && <li><a href="#lexicon-title">Lexicon</a></li>}
+            </ol>
+          </nav>
+          <div class="side-links">
+            <a class="btn" href="/protocol/">仕様の一覧 <span aria-hidden="true">↖</span></a>
+            <a class="btn" href="/protocol/glossary/">用語集 <span aria-hidden="true">→</span></a>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </main>
+</Layout>
