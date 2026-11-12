@@ -15,7 +15,7 @@ internal sealed interface RelayReply {
 /** Serialized by the coordinator. Display cache only: never a MeshEngine ingress or disk store. */
 internal class RelaySubscription {
     companion object {
-        // TODO(undecided): demo retrieval filter and local limits, not a shared relay profile.
+        /** PDS §4.3: the discovery topic. Local limits below are not a shared relay profile. */
         const val TAG = AtRepository.NAMESPACE
         const val INITIAL_LIMIT = 32
         // The cache survives relay rotation, so it is sized like the public history rather than one backlog.
@@ -42,7 +42,7 @@ internal class RelaySubscription {
         connection = generation
         eose = false
         if (full) return null
-        val id = "mndt-$generation"
+        val id = "mosimo-$generation"
         subscriptionId = id
         return json.writeValueAsString(listOf("REQ", id, mapOf("kinds" to listOf(1), "#t" to listOf(TAG), "limit" to INITIAL_LIMIT)))
     }
@@ -117,10 +117,11 @@ internal fun didOf(event: NostrEvent): String? = synchronized(dids) {
 }
 
 internal fun mergePostViews(mesh: List<PostView>, online: List<NostrEvent>, relay: String,
-    deadline: (NostrEvent) -> DeliveryDeadline = { DeliveryDeadline.UNKNOWN }): List<PostView> {
+    deadline: (NostrEvent) -> DeliveryDeadline = { DeliveryDeadline.UNKNOWN },
+    chain: (NostrEvent) -> org.mndt.core.PublicIngress.ChainView? = { null }): List<PostView> {
     val meshIds = mesh.map { it.id }.toSet()
     return mesh + online.asReversed().filterNot { it.id in meshIds }.map {
         PostView(it.id, it.pubkey, it.content, null, false, sourceRelay = relay, volatile = true, deliveryDeadline = deadline(it), did = didOf(it),
-            createdAt = it.createdAt, ext = Extensions.of(it))
+            createdAt = it.createdAt, ext = Extensions.of(it), chain = chain(it))
     }
 }

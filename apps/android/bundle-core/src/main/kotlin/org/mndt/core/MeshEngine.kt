@@ -4,10 +4,12 @@ import io.nodle.dtn.bpv7.*
 import io.nodle.dtn.bpv7.extensions.*
 import java.net.URI
 
-// TODO(undecided): local resource policy; DESTINATION is the provisional EID proposed in protocol/mndt.md §9.
+/** Mesh §2.2 / §6 limits plus local storage policy (§11 defaults). */
 object MeshPolicy {
-    const val DESTINATION = "dtn://mosimo.oriom.dev/~post"
-    const val MAX_BUNDLE_BYTES = 24_000
+    const val DESTINATION = "dtn://mosimo.jisaku.dev/~post"
+    /** §6: event payload (the 7-element CBOR array) and whole encoded Bundle. */
+    const val MAX_PAYLOAD_BYTES = 32_768
+    const val MAX_BUNDLE_BYTES = 65_536
     // Internal snapshots may grow by at most eight bytes as the CBOR Bundle Age integer grows.
     const val MAX_SAVED_BUNDLE_BYTES = MAX_BUNDLE_BYTES + 8
     const val MAX_ENTRIES = 128
@@ -38,8 +40,10 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     var relayed: (String) -> Boolean = { false }
     /** Local retention policy, independent of mesh forwarding eligibility and relay priority. */
     var canEvict: (StoredBundle) -> Boolean = { true }
-    /** Author-DID block filter; refused events are never stored, so they are never advertised or forwarded either. */
+    /** Author block filter (mesh §10, by Nostr pubkey); refused events are never stored, so they are never advertised or forwarded either. */
     var admit: (NostrEvent) -> Boolean = { true }
+    /** Held but no longer offered or forwarded: author-deleted (core §11) or revoked (attest.chain §4.2) events. */
+    var suppressed: (NostrEvent) -> Boolean = { false }
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
     private val sendRates = mutableMapOf<String, MutableList<Long>>()
@@ -105,6 +109,16 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     fun inventory(nowMillis: Long, elapsedMillis: Long): List<String> =
         stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { it.event.id }
 
+    /** Mesh §5.5 reconciliation set: forwardable events as `(created_at, id)` items. */
+    fun candidates(nowMillis: Long, elapsedMillis: Long): List<Negentropy.Item> =
+        stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { Negentropy.Item(it.event.createdAt, unhex(it.event.id, 32)) }
+
+    /** mesh.adv §2: SHA-256 over the sorted candidate IDs, first 3 bytes. */
+    fun summary(nowMillis: Long, elapsedMillis: Long): ByteArray {
+        val ids = candidates(nowMillis, elapsedMillis).map { it.id }.sortedWith { a, b -> compareUnsigned(a, b) }
+        return sha256(ids.fold(ByteArray(0)) { acc, id -> acc + id }).copyOf(3)
+    }
+
     /** Each retry derives a fresh send view; it never increments the stored hop count. */
     fun forward(id: String, nowMillis: Long, elapsedMillis: Long): ByteArray? {
         val entry = stored[id] ?: return null
@@ -143,7 +157,9 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         require(bundle.canonicalBlocks.none { it.blockType == 11 || it.blockType == 12 }) { "BPSec not supported by this profile" }
         val hop = bundle.getHopCountBlockData() ?: error("missing hop count")
         val age = bundle.getAgeBlockData() ?: error("missing age")
-        val event = EventCodec.decode(bundle.getPayloadBlockData().buffer)
+        val payload = bundle.getPayloadBlockData().buffer
+        require(payload.size <= MeshPolicy.MAX_PAYLOAD_BYTES) { "payload size limit" }
+        val event = EventCodec.decode(payload)
         require(event.verify()) { "invalid author signature" }
         expiry(event)
         require(bundle.primaryBlock.destination.toString() == MeshPolicy.DESTINATION) { "unknown mesh destination" }
@@ -187,7 +203,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {
         val bundle = parse(entry.bytes, saved = true)
         val hop = bundle.getHopCountBlockData()!!
-        return deadline(entry.event, nowMillis) != DeliveryDeadline.EXPIRED &&
+        return !suppressed(entry.event) && deadline(entry.event, nowMillis) != DeliveryDeadline.EXPIRED &&
             hop.count < minOf(hop.limit, MeshPolicy.MAX_HOPS) &&
             currentAge(entry, elapsedMillis) < bundle.primaryBlock.lifetime &&
             creationTimeEligible(bundle, nowMillis)
@@ -208,6 +224,11 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         BoundedCbor.check(bytes)
         return cborUnmarshalBundle(bytes)
     }
+}
+
+private fun compareUnsigned(a: ByteArray, b: ByteArray): Int {
+    for (i in 0 until minOf(a.size, b.size)) { val c = (a[i].toInt() and 255).compareTo(b[i].toInt() and 255); if (c != 0) return c }
+    return a.size.compareTo(b.size)
 }
 
 private fun positiveDifference(now: Long, then: Long): Long =

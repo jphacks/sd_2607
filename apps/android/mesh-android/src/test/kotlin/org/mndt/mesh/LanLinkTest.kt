@@ -2,6 +2,7 @@ package org.mndt.mesh
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.mndt.core.CanonicalCbor
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
@@ -22,17 +23,18 @@ class LanLinkTest {
         val accepted = server.accept()
         val gotA = LinkedBlockingQueue<ByteArray>(); val gotB = LinkedBlockingQueue<ByteArray>()
         val closesA = AtomicInteger(); val closesB = AtomicInteger(); val bClosed = CountDownLatch(1)
-        val a = TcpConn(client, { gotA.add(it) }) { closesA.incrementAndGet() }
-        val b = TcpConn(accepted, { gotB.add(it) }) { closesB.incrementAndGet(); bClosed.countDown() }
+        val a = TcpConn(client, { gotA.add(it) }, onClose = { closesA.incrementAndGet() })
+        val b = TcpConn(accepted, { gotB.add(it) }, onClose = { closesB.incrementAndGet(); bClosed.countDown() })
         a.start(); b.start()
 
-        val big = ByteArray(Frames.MAX_FRAME) { it.toByte() }
-        assertTrue(a.offer(byteArrayOf(1, 2, 3))); assertTrue(a.offer(big))
-        assertTrue(b.offer(byteArrayOf(9)))
-        assertArrayEquals(byteArrayOf(1, 2, 3), gotB.poll(5, TimeUnit.SECONDS))
+        val small = CanonicalCbor.encode(listOf(1L, listOf<Any>()))
+        val big = CanonicalCbor.encode(listOf(4L, 0L, ByteArray(Exchange.MESSAGE_LIMIT - 16) { it.toByte() }))
+        assertTrue(a.offer(small)); assertTrue(a.offer(big))
+        assertTrue(b.offer(small))
+        assertArrayEquals(small, gotB.poll(5, TimeUnit.SECONDS))
         assertArrayEquals(big, gotB.poll(5, TimeUnit.SECONDS))
-        assertArrayEquals(byteArrayOf(9), gotA.poll(5, TimeUnit.SECONDS))
-        assertFalse(a.offer(ByteArray(0))); assertFalse(a.offer(ByteArray(Frames.MAX_FRAME + 1)))
+        assertArrayEquals(small, gotA.poll(5, TimeUnit.SECONDS))
+        assertFalse(a.offer(ByteArray(0))); assertFalse(a.offer(ByteArray(Messages.MAX_MESSAGE_BYTES + 1)))
 
         a.close(); a.close()
         assertTrue(bClosed.await(5, TimeUnit.SECONDS)) // peer sees EOF and closes itself
@@ -42,12 +44,12 @@ class LanLinkTest {
         server.close()
     }
 
-    @Test fun bogusLengthClosesTheConnection() {
+    @Test fun oversizedCborItemClosesTheConnection() {
         val server = ServerSocket(0)
         val client = Socket("127.0.0.1", server.localPort)
         val closed = CountDownLatch(1)
-        TcpConn(server.accept(), { fail("no frame expected") }) { closed.countDown() }.start()
-        client.getOutputStream().apply { write(byteArrayOf(0x7f, 0, 0, 0)); flush() }
+        TcpConn(server.accept(), { fail("no frame expected") }, onClose = { closed.countDown() }).start()
+        client.getOutputStream().apply { write(byteArrayOf(0x5a, 0x7f, 0, 0, 0)); flush() }
         assertTrue(closed.await(5, TimeUnit.SECONDS))
         client.close(); server.close()
     }

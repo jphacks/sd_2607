@@ -8,6 +8,4 @@ void gatewayPoll(Relay& relay, Ble* ble = nullptr);
 // Combined profile only: called by the speech worker, never by main/BLE callbacks.
 void gatewayWorkPoll();
 bool gatewayNetworkBusy();
-// Coalesced on-demand request, no network work here. False when ingress disabled.
-bool gatewayRequestIngress();
 }

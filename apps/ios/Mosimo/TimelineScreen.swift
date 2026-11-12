@@ -104,9 +104,9 @@ private struct PostCard: View {
             Text(title).font(.titleMedium).foregroundStyle(Mosimo.textPrimary)
             if !rest.isEmpty { Text(rest).font(.bodyMedium).foregroundStyle(Mosimo.textSecondary).lineLimit(3) }
             HStack(spacing: 0) {
-                if post.isPublic { BsafVerification(post: post).lineLimit(1) }
+                if post.isPublic { BsafVerification(post: post) }
                 else {
-                    Text(([shortDid(post.did, post.pubkey)] + (post.distance(from: here).map { [distanceLabel($0) + "先"] } ?? [])).joined(separator: " · "))
+                    Text(([post.senderName ?? shortDid(post.did, post.pubkey)] + (post.distance(from: here).map { [distanceLabel($0) + "先"] } ?? [])).joined(separator: " · "))
                         .font(.bodySmall).foregroundStyle(Mosimo.textTertiary).lineLimit(1)
                 }
                 Text(" · \(post.routeLabel)").font(.bodySmall).foregroundStyle(Mosimo.textTertiary).fixedSize()

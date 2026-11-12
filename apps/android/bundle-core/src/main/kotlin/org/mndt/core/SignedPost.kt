@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import fr.acinq.secp256k1.Secp256k1
 import java.security.SecureRandom
+import java.time.Instant
 import java.util.Collections
 
 internal val secp = Secp256k1.get()
@@ -109,13 +110,17 @@ internal fun tagsJson(tags: List<List<String>>): String = tags.joinToString(",",
 internal fun nostrSigningBytes(pubkey: String, createdAt: Long, kind: Int, tags: List<List<String>>, content: String): ByteArray =
     utf8("[0," + quoteJson(pubkey) + "," + createdAt + "," + kind + "," + tagsJson(tags) + "," + quoteJson(content) + "]")
 
+internal fun expTag(deliveryExpiresAtSeconds: Long): List<String> =
+    listOf(AtRepository.TAG_EXP, Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString().also { require(AtRepository.secondsTimestamp.matches(it)) })
+
 class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     private val identity = AtRepository.identity(keys, pdsEndpoint)
     /** Derived offline; this is NOT a claim of PLC registration or DID authentication. */
     val did: String = identity.first
     val initialOperationJson: String = identity.second
     val nostrPubkey: String = hex(secp.pubkeyCreate(keys.nostr).copyOfRange(1, 33))
-    val bindingJson: String = AtRepository.binding(keys, did, nostrPubkey)
+    /** attest.chain binding declaration signed by both keys (data-model map; `Bytes` are byte arrays). */
+    val binding: Map<String, Any?> = AtRepository.binding(keys, did, nostrPubkey)
     /** Compressed atproto signing key; what a PDS would read from the DID document. */
     val atprotoPubkey: ByteArray get() = secp.pubKeyCompress(secp.pubkeyCreate(keys.atproto))
 
@@ -123,28 +128,57 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
         deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400),
         extensions: List<Map<String, Any?>> = emptyList()): CreatedPost {
         require(nowMillis >= 0 && utf8(text).size <= 16384)
-        require(deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L) { "Invalid delivery deadline" }
+        require(deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 253402300799L) { "Invalid delivery deadline" }
         val restored = AtRepository.create(keys, did, text, nowMillis, previous, deliveryExpiresAtSeconds, extensions)
         return CreatedPost(sign(1, restored.first, text, nowMillis), restored.second)
     }
 
     /**
-     * 0001 §1.1.1 exception path: the signed genesis operation as its own control event, never inside posts,
-     * for online nodes to submit unchanged. Only the signed delivery deadline the mesh requires is added.
+     * PDS §6: the signed genesis operation as its own control event, never inside posts, for online nodes to
+     * submit unchanged. Tags: protocol topic, `mosimo.jisaku.dev/plc`, and the signed delivery deadline.
      */
     fun createPlcGenesisEvent(nowMillis: Long, deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400)): NostrEvent {
-        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L)
-        val tags = listOf(listOf(AtRepository.TAG_PREFIX + "delivery-expires-at", java.time.Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString()))
-        return sign(AtRepository.PLC_GENESIS_KIND, tags, initialOperationJson, nowMillis)
+        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000)
+        val tags = listOf(AtRepository.TOPIC_TAG, listOf("t", AtRepository.PLC_TOPIC), expTag(deliveryExpiresAtSeconds))
+        return sign(AtRepository.CONTROL_KIND, tags, initialOperationJson, nowMillis)
     }
 
-    /** Any non-post kind (e.g. another app's DM). Only the signed delivery deadline the mesh requires is appended. */
+    /**
+     * delete §1-2: NIP-09 deletion request for one of this author's events. A post also carries the commit of the
+     * repository without it, which every later post builds on; the returned state must be saved before sending.
+     */
+    fun createDeletion(target: NostrEvent, nowMillis: Long, previous: RepositoryState): CreatedPost {
+        require(target.pubkey == nostrPubkey) { "Only this author's events can be deleted" }
+        var tags = listOf(AtRepository.TOPIC_TAG, listOf("e", target.id), listOf("k", target.kind.toString()))
+        var repository = previous
+        if (target.kind == 1) {
+            val rkey = AtRepository.restore(target).path.substringAfterLast('/')
+            val (commit, base, next) = AtRepository.delete(keys, did, rkey, nowMillis, previous)
+            tags = tags + listOf(listOf(AtRepository.TAG_COMMIT, B64.encode(commit)), listOf(AtRepository.TAG_BASE, base), listOf(AtRepository.TAG_RKEY, rkey))
+            repository = next
+        }
+        return CreatedPost(sign(5, tags + listOf(expTag(moderationDeadline(target, nowMillis))), "", nowMillis), repository)
+    }
+
+    /** report §1: NIP-56 report of another author's event; [type] is a NIP-56 report type. */
+    fun createReport(target: NostrEvent, type: String, comment: String = "", nowMillis: Long): NostrEvent {
+        require(target.pubkey != nostrPubkey) { "Own events are not reported" }
+        require(type in Moderation.REPORT_TYPES && utf8(comment).size <= 280) { "Invalid report" }
+        val tags = listOf(AtRepository.TOPIC_TAG, listOf("e", target.id, type), listOf("p", target.pubkey, type), expTag(moderationDeadline(target, nowMillis)))
+        return sign(1984, tags, comment, nowMillis)
+    }
+
+    /** delete §1 / report §1: no earlier than the target's own deadline, else 24 h from now. */
+    private fun moderationDeadline(target: NostrEvent, nowMillis: Long): Long =
+        maxOf(AtRepository.deliveryExpiresAt(target)?.epochSecond ?: 0, Math.addExact(nowMillis / 1000, 86400))
+
+    /** Any non-post kind (e.g. another app's DM, kind 4). Only the signed delivery deadline the mesh requires is appended. */
     fun signEvent(kind: Int, tags: List<List<String>>, content: String, nowMillis: Long,
         deliveryExpiresAtSeconds: Long = Math.addExact(nowMillis / 1000, 86400)): NostrEvent {
-        require(kind != 1 && kind != AtRepository.PLC_GENESIS_KIND) { "Use createPost/createPlcGenesisEvent" }
-        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000 && deliveryExpiresAtSeconds <= 999999999999999L)
-        val deadline = listOf(AtRepository.TAG_PREFIX + "delivery-expires-at", java.time.Instant.ofEpochSecond(deliveryExpiresAtSeconds).toString())
-        return sign(kind, tags + listOf(deadline), content, nowMillis)
+        require(kind != 1) { "Use createPost" }
+        require(nowMillis >= 0 && deliveryExpiresAtSeconds > nowMillis / 1000)
+        require(tags.none { it.firstOrNull() == AtRepository.TAG_EXP }) { "Deadline is appended here" }
+        return sign(kind, tags + listOf(expTag(deliveryExpiresAtSeconds)), content, nowMillis)
     }
 
     /** NIP-04/NIP-44 ECDH: x coordinate of our Nostr key times the peer's x-only pubkey (even y). */
@@ -159,43 +193,73 @@ class Author(val keys: SecretKeys, val pdsEndpoint: String) {
     }
 }
 
-/** protocol/0012 §4.2 mesh encoding v1: fixed 7-element array with the §4.2 reversible tag-value typing. */
+/**
+ * Mesh §2.1 CBOR v1 payload: the fixed 7-element array, the §2.1.1 reversible tag-value typing and the §2.1.2
+ * omitted tags. Attestation references (§2.1.3) are not produced or accepted: this node does not announce the
+ * capability, so a payload must arrive fully expanded.
+ */
 object EventCodec {
-    private const val COMMIT = AtRepository.TAG_PREFIX + "commit"
-    private const val VERSION = AtRepository.TAG_PREFIX + "version"
-    private fun bytesTag(name: String) = name == COMMIT || name.startsWith(AtRepository.EXT_PREFIX) && name.length > AtRepository.EXT_PREFIX.length
+    const val VERSION = 1L
+    private fun bytesTag(name: String) = name == AtRepository.TAG_COMMIT || name.startsWith(AtRepository.EXT_PREFIX) && name.length > AtRepository.EXT_PREFIX.length
+
+    /** The tags a payload omits for this kind; they are reinserted at the front on decode. */
+    private fun omitted(kind: Int): List<List<String>> = when (kind) {
+        1 -> listOf(AtRepository.TOPIC_TAG, AtRepository.VERSION_TAG)
+        AtRepository.CONTROL_KIND -> listOf(AtRepository.TOPIC_TAG)
+        else -> emptyList()
+    }
 
     fun encode(event: NostrEvent): ByteArray {
         require(event.verify()) { "Invalid Nostr event" }
-        val tags = event.tags.map { tag ->
-            if (tag.size != 2) tag
-            else if (bytesTag(tag[0])) listOf(tag[0], B64.decode(tag[1]) ?: tag[1])
-            else if (tag[0] == VERSION && tag[1] == "1") listOf(tag[0], 1L)
-            else tag
-        }
-        return CanonicalCbor.encode(listOf(1, unhex(event.pubkey, 32), event.createdAt, event.kind, tags, event.content, unhex(event.sig, 64)))
+        val fixed = omitted(event.kind)
+        require(event.tags.take(fixed.size) == fixed) { "Event does not follow the fixed tag order" }
+        val tags = event.tags.drop(fixed.size).map { tag -> if (tag.size != 2) tag else listOf(tag[0], typed(tag[0], tag[1], event.createdAt)) }
+        return CanonicalCbor.encode(listOf(VERSION, unhex(event.pubkey, 32), event.createdAt, event.kind, tags, event.content, unhex(event.sig, 64)))
     }
+
+    /** Mesh §2.1.1: a value is typed only when the typed form restores exactly the original string. */
+    private fun typed(name: String, value: String, createdAt: Long): Any = when {
+        bytesTag(name) -> B64.decode(value) ?: value
+        name == AtRepository.TAG_BASE -> if (value.isEmpty()) ByteArray(0) else Multibase32.decode(value) ?: value
+        name == AtRepository.TAG_RKEY -> AtRepository.tidValue(value) ?: value
+        name == AtRepository.TAG_EXP -> expDelta(value, createdAt) ?: value
+        else -> value
+    }
+    private fun expDelta(value: String, createdAt: Long): Long? {
+        if (!AtRepository.secondsTimestamp.matches(value)) return null
+        val seconds = runCatching { Instant.parse(value).epochSecond }.getOrNull() ?: return null
+        return (seconds - createdAt).takeIf { it >= 0 && expString(createdAt, it) == value }
+    }
+    private fun expString(createdAt: Long, delta: Long): String? =
+        runCatching { Instant.ofEpochSecond(Math.addExact(createdAt, delta)).toString() }.getOrNull()?.takeIf { AtRepository.secondsTimestamp.matches(it) }
+
     fun decode(bytes: ByteArray): NostrEvent {
-        val a = CanonicalCbor.decode(bytes) as? List<*> ?: error("Expected payload array")
-        require(a.size == 7 && a[0] == 1L)
+        require(bytes.size <= MeshPolicy.MAX_PAYLOAD_BYTES) { "payload size limit" }
+        // Only the CDDL shape is fixed (mesh §2.1); signed inner bytes (commit, extensions) stay strictly canonical.
+        val a = CanonicalCbor.decode(bytes, canonical = false) as? List<*> ?: error("Expected payload array")
+        require(a.size == 7 && a[0] == VERSION) { "Unsupported mesh encoding version" }
         val pubkey = hex((a[1] as? ByteArray ?: error("Expected pubkey bytes")).also { require(it.size == 32) })
         val created = a[2] as? Long ?: error("Expected time integer")
-        val kind = a[3] as? Long ?: error("Expected kind integer"); require(kind in 0..65535)
+        val kind = (a[3] as? Long ?: error("Expected kind integer")).also { require(it in 0..65535) }.toInt()
         val tags = (a[4] as? List<*> ?: error("Expected tags")).map { t ->
             val tag = t as? List<*> ?: error("Expected tag array")
             val name = tag.firstOrNull() as? String ?: error("Expected tag name")
             tag.mapIndexed { i, v ->
                 when {
                     v is String -> v
-                    i == 1 && tag.size == 2 && v is ByteArray && bytesTag(name) -> B64.encode(v)
-                    i == 1 && tag.size == 2 && v == 1L && name == VERSION -> "1"
+                    i != 1 || tag.size != 2 -> error("Typed value outside position 1 of a two-element tag")
+                    v is ByteArray && bytesTag(name) -> B64.encode(v)
+                    v is ByteArray && name == AtRepository.TAG_BASE -> if (v.isEmpty()) "" else Multibase32.encode(v)
+                    v is Long && name == AtRepository.TAG_RKEY -> AtRepository.tidOf(v).also { require(AtRepository.tidPattern.matches(it)) }
+                    v is Long && name == AtRepository.TAG_EXP -> expString(created, v) ?: error("Deadline outside the Timestamp range")
                     else -> error("Unexpected typed tag value")
                 }
             }
         }
         val content = a[5] as? String ?: error("Expected content")
         val sig = hex((a[6] as? ByteArray ?: error("Expected signature bytes")).also { require(it.size == 64) })
-        val id = hex(sha256(nostrSigningBytes(pubkey, created, kind.toInt(), tags, content)))
-        return NostrEvent(id, pubkey, created, kind.toInt(), frozenTags(tags), content, sig).also { require(it.verify()) { "Invalid Nostr signature" } }
+        val full = omitted(kind) + tags
+        val id = hex(sha256(nostrSigningBytes(pubkey, created, kind, full, content)))
+        return NostrEvent(id, pubkey, created, kind, frozenTags(full), content, sig).also { require(it.verify()) { "Invalid Nostr signature" } }
     }
 }

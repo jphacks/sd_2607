@@ -10,7 +10,9 @@
 namespace mesh {
 class Relay;
 
-// Peripheral-only compatibility transport for Android's experimental mndt §9.
+// Mesh §3 GATT transport, peripheral-only (role flags bit0): advertises the
+// common service with node ID + mesh.adv summary in the scan response and
+// carries common exchange messages as a CBOR sequence over RX/TX.
 // BLE callbacks only enqueue bounded events; filesystem and crypto run in poll().
 class Ble : private NimBLEServerCallbacks, private NimBLECharacteristicCallbacks {
 public:
@@ -45,9 +47,9 @@ private:
     std::deque<std::vector<uint8_t>> out_;
     size_t queuedBytes_ = 0, offset_ = 0;
     uint32_t connectedMs_ = 0, txMs_ = 0, blockedMs_ = 0, rxMs_ = 0;
-    uint8_t prefix_[4] = {};
-    size_t prefixBytes_ = 0, expected_ = 0;
     std::vector<uint8_t> incoming_;
+    uint8_t advertised_[4] = {};
+    uint32_t advertisementMs_ = 0;
 
     void enqueue(Kind kind, uint16_t handle, uint16_t size = 0, int status = 0,
                  const uint8_t* bytes = nullptr);
@@ -55,6 +57,8 @@ private:
     void drop(Relay& relay, const char* reason);
         bool recover(Relay& relay);
     bool feed(Relay& relay, const uint8_t* bytes, size_t size);
+    bool applyScanResponse();
+    void refreshAdvertisement(Relay& relay);
     void pump(Relay& relay);
     void onConnect(NimBLEServer*, NimBLEConnInfo& info) override;
     void onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int reason) override;

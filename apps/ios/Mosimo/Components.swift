@@ -1,3 +1,4 @@
+import MosimoCore
 import SwiftUI
 import UIKit
 
@@ -84,13 +85,54 @@ struct KindLabel: View {
 struct BsafVerification: View {
     let post: PostView
     var body: some View {
-        if post.importerAuthorized {
-            HStack(spacing: 2) {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Mosimo.safe)
-                Text(" \(post.bsafSource)（BSAF転載）・転載者認可済").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+        // The importer may be named whenever its chain is confirmed now; it re-posts, it is not the source.
+        let importer = post.chain.flatMap { $0.confirmedNow ? $0.name : nil }
+        let bot = post.ext.bsaf?.botDid.map { shortDid($0, "") } ?? "Bot"
+        VStack(alignment: .leading, spacing: 2) {
+            if post.importerAuthorized {
+                HStack(spacing: 2) {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Mosimo.safe)
+                    Text(" \(importer ?? "転載者")が転載した \(bot) の情報").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+                }
+            } else {
+                Text("転載された情報・転載者の認可を確認できません").font(.bodySmall).foregroundStyle(Mosimo.textTertiary)
             }
-        } else {
-            Text("\(post.bsafSource)（BSAF転載）・認可を確認できません").font(.bodySmall).foregroundStyle(Mosimo.textTertiary)
+            Text("出典の表示: \(post.bsafSource)（投稿内の申告）").font(.labelSmall).foregroundStyle(Mosimo.textTertiary)
+        }
+    }
+}
+
+/// Sender confirmation (attest.chain §4): what the attestation chain proves about the key, never the truth of the post.
+struct SenderVerification: View {
+    let chain: PublicIngress.ChainView?
+    var body: some View {
+        let named = chain.flatMap { $0.identity ? $0.name : nil }
+        let (icon, color, text): (String, Color, String) = {
+            guard let c = chain else { return ("info.circle", Mosimo.textTertiary, "発信者未確認（署名チェーンなし）") }
+            if c.revocation == .revoked { return ("info.circle", Mosimo.danger, "この発信鍵は失効しています") }
+            if c.confirmedNow {
+                if let named { return ("checkmark.seal", Mosimo.safe, "発信者確認済み: \(named)" + (c.trustLevel.map { "（確認度 \($0)）" } ?? "")) }
+                return ("checkmark.seal", Mosimo.textSecondary, "鍵は確認済み（組織名の表示は認められていません）")
+            }
+            let suffix = named.map { ": \($0)" } ?? ""
+            switch c.state {
+            case .verified where c.revocation == .revokedLater: return ("info.circle", Mosimo.warning, "作成時点では確認済み・その後に鍵が失効" + suffix)
+            case .verified:
+                return ("info.circle", Mosimo.warning, (c.expiredNow == true ? "作成時点では確認済み（現在は期限切れ）" : "作成時点では確認済み（現在の有効性は時計未確認）") + suffix)
+            case .expired: return ("info.circle", Mosimo.danger, "作成時点で鍵の有効期間外です（発信者未確認）")
+            case .unknownTime: return ("info.circle", Mosimo.warning, "端末時計が未確認のため検証できません")
+            case .unverifiable: return ("info.circle", Mosimo.textTertiary, "信頼していない発行元の証明です")
+            case .invalid: return ("info.circle", Mosimo.danger, "署名チェーンを検証できません")
+            }
+        }()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 12)).foregroundStyle(color)
+                Text(text).font(.bodySmall).foregroundStyle(color)
+            }
+            if chain?.revocation == .notRevokedAsKnown {
+                Text("失効情報は手元の通知時点のものです").font(.labelSmall).foregroundStyle(Mosimo.textTertiary)
+            }
         }
     }
 }
@@ -100,7 +142,7 @@ func openAppSettings() {
 }
 
 enum Tab { case timeline, map, settings }
-enum Route: Hashable { case post(String), trust, advanced, identity, blocked, terms }
+enum Route: Hashable { case post(String), trust, advanced, identity, blocked, terms, policy }
 
 /// One stack per tab. The map is the start tab; posts opened from the map live in its sheet.
 @MainActor

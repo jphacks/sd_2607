@@ -30,7 +30,7 @@ import kotlin.math.roundToLong
 
 /** Annotation posts keyed by target event id. */
 fun annotationsByTarget(posts: List<PostView>): Map<String, List<PostView>> =
-    posts.filter { it.ext.annotation != null }.groupBy { it.ext.annotation!!.targetEventId }
+    posts.mapNotNull { p -> p.ext.annotation?.targetEventId?.let { it to p } }.groupBy({ it.first }, { it.second })
 
 /** Annotations whose target is present are nested under it, so they get no card of their own. */
 fun standalone(posts: List<PostView>): List<PostView> {
@@ -45,7 +45,7 @@ fun endorsers(annotations: List<PostView>): Set<String> =
 private fun Location.origin() = Extensions.origin(Origin((latitude * 1e6).roundToLong(), (longitude * 1e6).roundToLong(),
     if (hasAccuracy()) (accuracy * 1000).roundToLong() else null))
 
-/** 「✓ 確認した N」「補足する」「訂正を報告」 for a user post; publishes #annotation posts, with origin when a fix exists. */
+/** 「✓ 確認した N」「補足する」「訂正を投稿」 for a user post; publishes #annotation posts, with origin when a fix exists. */
 @Composable
 fun AnnotationActions(target: PostView, annotations: List<PostView>, modifier: Modifier = Modifier) {
     val mesh = koinInject<MeshCoordinator>()
@@ -55,19 +55,22 @@ fun AnnotationActions(target: PostView, annotations: List<PostView>, modifier: M
     val endorsed = endorsers(annotations)
     var sent by remember(target.id) { mutableStateOf(false) }
     var writing by remember { mutableStateOf<Relation?>(null) }
+    val agreed = rememberTermsGate()
     fun send(relation: Relation, text: String) =
         mesh.publish(text, listOfNotNull(Extensions.annotation(relation, target.id), here?.origin()))
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val mine = sent || state.did in endorsed || state.publicKey in endorsed
         Action("確認した ${endorsed.size}", Icons.Outlined.Check, Mosimo.safe, enabled = !mine) {
-            sent = true
-            send(Relation.ENDORSEMENT, "確認しました：" + target.body().take(20))
+            agreed {
+                sent = true
+                send(Relation.ENDORSEMENT, "確認しました：" + target.body().take(20))
+            }
         }
-        Action("補足する", Icons.Outlined.Edit, Mosimo.textSecondary) { writing = Relation.SUPPLEMENT }
-        Action("訂正を報告", Icons.Outlined.Flag, Mosimo.textSecondary) { writing = Relation.CORRECTION }
+        Action("補足する", Icons.Outlined.Edit, Mosimo.textSecondary) { agreed { writing = Relation.SUPPLEMENT } }
+        Action("訂正を投稿", Icons.Outlined.Flag, Mosimo.textSecondary) { agreed { writing = Relation.CORRECTION } }
     }
     writing?.let { relation ->
-        AnnotateDialog(if (relation == Relation.SUPPLEMENT) "補足する" else "訂正を報告", onDismiss = { writing = null }) {
+        AnnotateDialog(if (relation == Relation.SUPPLEMENT) "補足する" else "訂正を投稿", onDismiss = { writing = null }) {
             send(relation, it)
             writing = null
         }

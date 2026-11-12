@@ -166,7 +166,7 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f, fill = false)) {
                     if (post.isPublic) BsafVerification(post)
-                    else Text(listOfNotNull(shortDid(post.did, post.pubkey), post.distanceFrom(here)?.let { distanceLabel(it) + "先" }).joinToString(" · "),
+                    else Text(listOfNotNull(post.senderName ?: shortDid(post.did, post.pubkey), post.distanceFrom(here)?.let { distanceLabel(it) + "先" }).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
                 }
                 Text(" · ${post.routeLabel()}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary, softWrap = false)

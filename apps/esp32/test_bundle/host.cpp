@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "bip340") {
         auto pub = unhex(argv[2]), sig = unhex(argv[3]), msg = unhex(argv[4]);
         if (msg.size() != 32) return 2;
-        bool valid = mesh::verifySchnorr({pub.data(), pub.size()}, {sig.data(), sig.size()}, msg.data());
+        bool valid = pub.size() == 32 && sig.size() == 64 && mesh::verifySchnorr(pub.data(), sig.data(), msg.data());
         std::cout << (valid ? "valid" : "invalid") << '\n';
         return valid ? 0 : 1;
     }
@@ -43,6 +43,6 @@ int main(int argc, char** argv) {
         if (!output) return 2;
     }
     std::cout << info.id << ' ' << info.age << ' ' << info.lifetime << ' ' << info.hop << ' ' << info.hopLimit
-              << ' ' << mesh::hex({reinterpret_cast<const uint8_t*>(info.text.data()), info.text.size()}) << '\n';
+              << ' ' << mesh::hex(reinterpret_cast<const uint8_t*>(info.text.data()), info.text.size()) << '\n';
     return 0;
 }

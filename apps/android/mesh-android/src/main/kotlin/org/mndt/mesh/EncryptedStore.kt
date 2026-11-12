@@ -5,13 +5,14 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import com.fasterxml.jackson.databind.JsonNode
-import org.mndt.core.RepositoryState
-import org.mndt.core.PublicIngress
+import org.mndt.core.Attest
 import org.mndt.core.MeshPolicy
+import org.mndt.core.RepositoryState
 import org.mndt.core.SecretKeys
 import org.mndt.core.StoredBundle
 import java.io.File
 import java.security.KeyStore
+import java.time.Instant
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -34,31 +35,45 @@ internal data class DiskState(
     val plcRegistered: Boolean = false,
     val pdsEndpoint: String = "https://pds.invalid",
     val onlineEnabled: Boolean = true,
-    val relayDefaultsMigrated: Boolean = true,
-    val publicTrust: PublicIngress.Memory = PublicIngress.Memory(),
+    /** Import-time importer authorization records by event ID (attest.importer §3). */
     val publicAudit: Map<String, String> = emptyMap(),
-    /** Author DIDs whose events are never stored; never peers or links. */
-    val blockedDids: List<String> = emptyList()
+    /** Author Nostr public keys whose events are never stored (mesh §10); never peers or links. */
+    val blockedPubkeys: List<String> = emptyList(),
+    /** Verified revocation notices (attest.revocation §6); never rolled back. */
+    val revocations: List<Attest.Revocation> = emptyList(),
+    /** Issuer domain → last successful revocation-list fetch (epoch seconds); the UI's "失効情報の確認時点". */
+    val revocationChecked: Map<String, Long> = emptyMap(),
 ) {
     companion object {
         const val PDS_RELAY = "wss://pds.oriom.dev"
-        val LEGACY_DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol")
-        val DEFAULT_RELAYS = listOf(PDS_RELAY) + LEGACY_DEFAULT_RELAYS
+        val DEFAULT_RELAYS = listOf(PDS_RELAY, "wss://relay.damus.io", "wss://nos.lol")
         const val MAX_RELAYS = 8
         const val MAX_BLOCKED = 1024
+        const val MAX_REVOCATIONS = 4096
     }
 }
 
 /** Optional field; state files written before blocking existed load as an empty list. */
-internal fun readBlockedDids(node: JsonNode?): List<String> = node?.let { list ->
+internal fun readBlockedPubkeys(node: JsonNode?): List<String> = node?.let { list ->
     require(list.isArray && list.size() <= DiskState.MAX_BLOCKED)
-    list.map { require(it.isTextual && it.textValue().matches(Regex("did:plc:[a-z2-7]{24}"))); it.textValue() }
+    list.map { require(it.isTextual && it.textValue().matches(Regex("[0-9a-f]{64}"))); it.textValue() }
+}.orEmpty()
+
+private val hexKey = Regex("(0[23])?[0-9a-f]{64}")
+internal fun readRevocations(node: JsonNode?): List<Attest.Revocation> = node?.let { list ->
+    require(list.isArray && list.size() <= DiskState.MAX_REVOCATIONS)
+    list.map { r ->
+        fun key(name: String) = r.path(name).textValue().also { require(it != null && hexKey.matches(it)) }.let { s -> ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() } }
+        val id = r.path("id").textValue().also { require(it != null && it.matches(Regex("[0-9a-f]{64}"))) }
+        Attest.Revocation(ByteArray(32) { id.substring(it * 2, it * 2 + 2).toInt(16).toByte() }, key("issuer"), key("subject"),
+            Instant.parse(r.path("issuedAt").textValue()), Instant.parse(r.path("effectiveAt").textValue()),
+            r.path("pendingActivation").textValue()?.let { Base64.getDecoder().decode(it) },
+            r.path("pendingSig").textValue()?.let { Base64.getDecoder().decode(it) })
+    }
 }.orEmpty()
 
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
 internal class EncryptedStore(context: Context) {
-    // Pre-protocol-0012 state (mesh-state.aesgcm) is intentionally not migrated; it is deleted on first load.
-    private val legacy = File(context.noBackupFilesDir, "mesh-state.aesgcm")
     private val file = AtomicFile(File(context.noBackupFilesDir, "mosimo-state.aesgcm"))
     private val aad = "dev.oriom.mosimo.state.v1".toByteArray()
     private val base64 = Base64.getEncoder()
@@ -74,7 +89,6 @@ internal class EncryptedStore(context: Context) {
         }.generateKey()
     }
     fun load(): DiskState? {
-        legacy.delete(); File(legacy.path + ".bak").delete()
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
         val encrypted = file.openRead().use { input ->
             input.readBounded(MAX_DISK_BYTES).also { require(it.size in 29..MAX_DISK_BYTES) }
@@ -111,18 +125,22 @@ internal class EncryptedStore(context: Context) {
             require(relays.isArray && relays.size() <= DiskState.MAX_RELAYS)
             val clock = node.path("clockId")
             require(clock.isIntegralNumber && clock.intValue() in 0..1023)
+            val checked = node["revocationChecked"]?.let { c ->
+                require(c.isObject && c.size() <= 64)
+                c.properties().associate { (domain, at) -> require(domain.length <= 253 && at.isIntegralNumber); domain to at.longValue() }
+            }.orEmpty()
             return DiskState(keys, RepositoryState(records, node["previous"]?.takeUnless { it.isNull }?.textValue(),
-                node.path("lastRev").longValue(), clock.intValue()), saved,
-                migrateDefaultRelays(relays.map { it.textValue() }, node.path("relayDefaultsMigrated").asBoolean(false)), acks,
+                node.path("lastRev").longValue(), clock.intValue()), saved, relays.map { it.textValue() }, acks,
                 node.path("plcRegistered").asBoolean(false), node.path("pdsEndpoint").asText("https://pds.invalid"),
-                node.path("onlineEnabled").asBoolean(true), publicTrust = readPublicTrust(node["publicTrust"]),
+                node.path("onlineEnabled").asBoolean(true),
                 publicAudit = node["publicAudit"]?.let { audit ->
                     require(audit.isObject && audit.size() <= 128)
                     audit.properties().associate { (id, value) ->
                         require(id.matches(Regex("[0-9a-f]{64}")) && value.isTextual && value.textValue().length <= 4096)
                         id to value.textValue()
                     }
-                }.orEmpty(), blockedDids = readBlockedDids(node["blockedDids"]))
+                }.orEmpty(), blockedPubkeys = readBlockedPubkeys(node["blockedPubkeys"]),
+                revocations = readRevocations(node["revocations"]), revocationChecked = checked)
         } finally { plain.fill(0) }
     }
     fun save(state: DiskState, entries: List<StoredBundle>, bootCount: Int? = null) {
@@ -131,15 +149,18 @@ internal class EncryptedStore(context: Context) {
             .put("atproto", base64.encodeToString(state.keys.atproto))
             .put("plc", base64.encodeToString(state.keys.plc))
             .put("onlineEnabled", state.onlineEnabled).put("plcRegistered", state.plcRegistered).put("pdsEndpoint", state.pdsEndpoint)
-            .put("relayDefaultsMigrated", state.relayDefaultsMigrated)
             .put("previous", state.repository.previousCommit).put("lastRev", state.repository.lastRevMicros)
             .put("clockId", state.repository.clockId)
         node.putObject("publicAudit").also { a -> state.publicAudit.forEach { (id, value) -> a.put(id, value) } }
-        val trust = node.putObject("publicTrust")
-        trust.putObject("snapshots").also { s -> state.publicTrust.snapshots.forEach { (id, bytes) -> s.put(id, base64.encodeToString(bytes)) } }
-        trust.putObject("serials").also { s -> state.publicTrust.serials.forEach { (id, hash) -> s.put(id, hash) } }
         node.putArray("relays").also { a -> state.relays.forEach(a::add) }
-        node.putArray("blockedDids").also { a -> state.blockedDids.forEach(a::add) }
+        node.putArray("blockedPubkeys").also { a -> state.blockedPubkeys.forEach(a::add) }
+        node.putArray("revocations").also { a -> state.revocations.forEach { r ->
+            a.addObject().put("id", hex(r.id)).put("issuer", hex(r.issuer)).put("subject", hex(r.subject))
+                .put("issuedAt", r.issuedAt.toString()).put("effectiveAt", r.effectiveAt.toString()).also { o ->
+                    if (r.needsSubkey) o.put("pendingActivation", base64.encodeToString(r.pendingActivation)).put("pendingSig", base64.encodeToString(r.pendingSig))
+                }
+        } }
+        node.putObject("revocationChecked").also { c -> state.revocationChecked.forEach { (domain, at) -> c.put(domain, at) } }
         node.putObject("records").also { records -> state.repository.records.forEach { (k, v) -> records.put(k, v) } }
         node.putArray("bundles").also { a -> entries.forEach {
             a.addObject().put("bytes", base64.encodeToString(it.bytes)).put("received", it.receivedAtMillis)
@@ -156,6 +177,7 @@ internal class EncryptedStore(context: Context) {
         try { output.write(encrypted); file.finishWrite(output) }
         catch (e: Exception) { file.failWrite(output); throw e }
     }
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it.toInt() and 255) }
     companion object {
         private const val MAX_DISK_BYTES = 16_000_000
         private const val ALIAS = "mosimo-state-v1"

@@ -2,6 +2,7 @@ package org.mndt.mesh
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.mndt.core.CanonicalCbor
 import java.net.ServerSocket
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -13,15 +14,16 @@ class LocalLinkTest {
         @Volatile var on = false
         override fun start(node: String, listener: LinkListener) { on = true }
         override fun stop() { on = false }
-        override fun send(peer: String, frame: ByteArray) = false
+        override fun send(peer: String, message: ByteArray) = false
         override fun disconnect(peer: String) {}
     }
 
-    /** Stands in for Exchange: says its node on connect and reports the peer's as HELLO. */
+    /** Stands in for Exchange: says HELLO (its node, as one CBOR item) on connect and reports the peer's. */
     private class Node(private val id: String) : LinkListener {
         val hellos = LinkedBlockingQueue<String>()
-        override fun onConnected(link: Link, peer: String) { link.send(peer, id.toByteArray()) }
-        override fun onFrame(link: Link, peer: String, frame: ByteArray) { hellos.add(String(frame)); link.identified(peer, String(frame)) }
+        override fun onConnected(link: Link, peer: String, node: String?) { link.send(peer, CanonicalCbor.encode(id)) }
+        override fun onMessage(link: Link, peer: String, message: ByteArray) { hellos.add(CanonicalCbor.decode(message) as String); link.hello(peer) }
+        override fun onDrained(link: Link, peer: String) {}
         override fun onDisconnected(link: Link, peer: String) {}
     }
 

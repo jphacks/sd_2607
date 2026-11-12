@@ -1,89 +1,32 @@
 #include "MeshBundle.h"
+#include "MeshCbor.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include <mbedtls/bignum.h>
 #include <mbedtls/ecp.h>
-#include <mbedtls/ecdsa.h>
 #include <mbedtls/sha256.h>
 
 namespace mesh {
 namespace {
-constexpr uint64_t SIGNED_MAX = 0x7fffffffffffffffULL;
+using cbor::Slice;
+using cbor::Reader;
+using cbor::head;
+using cbor::append;
 constexpr size_t MAX_BLOCKS = 64;
-
-struct Slice {
-    const uint8_t* p;
-    size_t n;
-    Slice(const uint8_t* data = nullptr, size_t size = 0) : p(data), n(size) {}
-};
-
-bool utf8(Slice s) {
-    for (size_t i = 0; i < s.n;) {
-        uint32_t c = s.p[i++];
-        if (c < 128) continue;
-        unsigned more;
-        uint32_t minimum;
-        if (c >= 0xc2 && c <= 0xdf) { more = 1; minimum = 0x80; c &= 31; }
-        else if (c >= 0xe0 && c <= 0xef) { more = 2; minimum = 0x800; c &= 15; }
-        else if (c >= 0xf0 && c <= 0xf4) { more = 3; minimum = 0x10000; c &= 7; }
-        else return false;
-        if (more > s.n - i) return false;
-        while (more--) {
-            uint8_t b = s.p[i++];
-            if ((b & 0xc0) != 0x80) return false;
-            c = (c << 6) | (b & 63);
-        }
-        if (c < minimum || c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) return false;
-    }
-    return true;
-}
+constexpr size_t MAX_JSON_BYTES = 65536;
+const char* DESTINATION = "//mosimo.jisaku.dev/~post";
 
 bool equal(Slice s, const char* text) {
     return s.n == std::strlen(text) && std::memcmp(s.p, text, s.n) == 0;
 }
+bool startsWith(Slice s, const char* prefix) {
+    const size_t n = std::strlen(prefix);
+    return s.n >= n && std::memcmp(s.p, prefix, n) == 0;
+}
 std::string string(Slice s) { return std::string(reinterpret_cast<const char*>(s.p), s.n); }
-
-// No recursion or allocation from attacker-supplied lengths. Every container in
-// this profile has a fixed shape or an explicit local bound.
-struct Reader {
-    const uint8_t* p;
-    size_t n, at = 0, items = 0;
-    bool canonical;
-    Reader(Slice s, bool c = false) : p(s.p), n(s.n), canonical(c) {}
-    bool head(unsigned major, uint64_t& value, bool allowIndef = false) {
-        if (at >= n || ++items > 8192) return false;
-        unsigned b = p[at++], ai = b & 31;
-        if ((b >> 5) != major) return false;
-        if (ai < 24) { value = ai; return true; }
-        if (ai == 31 && allowIndef && !canonical) { value = UINT64_MAX; return true; }
-        if (ai < 24 || ai > 27) return false;
-        unsigned width = 1u << (ai - 24);
-        if (width > n - at) return false;
-        value = 0;
-        for (unsigned i = 0; i < width; ++i) value = (value << 8) | p[at++];
-        if (value > SIGNED_MAX) return false;
-        if (canonical && (value < 24 || (width > 1 && value <= 0xff) ||
-                          (width > 2 && value <= 0xffff) || (width > 4 && value <= 0xffffffffULL))) return false;
-        return true;
-    }
-    bool uint(uint64_t& v) { return head(0, v); }
-    bool array(uint64_t& count) { return head(4, count, true); }
-    bool array(size_t expected, uint64_t& count) { return array(count) && (count == expected || count == UINT64_MAX); }
-    bool end(uint64_t count) {
-        if (count != UINT64_MAX) return true;
-        return at < n && p[at++] == 0xff;
-    }
-    bool done() const { return at == n; }
-    bool bytes(unsigned major, Slice& s) {
-        uint64_t length;
-        if (!head(major, length) || length > n - at) return false;
-        s = {p + at, static_cast<size_t>(length)};
-        at += s.n;
-        return major != 3 || utf8(s);
-    }
-};
 
 // BPv7 transmits the complemented reflected CRC value in network byte order.
 uint32_t crc(Slice block, Slice zeros, unsigned type) {
@@ -107,52 +50,39 @@ bool checkCrc(Slice raw, Slice field, uint64_t type) {
 struct Hash {
     mbedtls_sha256_context ctx;
     bool ok;
-    size_t bytes = 0;
-    std::string* capture = nullptr;
     Hash() { mbedtls_sha256_init(&ctx); ok = mbedtls_sha256_starts_ret(&ctx, 0) == 0; }
     ~Hash() { mbedtls_sha256_free(&ctx); }
-    void add(const void* p, size_t n) {
-        bytes += n;
-        if (capture && capture->size() + n <= 65536) capture->append(static_cast<const char*>(p), n);
-        else if (capture) ok = false;
-        if (bytes > 262144 || mbedtls_sha256_update_ret(&ctx, static_cast<const uint8_t*>(p), n)) ok = false;
-    }
+    void add(const void* p, size_t n) { if (n && mbedtls_sha256_update_ret(&ctx, static_cast<const uint8_t*>(p), n)) ok = false; }
     void add(const std::string& s) { add(s.data(), s.size()); }
     void literal(const char* s) { add(s, std::strlen(s)); }
     bool finish(uint8_t out[32]) { return ok && mbedtls_sha256_finish_ret(&ctx, out) == 0; }
-    void quote(Slice s) {
-        literal("\"");
-        size_t start = 0;
-        for (size_t i = 0; i < s.n; ++i) {
-            unsigned c = s.p[i];
-            if (c >= 32 && c != '"' && c != '\\') continue;
-            add(s.p + start, i - start);
-            switch (c) {
-                case '"': literal("\\\""); break;
-                case '\\': literal("\\\\"); break;
-                case 8: literal("\\b"); break;
-                case 9: literal("\\t"); break;
-                case 10: literal("\\n"); break;
-                case 12: literal("\\f"); break;
-                case 13: literal("\\r"); break;
-                default: {
-                    const char* hex = "0123456789abcdef";
-                    char escape[] = {'\\', 'u', '0', '0', hex[c >> 4], hex[c & 15]};
-                    add(escape, sizeof escape);
-                }
-            }
-            start = i + 1;
-        }
-        add(s.p + start, s.n - start);
-        literal("\"");
-    }
 };
-std::string hex(Slice s) {
-    static const char* digits = "0123456789abcdef";
-    std::string out(s.n * 2, '0');
-    for (size_t i = 0; i < s.n; ++i) { out[i * 2] = digits[s.p[i] >> 4]; out[i * 2 + 1] = digits[s.p[i] & 15]; }
-    return out;
+
+// NIP-01 serialization escaping (the same rules Android's signer uses).
+void quote(std::string& out, Slice s) {
+    out += '"';
+    for (size_t i = 0; i < s.n; ++i) {
+        const unsigned c = s.p[i];
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case 8: out += "\\b"; break;
+            case 9: out += "\\t"; break;
+            case 10: out += "\\n"; break;
+            case 12: out += "\\f"; break;
+            case 13: out += "\\r"; break;
+            default:
+                if (c < 32) {
+                    const char* digits = "0123456789abcdef";
+                    const char escape[] = {'\\', 'u', '0', '0', digits[c >> 4], digits[c & 15]};
+                    out.append(escape, sizeof escape);
+                } else out += static_cast<char>(c);
+        }
+    }
+    out += '"';
 }
+void quote(std::string& out, const std::string& s) { quote(out, {reinterpret_cast<const uint8_t*>(s.data()), s.size()}); }
+
 std::string base64(Slice s) {
     static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
@@ -162,11 +92,76 @@ std::string base64(Slice s) {
         if (i + 1 < s.n) x |= uint32_t(s.p[i + 1]) << 8;
         if (i + 2 < s.n) x |= s.p[i + 2];
         out += alphabet[x >> 18]; out += alphabet[(x >> 12) & 63];
-        // Android B64.encode uses the standard alphabet WITHOUT padding.
+        // Core byte representation: standard alphabet, no padding.
         if (i + 1 < s.n) out += alphabet[(x >> 6) & 63];
         if (i + 2 < s.n) out += alphabet[x & 63];
     }
     return out;
+}
+// Multibase "b": lowercase RFC 4648 base32 without padding (CID strings).
+std::string base32(Slice s) {
+    static const char* alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+    std::string out = "b";
+    uint32_t acc = 0; unsigned bits = 0;
+    for (size_t i = 0; i < s.n; ++i) {
+        acc = (acc << 8) | s.p[i]; bits += 8;
+        while (bits >= 5) { bits -= 5; out += alphabet[(acc >> bits) & 31]; }
+    }
+    if (bits) out += alphabet[(acc << (5 - bits)) & 31];
+    return out;
+}
+// atproto TID: 13 base32-sortable characters, most significant first.
+std::string tid(uint64_t value) {
+    static const char* alphabet = "234567abcdefghijklmnopqrstuvwxyz";
+    std::string out(13, '2');
+    for (int i = 12; i >= 0; --i) { out[i] = alphabet[value & 31]; value >>= 5; }
+    return out;
+}
+
+// Days from 1970-01-01 (Howard Hinnant's civil calendar algorithms).
+int64_t daysFromCivil(int64_t y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+// "YYYY-MM-DDTHH:MM:SSZ" (UTC, seconds precision) only; years 0000..9999.
+bool formatSeconds(uint64_t seconds, std::string& out) {
+    if (seconds > 253402300799ULL) return false; // 9999-12-31T23:59:59Z
+    const int64_t z = static_cast<int64_t>(seconds / 86400) + 719468;
+    const uint64_t rest = seconds % 86400;
+    const int64_t era = z / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const unsigned mp = (5 * doy + 2) / 153;
+    const unsigned d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9;
+    const int64_t y = static_cast<int64_t>(yoe) + era * 400 + (m <= 2);
+    char buffer[48];
+    std::snprintf(buffer, sizeof buffer, "%04d-%02u-%02uT%02u:%02u:%02uZ", static_cast<int>(y), m, d,
+                  unsigned(rest / 3600), unsigned(rest / 60 % 60), unsigned(rest % 60));
+    out = buffer;
+    return true;
+}
+bool parseSeconds(Slice s, uint64_t& seconds) {
+    if (s.n != 20) return false;
+    for (size_t i = 0; i < 20; ++i) {
+        const char c = static_cast<char>(s.p[i]);
+        const char expected = i == 4 || i == 7 ? '-' : i == 10 ? 'T' : i == 13 || i == 16 ? ':' : i == 19 ? 'Z' : 0;
+        if (expected ? c != expected : (c < '0' || c > '9')) return false;
+    }
+    auto num = [&](size_t at, size_t width) { unsigned v = 0; for (size_t i = 0; i < width; ++i) v = v * 10 + (s.p[at + i] - '0'); return v; };
+    const unsigned year = num(0, 4), month = num(5, 2), day = num(8, 2), hour = num(11, 2), minute = num(14, 2), second = num(17, 2);
+    static const unsigned days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+    const unsigned maximum = days[month - 1] + (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+    if (day < 1 || day > maximum) return false;
+    const int64_t total = daysFromCivil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second;
+    if (total < 0) return false;
+    seconds = static_cast<uint64_t>(total);
+    return true;
 }
 
 struct Mpi {
@@ -180,17 +175,24 @@ struct Curve {
     Curve() { mbedtls_ecp_group_init(&g); mbedtls_ecp_point_init(&p); mbedtls_ecp_point_init(&r); }
     ~Curve() { mbedtls_ecp_point_free(&r); mbedtls_ecp_point_free(&p); mbedtls_ecp_group_free(&g); }
 };
+} // namespace
+
+std::string hex(const uint8_t* p, size_t n) {
+    static const char* digits = "0123456789abcdef";
+    std::string out(n * 2, '0');
+    for (size_t i = 0; i < n; ++i) { out[i * 2] = digits[p[i] >> 4]; out[i * 2 + 1] = digits[p[i] & 15]; }
+    return out;
+}
 
 // BIP340 verification only: no secrets, signing, RNG, or new crypto dependency.
 // Explicit lift_x is needed because mbedTLS 2.x cannot import compressed points.
-bool verifySchnorr(Slice pub, Slice sig, const uint8_t message[32]) {
-    if (pub.n != 32 || sig.n != 64) return false;
+bool verifySchnorr(const uint8_t pub[32], const uint8_t sig[64], const uint8_t message[32]) {
     Curve c;
     Mpi r, s, e, y2, exponent;
     if (mbedtls_ecp_group_load(&c.g, MBEDTLS_ECP_DP_SECP256K1) ||
-        mbedtls_mpi_read_binary(&c.p.X, pub.p, 32) ||
-        mbedtls_mpi_read_binary(&r.v, sig.p, 32) ||
-        mbedtls_mpi_read_binary(&s.v, sig.p + 32, 32) ||
+        mbedtls_mpi_read_binary(&c.p.X, pub, 32) ||
+        mbedtls_mpi_read_binary(&r.v, sig, 32) ||
+        mbedtls_mpi_read_binary(&s.v, sig + 32, 32) ||
         mbedtls_mpi_cmp_mpi(&c.p.X, &c.g.P) >= 0 ||
         mbedtls_mpi_cmp_mpi(&r.v, &c.g.P) >= 0 || mbedtls_mpi_cmp_mpi(&s.v, &c.g.N) >= 0) return false;
     // y = (x^3 + 7)^((p+1)/4) mod p; then choose the even square root.
@@ -208,7 +210,7 @@ bool verifySchnorr(Slice pub, Slice sig, const uint8_t message[32]) {
     tagHash.literal("BIP0340/challenge");
     if (!tagHash.finish(tag)) return false;
     Hash h;
-    h.add(tag, 32); h.add(tag, 32); h.add(sig.p, 32); h.add(pub.p, 32); h.add(message, 32);
+    h.add(tag, 32); h.add(tag, 32); h.add(sig, 32); h.add(pub, 32); h.add(message, 32);
     if (!h.finish(challenge) || mbedtls_mpi_read_binary(&e.v, challenge, 32) ||
         mbedtls_mpi_mod_mpi(&e.v, &e.v, &c.g.N)) return false;
     if (mbedtls_mpi_cmp_int(&e.v, 0) && mbedtls_mpi_sub_mpi(&e.v, &c.g.N, &e.v)) return false;
@@ -217,97 +219,108 @@ bool verifySchnorr(Slice pub, Slice sig, const uint8_t message[32]) {
            mbedtls_mpi_cmp_mpi(&c.r.X, &r.v) == 0;
 }
 
-bool deadline(Slice s) {
-    // Android requires four-digit UTC ISO-8601 and Instant.parse validity.
-    if (s.n < 20 || s.n > 30) return false;
-    for (size_t i = 0; i < s.n; ++i) {
-        if (i == 4 || i == 7) { if (s.p[i] != '-') return false; }
-        else if (i == 10) { if (s.p[i] != 'T') return false; }
-        else if (i == 13 || i == 16) { if (s.p[i] != ':') return false; }
-        else if (i == s.n - 1) { if (s.p[i] != 'Z') return false; }
-        else if (i == 19) { if (s.p[i] != '.' || s.n < 22) return false; }
-        else if (s.p[i] < '0' || s.p[i] > '9') return false;
-    }
-    auto two = [&](size_t i) { return (s.p[i] - '0') * 10 + s.p[i + 1] - '0'; };
-    int year = two(0) * 100 + two(2), month = two(5), day = two(8);
-    const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
-    if (month < 1 || month > 12) return false;
-    int maximum = days[month - 1] + (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
-    int hour = two(11), minute = two(14), second = two(17);
-    if (day < 1 || day > maximum || minute > 59) return false;
-    if (hour == 24) {
-        if (minute || second) return false;
-        for (size_t i = 20; i + 1 < s.n; ++i) if (s.p[i] != '0') return false;
-        return true;
-    }
-    return hour <= 23 && (second <= 59 || (hour == 23 && minute == 59 && second == 60));
-}
-
+namespace {
+// Mesh §2.1: the 7-element payload, typed tag values (§2.1.1) and omitted
+// fixed tags (§2.1.2) are reversed into the original Nostr tags. Only exact
+// round-trip forms decode; anything else is rejected, never guessed.
 bool event(Slice payload, BundleInfo& info, std::string& error, std::string* json = nullptr) {
-    Reader p(payload, true);
-    uint64_t count, version, created, kind, tags;
+    if (payload.n > MAX_PAYLOAD_BYTES) { error = "payload size limit"; return false; }
+    Reader p(payload);
+    uint64_t count, version, created, kind, tagCount;
     Slice pub, sig, content;
     if (!p.array(7, count) || !p.uint(version) || version != 1 || !p.bytes(2, pub) || pub.n != 32 ||
-        !p.uint(created) || created > 9007199254740991ULL || !p.uint(kind) || kind > 65535 ||
-        !p.array(tags) || tags > 256) { error = "invalid event header"; return false; }
-    Hash h;
-    h.literal("[0,\""); h.add(hex(pub)); h.literal("\","); h.add(std::to_string(created));
-    h.literal(","); h.add(std::to_string(kind)); h.literal(",");
-    if (json) {
-        *json = "{\"pubkey\":\"" + hex(pub) + "\",\"created_at\":" + std::to_string(created) +
-            ",\"kind\":" + std::to_string(kind) + ",\"tags\":";
-        h.capture = json;
-    }
-    h.literal("[");
+        !p.uint(created) || !p.uint(kind) || kind > 65535 || !p.array(tagCount) ||
+        (tagCount != UINT64_MAX && tagCount > 256)) { error = "invalid event header"; return false; }
+    std::string tags = "[";
+    if (kind == 1) tags += "[\"t\",\"mosimo.jisaku.dev\"],[\"mosimo:v\",\"1\"]";
+    else if (kind == 8173) tags += "[\"t\",\"mosimo.jisaku.dev\"]";
+    const bool omitted = kind == 1 || kind == 8173;
     bool hasDeadline = false;
-    for (uint64_t i = 0; i < tags; ++i) {
+    uint64_t deadline = 0;
+    for (uint64_t i = 0; tagCount == UINT64_MAX ? !p.atBreak() : i < tagCount; ++i) {
+        if (i >= 256) { error = "too many tags"; return false; }
         uint64_t length;
         Slice name;
-        if (!p.array(length) || length < 1 || length > 32 || !p.bytes(3, name)) { error = "invalid event tag"; return false; }
-        bool isDeadline = equal(name, "mosimo.oriom.dev:delivery-expires-at");
-        if (isDeadline && (hasDeadline || length != 2)) { error = "duplicate/invalid signed deadline"; return false; }
-        if (i) h.literal(",");
-        h.literal("["); h.quote(name);
-        for (uint64_t j = 1; j < length; ++j) {
-            h.literal(",");
-            Slice value;
-            if (p.at < p.n && (p.p[p.at] >> 5) == 3) {
-                if (!p.bytes(3, value)) { error = "invalid UTF-8 tag"; return false; }
-                h.quote(value);
-                if (isDeadline) {
-                    if (!deadline(value)) { error = "invalid signed deadline"; return false; }
-                    hasDeadline = true;
-                }
-            } else if (j == 1 && length == 2 && !isDeadline &&
-                       (equal(name, "mosimo.oriom.dev:commit") ||
-                        (name.n > 21 && std::memcmp(name.p, "mosimo.oriom.dev:ext:", 21) == 0))) {
-                if (!p.bytes(2, value)) { error = "invalid typed byte tag"; return false; }
-                std::string encoded = base64(value);
-                h.quote({reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()});
-            } else if (j == 1 && length == 2 && equal(name, "mosimo.oriom.dev:version")) {
-                uint64_t v;
-                if (!p.uint(v) || v != 1) { error = "invalid typed version tag"; return false; }
-                h.literal("\"1\"");
-            } else { error = "unsupported typed tag"; return false; }
+        // Tags are definite arrays (CDDL compact-tag); typed values need the exact element count.
+        if (!p.array(length) || length == 0 || length == UINT64_MAX || length > 32 || !p.bytes(3, name)) {
+            error = "invalid event tag"; return false;
         }
-        h.literal("]");
+        const bool isDeadline = equal(name, "mosimo:exp");
+        if (isDeadline && hasDeadline) { error = "duplicate signed deadline"; return false; }
+        if (i || omitted) tags += ',';
+        tags += '[';
+        quote(tags, name);
+        std::string first;
+        uint64_t j = 1;
+        for (; j < length; ++j) {
+            tags += ',';
+            const int major = p.major();
+            const size_t valueStart = tags.size();
+            Slice value;
+            if (major == 3) {
+                if (!p.bytes(3, value)) { error = "invalid UTF-8 tag"; return false; }
+                quote(tags, value);
+            } else if (j != 1 || length != 2) {
+                error = "typed value outside position 1 of a two-element tag"; return false;
+            } else if (major == 2) {
+                if (!p.bytes(2, value)) { error = "invalid typed byte tag"; return false; }
+                if (equal(name, "mosimo:commit") || (startsWith(name, "mosimo:ext:") && name.n > 11)) quote(tags, base64(value));
+                else if (equal(name, "mosimo:base")) quote(tags, value.n ? base32(value) : std::string());
+                else { error = "unexpected typed byte tag"; return false; }
+            } else if (major == 0) {
+                uint64_t number;
+                if (!p.uint(number)) { error = "invalid typed integer tag"; return false; }
+                std::string text;
+                if (equal(name, "mosimo:rkey")) text = tid(number);
+                else if (equal(name, "mosimo:exp")) {
+                    if (number > cbor::SIGNED_MAX - created || !formatSeconds(created + number, text)) {
+                        error = "deadline outside the Timestamp range"; return false;
+                    }
+                } else { error = "unexpected typed integer tag"; return false; }
+                quote(tags, text);
+            } else { error = "unexpected tag value type"; return false; }
+            if (j == 1) first = tags.substr(valueStart + 1, tags.size() - valueStart - 2);
+        }
+        tags += ']';
+        if (isDeadline) {
+            // Signed delivery deadline: exactly ["mosimo:exp", YYYY-MM-DDTHH:MM:SSZ].
+            if (j != 2 || !parseSeconds({reinterpret_cast<const uint8_t*>(first.data()), first.size()}, deadline)) {
+                error = "invalid signed deadline"; return false;
+            }
+            hasDeadline = true;
+        }
+        if (kind == 8173 && i == 0 && j == 2 && equal(name, "t") && first.compare(0, 18, "mosimo.jisaku.dev/") == 0)
+            info.topic = first;
+        // delete §1 / report §1: tags[1] is the `e` target, tags[2] a report's `p` author (both 64 lowercase hex).
+        auto isId = [](const std::string& v) {
+            return v.size() == 64 && std::all_of(v.begin(), v.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+        };
+        if ((kind == 5 || kind == 1984) && i == 1 && j >= 2 && equal(name, "e") && isId(first)) info.target = first;
+        if (kind == 1984 && i == 2 && j >= 2 && equal(name, "p") && isId(first)) info.reported = first;
+        if (tags.size() > MAX_JSON_BYTES) { error = "tag JSON size limit"; return false; }
     }
-    if (!hasDeadline || !p.bytes(3, content) || content.n > 16384 || !p.bytes(2, sig) || sig.n != 64 || !p.done()) {
+    if (!p.end(tagCount)) { error = "invalid tag list end"; return false; }
+    tags += ']';
+    if (!hasDeadline || !p.bytes(3, content) || !p.bytes(2, sig) || sig.n != 64 || !p.end(count) || !p.done()) {
         error = "invalid event content/signature/deadline"; return false;
     }
-    h.literal("]");
-    h.capture = nullptr;
-    h.literal(",");
-    if (json) { *json += ",\"content\":"; h.capture = json; }
-    h.quote(content);
-    h.capture = nullptr;
-    h.literal("]");
+    const std::string pubHex = hex(pub.p, pub.n);
+    Hash h;
+    h.literal("[0,\""); h.add(pubHex); h.literal("\","); h.add(std::to_string(created));
+    h.literal(","); h.add(std::to_string(kind)); h.literal(","); h.add(tags); h.literal(",");
+    std::string quoted;
+    quoted.reserve(content.n + 16);
+    quote(quoted, content);
+    h.add(quoted); h.literal("]");
     uint8_t digest[32];
-    if (!h.finish(digest) || !verifySchnorr(pub, sig, digest)) { error = "invalid event signature"; return false; }
-    info.id = hex({digest, 32}); info.text = string(content);
-    info.kind = static_cast<uint16_t>(kind);
+    if (!h.finish(digest) || !verifySchnorr(pub.p, sig.p, digest)) { error = "invalid event signature"; return false; }
+    info.id = hex(digest, 32); info.text = string(content); info.pubkey = pubHex;
+    info.kind = static_cast<uint16_t>(kind); info.createdAt = created; info.expiresAt = deadline;
     if (json) {
-        *json += ",\"id\":\"" + info.id + "\",\"sig\":\"" + hex(sig) + "\"}";
+        if (tags.size() + quoted.size() > MAX_JSON_BYTES) { error = "export JSON size limit"; return false; }
+        *json = "{\"id\":\"" + info.id + "\",\"pubkey\":\"" + pubHex + "\",\"created_at\":" + std::to_string(created) +
+            ",\"kind\":" + std::to_string(kind) + ",\"tags\":" + tags + ",\"content\":" + quoted +
+            ",\"sig\":\"" + hex(sig.p, sig.n) + "\"}";
     }
     return true;
 }
@@ -328,10 +341,10 @@ bool eid(Reader& r, bool* null = nullptr, bool destination = false) {
     if (!r.array(2, count) || !r.uint(scheme)) return false;
     bool isNull = false;
     if (scheme == 1) {
-        if (r.at < r.n && (r.p[r.at] >> 5) == 3) {
+        if (r.major() == 3) {
             Slice s;
             if (!r.bytes(3, s) || s.n < 3 || s.p[0] != '/' || s.p[1] != '/' ||
-                (destination && !equal(s, "//mosimo.oriom.dev/~post"))) return false;
+                (destination && !equal(s, DESTINATION))) return false;
             size_t path = 2;
             while (path < s.n && s.p[path] != '/' && s.p[path] != '?' && s.p[path] != '#') ++path;
             if (path == 2 || path == s.n || s.p[path] != '/') return false;
@@ -339,10 +352,8 @@ bool eid(Reader& r, bool* null = nullptr, bool destination = false) {
             for (size_t i = 0; i < s.n; ++i) {
                 unsigned c = s.p[i];
                 const char* allowed = "-._~:/?#[]@!$&'()*+,;=";
-                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || std::strchr(allowed, c)) {
-                    if (!c) return false;
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (c && std::strchr(allowed, c)))
                     continue;
-                }
                 if (c != '%' || i + 2 >= s.n) return false;
                 for (int j = 0; j < 2; ++j) {
                     c = s.p[++i];
@@ -380,7 +391,7 @@ bool parse(Slice bytes, Parsed& result, std::string& error, std::string* json = 
     result.primary = {r.p + start, r.at - start};
     if (!checkCrc(result.primary, crcField, crcType)) { error = "primary CRC mismatch"; return false; }
     bool age = false, hop = false, previous = false, payload = false;
-    while (r.at < r.n && (outer == UINT64_MAX ? r.p[r.at] != 0xff : result.blocks.size() < outer - 1)) {
+    while (r.at < r.n && (outer == UINT64_MAX ? !r.atBreak() : result.blocks.size() < outer - 1)) {
         if (result.blocks.size() == MAX_BLOCKS || payload) { error = "block limit/payload must be last"; return false; }
         Block b;
         uint64_t count;
@@ -430,13 +441,6 @@ bool parse(Slice bytes, Parsed& result, std::string& error, std::string* json = 
     return event(result.blocks.back().data, result.info, error, json);
 }
 
-void head(std::vector<uint8_t>& out, unsigned major, uint64_t value) {
-    if (value < 24) { out.push_back(static_cast<uint8_t>((major << 5) | value)); return; }
-    unsigned width = value <= 0xff ? 1 : value <= 0xffff ? 2 : value <= 0xffffffffULL ? 4 : 8;
-    out.push_back(static_cast<uint8_t>((major << 5) | (width == 1 ? 24 : width == 2 ? 25 : width == 4 ? 26 : 27)));
-    for (unsigned i = width; i; --i) out.push_back(static_cast<uint8_t>(value >> ((i - 1) * 8)));
-}
-void append(std::vector<uint8_t>& out, Slice s) { out.insert(out.end(), s.p, s.p + s.n); }
 void rewrite(std::vector<uint8_t>& out, const Block& b, uint64_t value, uint32_t hopLimit) {
     std::vector<uint8_t> data;
     data.reserve(12);
@@ -462,69 +466,6 @@ bool validateBundle(const uint8_t* data, size_t size, BundleInfo& info, std::str
     Parsed parsed;
     if (!parse({data, size}, parsed, error)) return false;
     info = std::move(parsed.info);
-    return true;
-}
-
-namespace {
-bool compressedPoint(Curve& c, const std::vector<uint8_t>& key) {
-    if (key.size() != 33 || (key[0] != 2 && key[0] != 3)) return false;
-    Mpi y2, exponent;
-    if (mbedtls_ecp_group_load(&c.g, MBEDTLS_ECP_DP_SECP256K1) ||
-        mbedtls_mpi_read_binary(&c.p.X, key.data() + 1, 32) || mbedtls_mpi_cmp_mpi(&c.p.X, &c.g.P) >= 0 ||
-        mbedtls_mpi_mul_mpi(&y2.v, &c.p.X, &c.p.X) || mbedtls_mpi_mod_mpi(&y2.v, &y2.v, &c.g.P) ||
-        mbedtls_mpi_mul_mpi(&y2.v, &y2.v, &c.p.X) || mbedtls_mpi_add_int(&y2.v, &y2.v, 7) ||
-        mbedtls_mpi_mod_mpi(&y2.v, &y2.v, &c.g.P) || mbedtls_mpi_add_int(&exponent.v, &c.g.P, 1) ||
-        mbedtls_mpi_shift_r(&exponent.v, 2) || mbedtls_mpi_exp_mod(&c.p.Y, &y2.v, &exponent.v, &c.g.P, nullptr)) return false;
-    if (mbedtls_mpi_get_bit(&c.p.Y, 0) != (key[0] & 1) && mbedtls_mpi_sub_mpi(&c.p.Y, &c.g.P, &c.p.Y)) return false;
-    return !mbedtls_mpi_lset(&c.p.Z, 1) && !mbedtls_ecp_check_pubkey(&c.g, &c.p);
-}
-}
-bool validSecpKey(const std::vector<uint8_t>& key) { Curve c; return compressedPoint(c, key); }
-bool verifyCompactEcdsa(const std::vector<uint8_t>& key, const std::vector<uint8_t>& sig, const uint8_t hash[32]) {
-    if (sig.size() != 64) return false;
-    Curve c; Mpi r, s, half;
-    if (!compressedPoint(c, key) || mbedtls_mpi_read_binary(&r.v, sig.data(), 32) ||
-        mbedtls_mpi_read_binary(&s.v, sig.data() + 32, 32) || mbedtls_mpi_copy(&half.v, &c.g.N) ||
-        mbedtls_mpi_shift_r(&half.v, 1) || mbedtls_mpi_cmp_int(&r.v, 1) < 0 || mbedtls_mpi_cmp_mpi(&r.v, &c.g.N) >= 0 ||
-        mbedtls_mpi_cmp_int(&s.v, 1) < 0 || mbedtls_mpi_cmp_mpi(&s.v, &half.v) > 0) return false;
-    return mbedtls_ecdsa_verify(&c.g, hash, 32, &c.p, &r.v, &s.v) == 0;
-}
-bool verifyCompactSchnorr(const std::vector<uint8_t>& key, const std::vector<uint8_t>& sig, const uint8_t hash[32]) {
-    return verifySchnorr({key.data(), key.size()}, {sig.data(), sig.size()}, hash);
-}
-bool validateEventPayload(const std::vector<uint8_t>& payload, BundleInfo& info, std::string& error) {
-    info = {}; error.clear();
-    if (payload.empty() || payload.size() > MAX_BUNDLE_BYTES - 256) { error = "event payload size"; return false; }
-    return event({payload.data(),payload.size()},info,error);
-}
-bool wrapEventPayload(const std::vector<uint8_t>& payload, uint64_t lifetime,
-                      std::vector<uint8_t>& out, BundleInfo& info, std::string& error) {
-    out.clear(); info = {}; error.clear();
-    BundleInfo verified;
-    if (payload.empty() || payload.size() > MAX_BUNDLE_BYTES - 256 || lifetime < 1 || lifetime > MAX_RESIDENCE_MS ||
-        !validateEventPayload(payload, verified, error)) { if (error.empty()) error = "invalid ingress payload/lifetime"; return false; }
-    auto finishCrc = [&](size_t start) {
-        head(out, 2, 4); const size_t at = out.size(); out.insert(out.end(), 4, 0);
-        uint32_t sum = crc({out.data() + start, out.size() - start}, {out.data() + at, 4}, 2);
-        for (size_t j = 0; j < 4; ++j) out[at + j] = sum >> ((3 - j) * 8);
-    };
-    auto eidNull = [&]() { head(out, 4, 2); head(out, 0, 1); head(out, 0, 0); };
-    out.push_back(0x9f); size_t start = out.size();
-    head(out, 4, 9); head(out, 0, 7); head(out, 0, 4); head(out, 0, 2);
-    head(out, 4, 2); head(out, 0, 1);
-    const std::string destination = "//mosimo.oriom.dev/~post";
-    head(out, 3, destination.size()); append(out, {reinterpret_cast<const uint8_t*>(destination.data()), destination.size()});
-    eidNull(); eidNull(); head(out, 4, 2); head(out, 0, 0);
-    uint64_t sequence = 0;
-    for (size_t j = 0; j < 15; ++j) sequence = (sequence << 4) | (verified.id[j] <= '9' ? verified.id[j] - '0' : verified.id[j] - 'a' + 10);
-    head(out, 0, sequence); head(out, 0, lifetime); finishCrc(start);
-    auto block = [&](unsigned type, unsigned number, const std::vector<uint8_t>& data) {
-        size_t at = out.size(); head(out, 4, 6); head(out, 0, type); head(out, 0, number); head(out, 0, 0); head(out, 0, 2);
-        head(out, 2, data.size()); append(out, {data.data(), data.size()}); finishCrc(at);
-    };
-    std::vector<uint8_t> hop; head(hop, 4, 2); head(hop, 0, MAX_HOPS); head(hop, 0, 0);
-    block(10, 2, hop); block(7, 3, {0}); block(1, 1, payload); out.push_back(0xff);
-    info = std::move(verified); info.lifetime = lifetime; info.hopLimit = MAX_HOPS;
     return true;
 }
 

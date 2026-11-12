@@ -1,5 +1,6 @@
 #include "MeshBle.h"
 #include "MeshRelay.h"
+#include "MeshCbor.h"
 
 #include <Arduino.h>
 #include <algorithm>
@@ -14,7 +15,8 @@ namespace {
 const char* SERVICE = "b5e89a01-f9da-45c2-9111-2de7a7441d24";
 const char* RX_UUID = "483c3867-c832-4c60-9a96-7018059eaf74";
 const char* TX_UUID = "49d60590-c23f-4a0a-a58e-f2f2f606f94d";
-constexpr size_t MAX_QUEUE = 8, MAX_QUEUED_BYTES = 48000;
+constexpr size_t MAX_QUEUE = 16, MAX_QUEUED_BYTES = 16384;
+constexpr uint32_t ADVERTISEMENT_REFRESH_MS = 5000;
 }
 
 bool Ble::begin(const std::string& node) {
@@ -36,17 +38,34 @@ bool Ble::begin(const std::string& node) {
     tx_->setCallbacks(this);
     service->start();
 
-    uint8_t data[9];
-    for (size_t i = 0; i < 8; ++i) data[i] = std::stoul(node.substr(i * 2, 2), nullptr, 16);
-    data[8] = 1; // Peripheral-only: Android must initiate, irrespective of node-ID order.
-    NimBLEAdvertisementData advertisement, response;
+    NimBLEAdvertisementData advertisement;
     advertisement.setFlags(0x06);
     advertisement.addServiceUUID(SERVICE);
-    response.setServiceData(NimBLEUUID(SERVICE), data, sizeof(data));
     auto advertising = NimBLEDevice::getAdvertising();
-    if (!advertising->setAdvertisementData(advertisement) || !advertising->setScanResponseData(response)) return false;
+    if (!advertising->setAdvertisementData(advertisement) || !applyScanResponse()) return false;
     advertising->enableScanResponse(true);
     return !enabled_ || networkPaused_ || advertising->start();
+}
+// Mesh §3.1 + mesh.adv §1: Service UUID 16 | node ID 8 | role flags 1 | summary 3 | ext flags 1.
+bool Ble::applyScanResponse() {
+    uint8_t data[13];
+    for (size_t i = 0; i < 8; ++i) data[i] = std::stoul(node_.substr(i * 2, 2), nullptr, 16);
+    data[8] = 1; // Peripheral-only (role flags bit0): phones initiate, irrespective of node-ID order.
+    std::memcpy(data + 9, advertised_, sizeof advertised_);
+    NimBLEAdvertisementData response;
+    return response.setServiceData(NimBLEUUID(SERVICE), data, sizeof(data)) &&
+           NimBLEDevice::getAdvertising()->setScanResponseData(response);
+}
+void Ble::refreshAdvertisement(Relay& relay) {
+    const uint32_t now = millis();
+    if (handle_ != BLE_HS_CONN_HANDLE_NONE || !server_ ||
+        (advertisementMs_ && now - advertisementMs_ < ADVERTISEMENT_REFRESH_MS)) return;
+    advertisementMs_ = now ? now : 1;
+    uint8_t current[4];
+    relay.advertisement(current);
+    if (!std::memcmp(current, advertised_, sizeof advertised_)) return;
+    std::memcpy(advertised_, current, sizeof advertised_);
+    if (!applyScanResponse()) Serial.printf("BLE scan response update failed\n");
 }
 
 void Ble::enqueue(Kind kind, uint16_t handle, uint16_t size, int status, const uint8_t* bytes) {
@@ -83,7 +102,6 @@ void Ble::clear() {
     subscribed_ = ready_ = false;
     out_.clear(); queuedBytes_ = offset_ = 0;
     txAttempted_ = txBlocked_ = false;
-    prefixBytes_ = expected_ = 0;
     incoming_.clear();
     mtu_ = 23;
 }
@@ -137,6 +155,7 @@ bool Ble::pauseForNetwork(bool pause, Relay& relay) {
         if (pause) {
             drop(relay, "TLS/TTS memory preflight; BLE resumes after work");
             std::vector<uint8_t>().swap(incoming_);
+            std::deque<std::vector<uint8_t>>().swap(out_);
         } else if (enabled_ && !recovering_) NimBLEDevice::getAdvertising()->start();
     }
     if (pause && events_) recover(relay);
@@ -152,39 +171,30 @@ bool Ble::pauseForNetwork(bool pause, Relay& relay) {
 #endif
     return !pause || quiescent;
 }
+// Mesh §7: messages are written back to back as a CBOR sequence; the GATT
+// write boundaries need not match message boundaries.
 bool Ble::send(const uint8_t* bytes, size_t size) {
     if (!enabled_ || networkPaused_ || !ready_ || recovering_ || overflow_.load() || !callbackAlive_.load() ||
-        !bytes || !size || size > MAX_BUNDLE_BYTES || out_.size() >= MAX_QUEUE ||
-        size + 4 > MAX_QUEUED_BYTES - queuedBytes_) return false;
-    std::vector<uint8_t> frame(size + 4);
-    frame[0] = size >> 24; frame[1] = size >> 16; frame[2] = size >> 8; frame[3] = size;
-    std::memcpy(frame.data() + 4, bytes, size);
-    queuedBytes_ += frame.size();
-    out_.push_back(std::move(frame));
+        !bytes || !size || size > Relay::MESSAGE_LIMIT || out_.size() >= MAX_QUEUE ||
+        size > MAX_QUEUED_BYTES - queuedBytes_) return false;
+    queuedBytes_ += size;
+    out_.emplace_back(bytes, bytes + size);
     return true;
 }
 bool Ble::feed(Relay& relay, const uint8_t* bytes, size_t size) {
     rxMs_ = millis();
-    for (size_t at = 0; at < size;) {
+    incoming_.insert(incoming_.end(), bytes, bytes + size);
+    while (!incoming_.empty()) {
         if (overflow_.load()) return false;
-        if (prefixBytes_ < 4) {
-            prefix_[prefixBytes_++] = bytes[at++];
-            if (prefixBytes_ != 4) continue;
-            expected_ = (uint32_t(prefix_[0]) << 24) | (uint32_t(prefix_[1]) << 16) |
-                        (uint32_t(prefix_[2]) << 8) | prefix_[3];
-            if (!expected_ || expected_ > MAX_BUNDLE_BYTES) return false;
-            incoming_.clear();
-            incoming_.reserve(expected_);
-        }
-        const size_t count = std::min(expected_ - incoming_.size(), size - at);
-        incoming_.insert(incoming_.end(), bytes + at, bytes + at + count);
-        at += count;
-        if (incoming_.size() == expected_) {
-            if (overflow_.load()) return false;
-            relay.receive(incoming_.data(), incoming_.size());
-            incoming_.clear(); prefixBytes_ = expected_ = 0;
-            if (overflow_.load() || relay.disconnectRequested()) return false;
-        }
+        size_t length = 0;
+        const int state = cbor::measure(incoming_.data(), incoming_.size(), length, Relay::MESSAGE_LIMIT);
+        // Mesh §7: an item longer than our advertised limit, or malformed CBOR,
+        // means the stream lost synchronization; the link must be closed.
+        if (state < 0 || (state > 0 && length > Relay::MESSAGE_LIMIT)) return false;
+        if (state == 0) return incoming_.size() <= Relay::MESSAGE_LIMIT;
+        relay.receive(incoming_.data(), length);
+        incoming_.erase(incoming_.begin(), incoming_.begin() + length);
+        if (overflow_.load() || relay.disconnectRequested()) return false;
     }
     return true;
 }
@@ -273,7 +283,8 @@ void Ble::poll(Relay& relay) {
     }
 #endif
     if (handle_ != BLE_HS_CONN_HANDLE_NONE && !subscribed_ && now - connectedMs_ > 30000) drop(relay, "subscription timeout");
-    if (prefixBytes_ && now - rxMs_ > 15000) drop(relay, "incomplete frame timeout");
+    if (!incoming_.empty() && now - rxMs_ > 15000) drop(relay, "incomplete message timeout");
+    refreshAdvertisement(relay);
     if (relay.disconnectRequested()) drop(relay, "exchange requested disconnect");
     if (recover(relay)) return;
     relay.tick();

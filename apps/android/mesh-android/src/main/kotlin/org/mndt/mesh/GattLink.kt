@@ -35,44 +35,60 @@ import android.util.Log
 import java.util.UUID
 import java.util.concurrent.Executors
 
-/** What a node puts in its advertisement: who it is and whether it can only be a peripheral. */
-internal data class GattAdvert(val node: String, val peripheralOnly: Boolean)
-
-/** Service data under [GattLink.SERVICE_UUID]: 8-byte node id, then flags (bit0 = peripheral-only). Longer is fine. */
-internal fun parseGattAdvert(data: ByteArray?): GattAdvert? {
-    if (data == null || data.size < 9) return null
-    return GattAdvert(data.copyOf(8).joinToString("") { "%02x".format(it) }, data[8].toInt() and 1 != 0)
+/**
+ * What a node puts in its scan response (mesh §3.1 + mesh.adv §1): node ID, role flags, and optionally the
+ * 3-byte candidate-set summary with extension flags.
+ */
+internal data class GattAdvert(val node: String, val peripheralOnly: Boolean, val summary: ByteArray? = null, val extFlags: Int = 0) {
+    val urgent: Boolean get() = extFlags and 1 != 0
 }
 
-internal fun gattServiceData(node: String, flags: Int = 0): ByteArray =
-    ByteArray(9) { if (it < 8) node.substring(it * 2, it * 2 + 2).toInt(16).toByte() else flags.toByte() }
+/** Service data under [GattLink.SERVICE_UUID]: 8-byte node id, flags (bit0 = peripheral-only), then the optional 4-byte adv extension. */
+internal fun parseGattAdvert(data: ByteArray?): GattAdvert? {
+    if (data == null || data.size < 9) return null
+    val node = data.copyOf(8).joinToString("") { "%02x".format(it.toInt() and 255) }
+    val extension = data.size >= 13
+    return GattAdvert(node, data[8].toInt() and 1 != 0, if (extension) data.copyOfRange(9, 12) else null, if (extension) data[12].toInt() and 255 else 0)
+}
+
+internal fun gattServiceData(node: String, flags: Int = 0, summary: ByteArray? = null, extFlags: Int = 0): ByteArray {
+    val head = ByteArray(9) { if (it < 8) node.substring(it * 2, it * 2 + 2).toInt(16).toByte() else flags.toByte() }
+    return if (summary == null) head else head + summary.copyOf(3) + byteArrayOf(extFlags.toByte())
+}
 
 /** Central iff the peer cannot be one, or we win the tie-break, so two phones open exactly one link. */
 internal fun shouldConnect(myNode: String, peer: GattAdvert) =
     peer.node != myNode && (peer.peripheralOnly || myNode < peer.node)
 
 /**
+ * mesh.adv §4: skip connecting when the peer's advertised summary and our own summary are both unchanged since the
+ * last reconciliation with that node; an urgent flag (bit0) always permits a connection.
+ */
+internal fun worthConnecting(peer: GattAdvert, lastSynced: Pair<ByteArray, ByteArray>?, ownSummary: ByteArray): Boolean {
+    if (peer.summary == null || lastSynced == null || peer.urgent) return true
+    return !(lastSynced.first.contentEquals(peer.summary) && lastSynced.second.contentEquals(ownSummary))
+}
+
+/**
  * BLE GATT link: every phone is GATT server + advertiser and scanner + central at once.
  *
  * Advertisement (legacy): Flags (3) + 128-bit Service UUID list (18) = 21 bytes; scanners filter on the UUID,
  * which controllers offload reliably. The scan response carries the 128-bit Service Data
- * (1 len + 1 type 0x21 + 16 UUID + 8 node id + 1 flags = 27 bytes). A filter on 128-bit Service Data alone
- * matched nothing on a real phone (OPPO CPH2797, Android 16), so it is not used.
+ * (1 len + 1 type 0x21 + 16 UUID + 8 node id + 1 flags + 3 summary + 1 ext flags = 31 bytes).
  *
- * Bytes on either direction are [Frames.encode] streams cut into min(MTU - 3, 512) chunks: central writes RX with
- * response, server notifies TX; one chunk in flight per peer. Peer handles are "c:ADDR" (we are central)
- * and "p:ADDR" (we are server). Listener calls go through one executor, never under [lock].
+ * Bytes on either direction are the CBOR sequence of exchange messages cut into min(MTU - 3, 512) chunks: the
+ * central writes RX without response, the server notifies TX; one chunk in flight per peer. Peer handles are
+ * "c:ADDR" (we are central) and "p:ADDR" (we are server). Listener calls go through one executor, never under [lock].
  */
 @SuppressLint("MissingPermission")
 internal class GattLink(private val context: Context, private val allowedPeerNode: String? = null) : Link {
     override val name = "ble"
 
-    private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, var node: String?) {
+    private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, val node: String?) {
         var connected = false
-
         var mtu = 23
-        val reader = FrameReader()
-        val out = ArrayDeque<ByteArray>() // encoded frames; [offset] bytes of the first are already sent
+        val reader = CborSequenceReader(Exchange.MESSAGE_LIMIT)
+        val out = ArrayDeque<ByteArray>() // whole messages; [offset] bytes of the first are already sent
         var offset = 0
         var inFlight = 0 // size of the unacknowledged chunk, 0 when idle
     }
@@ -95,6 +111,12 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private val backoff = HashMap<String, Pair<Int, Long>>()
     /** First time each node was seen; lets the tie-break loser dial when the winner cannot see us. */
     private val firstSeen = HashMap<String, Long>()
+    /** mesh.adv: our candidate summary and flags, the last advertised summary per node, and the pair recorded at the last sync. */
+    private var summary = ByteArray(3)
+    private var extFlags = 0
+    private val lastAdvertSummary = HashMap<String, ByteArray>()
+    private val lastSynced = HashMap<String, Pair<ByteArray, ByteArray>>()
+    private var lastAdvertiseRestart = 0L
     /** The last start request: Bluetooth turned on later (or OFF→ON, which kills scanner/advertiser/server) restarts the link. */
     @Volatile private var wanted: Pair<String, LinkListener>? = null
 
@@ -142,25 +164,50 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
             runCatching { advertiseCb?.let { advertiser?.stopAdvertising(it) } }
             for (p in peers.values.toList()) drop(p)
             runCatching { server?.close() }
-            server = null; scanCb = null; advertiseCb = null; listener = null; serverMtu.clear(); firstSeen.clear()
+            server = null; scanCb = null; advertiseCb = null; listener = null; serverMtu.clear(); firstSeen.clear(); lastSynced.clear(); lastAdvertSummary.clear()
         }
     }
 
-    override fun send(peer: String, frame: ByteArray): Boolean {
-        val encoded = Frames.encode(frame)
+    /** mesh.adv §2-3: re-advertise when the candidate summary or flags change (rate limited to spare the controller). */
+    fun setSummary(summary: ByteArray, extFlags: Int) {
+        safe(Unit) {
+            synchronized(lock) {
+                if (this.summary.contentEquals(summary) && this.extFlags == extFlags) return
+                this.summary = summary.copyOf(3); this.extFlags = extFlags
+                if (!running || advertiseCb == null) return
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastAdvertiseRestart < ADVERTISE_RESTART_MIN_MS) { main.postDelayed({ locked(gen) { readvertise(gen) } }, ADVERTISE_RESTART_MIN_MS); return }
+                readvertise(gen)
+            }
+        }
+    }
+
+    private fun readvertise(g: Int) {
+        runCatching { advertiseCb?.let { advertiser?.stopAdvertising(it) } }
+        advertiseCb = null
+        lastAdvertiseRestart = SystemClock.elapsedRealtime()
+        advertise(g)
+    }
+
+    override fun send(peer: String, message: ByteArray): Boolean {
+        require(message.isNotEmpty() && message.size <= Messages.MAX_MESSAGE_BYTES) { "Message size" }
         return safe(false) {
             synchronized(lock) {
                 val p = peers[peer]?.takeIf { it.connected } ?: return false
                 if (p.out.size >= MAX_QUEUE) return false
-                p.out.addLast(encoded); pump(p)
+                p.out.addLast(message); pump(p)
                 peers[peer] === p
             }
         }
     }
 
-    // Inbound (p:) links only learn their node here; without it we would also dial that node after the wait.
-    override fun identified(peer: String, node: String) {
-        synchronized(lock) { peers[peer]?.node = node }
+    override fun queued(peer: String): Int = synchronized(lock) { peers[peer]?.out?.size ?: 0 }
+
+    override fun synced(peer: String) {
+        synchronized(lock) {
+            val n = peers[peer]?.node ?: return
+            lastAdvertSummary[n]?.let { lastSynced[n] = it to summary.copyOf() }
+        }
     }
 
     override fun disconnect(peer: String) {
@@ -177,6 +224,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private fun connect(g: Int, device: BluetoothDevice, ad: GattAdvert) {
         if (ad.node == node || peers.size >= MAX_LINKS || allowedPeerNode != null && ad.node != allowedPeerNode) return
         val now = SystemClock.elapsedRealtime()
+        ad.summary?.let { lastAdvertSummary[ad.node] = it }
+        if (!worthConnecting(ad, lastSynced[ad.node], summary)) return
         val waited = now - firstSeen.getOrPut(ad.node) { now } >= ASYMMETRIC_FALLBACK_MS
         // Visibility can be one-way (one phone's scanner misses the other's advert), so the loser dials too after a wait.
         if (!shouldConnect(node, ad) && !waited) return
@@ -196,31 +245,31 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         p.connected = true
         Log.i(TAG, "connected ${p.handle}")
         backoff.remove(p.device.address)
-        emit { it.onConnected(this, p.handle) }
+        emit { it.onConnected(this, p.handle, p.node) }
     }
 
     private fun received(p: Peer?, value: ByteArray?) {
         if (p == null || value == null) return
         connected(p) // a notification can race ahead of our CCCD write callback
-        val frames = try { p.reader.feed(value) } catch (e: Exception) {
-            Log.w(TAG, "bad framing from ${p.handle}", e); drop(p); return
+        val messages = try { p.reader.feed(value) } catch (e: Exception) {
+            Log.w(TAG, "bad CBOR sequence from ${p.handle}", e); drop(p); return
         }
-        for (f in frames) emit { it.onFrame(this, p.handle, f) }
+        for (m in messages) emit { it.onMessage(this, p.handle, m) }
     }
 
     private fun sent(p: Peer) {
         if (p.inFlight == 0) return
         p.offset += p.inFlight; p.inFlight = 0
         if (p.offset >= p.out.first().size) { p.out.removeFirst(); p.offset = 0 }
+        if (p.out.isEmpty()) emit { it.onDrained(this, p.handle) }
         pump(p)
     }
 
     private fun pump(p: Peer) {
         if (p.inFlight != 0 || !p.connected) return
-        val frame = p.out.firstOrNull() ?: return
+        val message = p.out.firstOrNull() ?: return
         // An attribute value is at most 512 bytes even when the MTU is 517 (MTU - 3 = 514 throws).
-        val chunk = frame.copyOfRange(p.offset, minOf(frame.size, p.offset + minOf(p.mtu - 3, MAX_ATTRIBUTE)))
-
+        val chunk = message.copyOfRange(p.offset, minOf(message.size, p.offset + minOf(p.mtu - 3, MAX_ATTRIBUTE)))
         p.inFlight = chunk.size
         if (!(try { write(p, chunk) } catch (_: IllegalArgumentException) { false })) { Log.w(TAG, "write failed on ${p.handle}"); drop(p) }
     }
@@ -244,7 +293,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         val gatt = p.gatt
         if (gatt != null) {
             val ch = gatt.getService(SERVICE_UUID)?.getCharacteristic(RX_UUID) ?: return false
-            val type = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            // Mesh §3.3: Write Without Response; the stack still reports completion so one chunk stays in flight.
+            val type = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             return if (Build.VERSION.SDK_INT >= 33) gatt.writeCharacteristic(ch, chunk, type) == BluetoothStatusCodes.SUCCESS
             else { ch.writeType = type; ch.value = chunk; gatt.writeCharacteristic(ch) }
         }
@@ -266,7 +316,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         val cb = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
                 Log.i(TAG, "advertising node $node")
-                safe(Unit) { synchronized(lock) { if (g != gen) adv.stopAdvertising(this) } }
+                safe(Unit) { synchronized(lock) { if (g != gen || advertiseCb !== this) adv.stopAdvertising(this) } }
             }
             override fun onStartFailure(errorCode: Int) { Log.w(TAG, "advertise failed: $errorCode") }
         }
@@ -275,7 +325,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         val data = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         val response = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
-            .addServiceData(ParcelUuid(SERVICE_UUID), gattServiceData(node)).build()
+            .addServiceData(ParcelUuid(SERVICE_UUID), gattServiceData(node, 0, summary, extFlags)).build()
         advertiseCb = cb
         adv.startAdvertising(settings, data, response, cb)
     }
@@ -299,7 +349,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     }
 
     private fun service() = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
-        addCharacteristic(BluetoothGattCharacteristic(RX_UUID, BluetoothGattCharacteristic.PROPERTY_WRITE,
+        addCharacteristic(BluetoothGattCharacteristic(RX_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
             BluetoothGattCharacteristic.PERMISSION_WRITE))
         addCharacteristic(BluetoothGattCharacteristic(TX_UUID, BluetoothGattCharacteristic.PROPERTY_NOTIFY, 0).apply {
             addDescriptor(BluetoothGattDescriptor(CCCD_UUID, BluetoothGattDescriptor.PERMISSION_WRITE))
@@ -410,9 +461,9 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     }
 
     companion object {
-        // Provisional values; to be proposed in protocol/mndt.md.
+        // Mesh §3.1.
         val SERVICE_UUID: UUID = UUID.fromString("b5e89a01-f9da-45c2-9111-2de7a7441d24")
-        /** central -> peripheral, write with response. */
+        /** central -> peripheral, write without response. */
         val RX_UUID: UUID = UUID.fromString("483c3867-c832-4c60-9a96-7018059eaf74")
         /** peripheral -> central, notify. */
         val TX_UUID: UUID = UUID.fromString("49d60590-c23f-4a0a-a58e-f2f2f606f94d")
@@ -422,6 +473,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         const val MAX_QUEUE = 64
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val ASYMMETRIC_FALLBACK_MS = 10_000L
+        const val ADVERTISE_RESTART_MIN_MS = 5_000L
         const val MAX_ATTRIBUTE = 512
         private val BACKOFF_MS = longArrayOf(5_000, 30_000, 120_000)
         private const val TAG = "GattLink"

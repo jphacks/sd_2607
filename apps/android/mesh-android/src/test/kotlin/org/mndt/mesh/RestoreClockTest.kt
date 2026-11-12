@@ -14,12 +14,4 @@ class RestoreClockTest {
         assertNull(saved.copy(bootCount = null).downtime(7, 4000))
     }
 
-    @Test fun blockedDidsAreOptionalAndValidatedOnLoad() {
-        assertEquals("state files from before blocking load as empty", emptyList<String>(), readBlockedDids(null))
-        val did = "did:plc:" + "a2".repeat(12)
-        assertEquals(listOf(did), readBlockedDids(json.readTree("[\"$did\"]")))
-        for (bad in listOf("{}", "[\"did:plc:short\"]", "[1]", "[\"did:web:example.com\"]")) {
-            assertTrue(bad, runCatching { readBlockedDids(json.readTree(bad)) }.isFailure)
-        }
-    }
 }

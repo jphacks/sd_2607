@@ -45,7 +45,10 @@ extension PostView {
         let ns = content as NSString
         return categoryPrefix.stringByReplacingMatches(in: content, range: NSRange(location: 0, length: ns.length), withTemplate: "")
     }
-    var isPublic: Bool { ext.bsaf != nil }
+    /// A re-posted BSAF original (`original` present), not just any post carrying the extension.
+    var isPublic: Bool { ext.bsaf?.imported == true }
+    /// The confirmed sender name (attest.chain §4.3): shown only when the chain is confirmed now and the leaf may name itself.
+    var senderName: String? { chain.flatMap { $0.identity && $0.confirmedNow ? $0.name : nil } }
     /// Authorized at import time by a trusted importer certificate; volatile fetches were never checked.
     var importerAuthorized: Bool { publicAuthorization != nil }
 
@@ -60,8 +63,11 @@ extension PostView {
     /// Event time: BSAF `time:` (source event) when parseable, else Nostr created_at. Epoch seconds.
     var eventTime: Int64 { ext.bsaf?.time.flatMap(Instant.parse)?.epochSecond ?? createdAt }
 
+    /// The origin, else the centre of the first circular area (a point picked on the map is sent as geo#area).
     var coordinate: CLLocationCoordinate2D? {
-        ext.origin.map { CLLocationCoordinate2D(latitude: Double($0.latitudeMicrodegrees) / 1e6, longitude: Double($0.longitudeMicrodegrees) / 1e6) }
+        if let o = ext.origin { return CLLocationCoordinate2D(latitude: Double(o.lat) / 1e6, longitude: Double(o.lon) / 1e6) }
+        for case let .circle(lat, lon, _) in ext.regions { return CLLocationCoordinate2D(latitude: Double(lat) / 1e6, longitude: Double(lon) / 1e6) }
+        return nil
     }
     /// Meters from [here], or nil when either side has no position.
     func distance(from here: CLLocation?) -> Double? {
@@ -76,8 +82,15 @@ extension PostView {
     }
     /// BSAF `source:` tag, e.g. `jma` → 「気象庁」.
     var bsafSource: String {
-        guard let s = ext.bsaf?.tags.first(where: { $0.hasPrefix("source:") })?.dropFirst(7), !s.isEmpty else { return "公的情報" }
-        return s.lowercased() == "jma" ? "気象庁" : String(s)
+        guard let s = ext.bsaf?.source, !s.isEmpty else { return "公的情報" }
+        return s.lowercased() == "jma" ? "気象庁" : s
+    }
+    /// 「6/1 12:00 から・6/2 18:00 まで」 from the validity extension, independent of the delivery deadline.
+    var validityLabel: String? {
+        guard let v = ext.validity else { return nil }
+        func t(_ s: String) -> String { Instant.parse(s).map { dateTime($0.epochSecond) } ?? s }
+        let parts = [v.from.map { "\(t($0)) から" }, v.until.map { "\(t($0)) まで" }].compactMap { $0 }
+        return parts.isEmpty ? "不明" : parts.joined(separator: "・")
     }
 }
 
@@ -125,21 +138,21 @@ func micro(_ degrees: Double) -> Int64 { Int64((degrees * 1e6).rounded()) }
 
 /// Annotation posts keyed by target event id.
 func annotationsByTarget(_ posts: [PostView]) -> [String: [PostView]] {
-    Dictionary(grouping: posts.filter { $0.ext.annotation != nil }) { $0.ext.annotation!.targetEventId }
+    Dictionary(grouping: posts.filter { $0.ext.annotation?.targetEventId != nil }) { $0.ext.annotation!.targetEventId! }
 }
 /// Annotations whose target is present are nested under it, so they get no card of their own.
 func standalone(_ posts: [PostView]) -> [PostView] {
     let ids = Set(posts.map(\.id))
-    return posts.filter { $0.ext.annotation.map { !ids.contains($0.targetEventId) } ?? true }
+    return posts.filter { $0.ext.annotation?.targetEventId.map { !ids.contains($0) } ?? true }
 }
 /// Distinct endorsing authors (DID, else Nostr key).
 func endorsers(_ annotations: [PostView]) -> Set<String> {
     Set(annotations.filter { $0.ext.annotation?.relation == .endorsement }.map { $0.did ?? $0.pubkey })
 }
-/// Posts drawn on the map: those with an origin, minus annotations whose target is shown (they live in its detail).
+/// Posts drawn on the map: those with a position (origin or area), minus annotations whose target is shown (they live in its detail).
 func mapPosts(_ posts: [PostView]) -> [PostView] {
     let ids = Set(posts.map(\.id))
-    return posts.filter { $0.ext.origin != nil && !($0.ext.annotation.map { ids.contains($0.targetEventId) } ?? false) }
+    return posts.filter { $0.coordinate != nil && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
 }
 
 private let geohashBase32 = Array("0123456789bcdefghjkmnpqrstuvwxyz")

@@ -45,6 +45,9 @@ import org.mndt.app.ui.Navigator
 import org.mndt.app.ui.SettingsKey
 import org.mndt.app.ui.Tab
 import org.mndt.app.ui.openAppSettings
+import org.mndt.app.ui.post.CONTACT_ADDRESS
+import org.mndt.app.ui.post.PolicyText
+import org.mndt.app.ui.post.TermsText
 import org.mndt.app.ui.post.shortDid
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.mesh.MeshCoordinator
@@ -54,6 +57,8 @@ import kotlin.math.roundToInt
 @Serializable private data object AdvancedKey : NavKey
 @Serializable private data object IdentityKey : NavKey
 @Serializable private data object BlockedKey : NavKey
+@Serializable private data object TermsKey : NavKey
+@Serializable private data object PolicyKey : NavKey
 
 val settingsModule = module { }
 
@@ -63,6 +68,8 @@ fun EntryProviderScope<NavKey>.settingsEntries(nav: Navigator) {
     entry<AdvancedKey> { AdvancedScreen(nav) }
     entry<IdentityKey> { IdentityScreen(nav) }
     entry<BlockedKey> { BlockedScreen(nav) }
+    entry<TermsKey> { SubScreen("利用規約", nav) { TermsText(Modifier.padding(top = 8.dp)) } }
+    entry<PolicyKey> { SubScreen("プライバシーポリシー", nav) { PolicyText(Modifier.padding(top = 8.dp)) } }
 }
 
 @Composable
@@ -70,31 +77,34 @@ private fun SettingsScreen(nav: Navigator) {
     val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
-    val sources = remember { trustSources(context) }
+    val roots = remember { trustRoots(context) }
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)
         Header("通信（もしもプロトコル）")
         Group {
-            SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元", sources.map { it.org }.distinct().joinToString(" / ").ifEmpty { null },
-                "${sources.size}件") { nav.push(TrustKey) }
+            SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元",
+                roots.filter { it.enabled }.joinToString(" / ") { it.name }.ifEmpty { "信頼する root 鍵が未設定" },
+                "${roots.count { it.enabled }}件") { nav.push(TrustKey) }
             Line()
-            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "オフライン中継・端末時計・リレー・診断") { nav.push(AdvancedKey) }
+            SettingRow(Icons.Outlined.Tune, Mosimo.textSecondary, "詳細設定", "利用状況・オフライン中継・端末時計・リレー・診断") { nav.push(AdvancedKey) }
         }
         Header("あなたの情報")
         Group {
             SettingRow(Icons.Outlined.Key, Mosimo.primary, "署名鍵とID",
                 if (state.ready) "${shortDid(state.did.ifEmpty { null }, state.publicKey)}・端末で安全に保管" else "準備中") { nav.push(IdentityKey) }
             Line()
-            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedDids.size}件") { nav.push(BlockedKey) }
+            SettingRow(Icons.Outlined.Block, Mosimo.danger, "ブロックリスト", value = "${state.blockedPubkeys.size}件") { nav.push(BlockedKey) }
         }
         Header("このアプリについて")
         Group {
             val uri = LocalUriHandler.current
-            if (BuildConfig.PRIVACY_POLICY_URL.isNotEmpty()) {
-                SettingRow(Icons.Outlined.Policy, Mosimo.textSecondary, "利用規約・プライバシー") { uri.openUri(BuildConfig.PRIVACY_POLICY_URL) }
-                Line()
-            }
+            SettingRow(Icons.Outlined.PanTool, Mosimo.textSecondary, "プライバシーポリシー") { nav.push(PolicyKey) }
+            Line()
+            SettingRow(Icons.Outlined.Description, Mosimo.textSecondary, "利用規約") { nav.push(TermsKey) }
+            Line()
+            SettingRow(Icons.Outlined.Email, Mosimo.textSecondary, "お問い合わせ", CONTACT_ADDRESS) { uri.openUri("mailto:$CONTACT_ADDRESS") }
+            Line()
             SettingRow(Icons.Outlined.Info, Mosimo.textSecondary, "バージョン", value = BuildConfig.VERSION_NAME)
         }
         Spacer(Modifier.height(16.dp))

@@ -9,9 +9,9 @@ struct PostDetail: View {
     var onBlocked: () -> Void = {}
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var location: LocationRepository
-    @Environment(\.openURL) private var openURL
     @State private var confirmBlock = false
-    @State private var confirmReport = false
+    @State private var confirmDelete = false
+    @State private var reporting = false
 
     var body: some View {
         let state = mesh.state
@@ -29,8 +29,8 @@ struct PostDetail: View {
                     if post.isPublic { fact("転載", dateTime(post.createdAt)) }
                     if let d = post.distance(from: location.location) { fact("距離", distanceLabel(d) + "先") }
                     fact("経路", post.routeLabel)
-                    fact(post.isPublic ? "転載者" : "投稿者", shortDid(post.did, post.pubkey))
-                    if let ends = post.ext.validityEndsAt { fact("有効期限", Instant.parse(ends).map { dateTime($0.epochSecond) } ?? ends) }
+                    fact(post.isPublic ? "転載者" : "投稿者", post.senderName ?? shortDid(post.did, post.pubkey))
+                    if let validity = post.validityLabel { fact("情報の有効期間", validity) }
                     if post.isPublic {
                         BsafVerification(post: post)
                         if let audit = post.publicAuthorization { Text(audit).font(.labelSmall).foregroundStyle(Mosimo.textTertiary) }
@@ -41,24 +41,26 @@ struct PostDetail: View {
                         }
                         .foregroundStyle(Mosimo.safe)
                     }
+                    if post.ext.hasChain || post.chain != nil { SenderVerification(chain: post.chain) }
                 }
                 FlowLayout(spacing: 8) {
                     if let onShowOnMap, post.coordinate != nil {
                         Button("マップで見る", action: onShowOnMap).font(.labelLarge).foregroundStyle(Mosimo.primary)
                             .padding(.horizontal, 16).frame(height: 40).overlay(Capsule().stroke(Mosimo.borderStrong))
                     }
-                    if let did = post.did, did != state.did {
-                        Button("ブロック") { confirmBlock = true }.font(.labelLarge).foregroundStyle(Mosimo.danger).padding(.horizontal, 12).frame(height: 40)
+                    if post.pubkey != state.publicKey {
+                        // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+                        if !post.isPublic {
+                            Button("ブロック") { confirmBlock = true }.font(.labelLarge).foregroundStyle(Mosimo.danger).padding(.horizontal, 12).frame(height: 40)
+                        }
+                    } else if !post.volatile {
+                        Button("削除を依頼") { confirmDelete = true }.font(.labelLarge).foregroundStyle(Mosimo.danger).padding(.horizontal, 12).frame(height: 40)
                     }
-                    Button("不適切な投稿を報告") { confirmReport = true }.font(.labelLarge).foregroundStyle(Mosimo.textSecondary).padding(.horizontal, 12).frame(height: 40)
-                        // Official (bot) posts are report-only: blocking the bot would hide all official information.
-                        .confirmationDialog("運営に報告しますか？", isPresented: $confirmReport, titleVisibility: .visible) {
-                            Button("報告する") { report() }
-                            if !post.isPublic, let did = post.did, did != state.did {
-                                Button("報告してブロック", role: .destructive) { report(); mesh.block(did); onBlocked() }
-                            }
-                            Button("キャンセル", role: .cancel) {}
-                        } message: { Text("メールで送ります。24時間以内に確認します。") }
+                    if post.pubkey != state.publicKey {
+                        let done = state.reported.contains(post.id)
+                        Button(done ? "報告済み" : "報告") { reporting = true }.font(.labelLarge).foregroundStyle(Mosimo.textSecondary)
+                            .padding(.horizontal, 12).frame(height: 40).disabled(done || !state.ready)
+                    }
                 }
                 Divider().overlay(Mosimo.border)
                 if post.isPublic {
@@ -73,20 +75,15 @@ struct PostDetail: View {
         }
         .alert("この投稿者をブロックしますか？", isPresented: $confirmBlock) {
             Button("キャンセル", role: .cancel) {}
-            Button("ブロック", role: .destructive) {
-                if let did = post.did { mesh.block(did) }
-                onBlocked()
-            }
-        } message: { Text("この人の投稿はすべて表示されなくなります。") }
-    }
-
-    private func report() {
-        var mail = URLComponents()
-        mail.scheme = "mailto"
-        mail.path = reportAddress
-        mail.queryItems = [URLQueryItem(name: "subject", value: "不適切な投稿の報告"),
-                           URLQueryItem(name: "body", value: "報告の理由（任意）：\n\n---\nイベントID：\(post.id)\n投稿者：\(post.did ?? post.pubkey)\n本文：\(post.content)")]
-        if let url = mail.url { openURL(url) }
+            Button("ブロック", role: .destructive) { mesh.block(post.pubkey); onBlocked() }
+        } message: { Text("この発信鍵の投稿はすべて表示されず、中継もしません。相手の端末との通信は止めません。") }
+        .sheet(isPresented: $reporting) {
+            ReportSheet(post: post, onClose: { reporting = false }, onBlocked: onBlocked)
+        }
+        .alert("この投稿の削除を依頼しますか？", isPresented: $confirmDelete) {
+            Button("キャンセル", role: .cancel) {}
+            Button("削除を依頼", role: .destructive) { mesh.delete(post.id); onBlocked() }
+        } message: { Text("削除要求を署名して配送し、この端末では表示・中継をやめます。既に受け取った端末やサーバーから確実に消えるとは限りません。") }
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -164,10 +161,11 @@ struct AnnotationActions: View {
     }
 
     private func send(_ relation: Relation, _ body: String) {
-        var ext = [Extensions.annotation(relation, targetEventId: target.id)]
+        guard let annotation = try? Extensions.annotation(relation, targetEventId: target.id) else { return }
+        var ext = [annotation]
         if let fix = location.location {
-            ext.append(Extensions.origin(Origin(latitudeMicrodegrees: micro(fix.coordinate.latitude), longitudeMicrodegrees: micro(fix.coordinate.longitude),
-                                                accuracyMillimeters: fix.horizontalAccuracy >= 0 ? Int64((fix.horizontalAccuracy * 1000).rounded()) : nil)))
+            ext.append(Extensions.origin(Origin(lat: micro(fix.coordinate.latitude), lon: micro(fix.coordinate.longitude),
+                                                acc: fix.horizontalAccuracy >= 0 ? Int64((fix.horizontalAccuracy * 1000).rounded()) : nil)))
         }
         mesh.publish(body, extensions: ext)
     }
@@ -219,5 +217,70 @@ struct EmptyState: View {
             if let detail { Text(detail).font(.bodySmall).foregroundStyle(Mosimo.textTertiary) }
         }
         .padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// report §1: NIP-56 report types with the labels shown in both apps.
+let reportTypes: [(type: String, label: String)] = [
+    ("spam", "スパム・宣伝"), ("profanity", "不快な表現・嫌がらせ"), ("illegal", "違法な内容"), ("impersonation", "なりすまし"),
+    ("nudity", "性的な内容"), ("malware", "有害なリンク"), ("other", "その他（虚偽の情報・個人情報など）"),
+]
+
+/// Publishes a signed report (report §1). It travels like a post; each receiver decides what to do with it.
+private struct ReportSheet: View {
+    let post: PostView
+    let onClose: () -> Void
+    let onBlocked: () -> Void
+    @EnvironmentObject private var mesh: MeshCoordinator
+    @State private var type: String?
+    @State private var comment = ""
+    @State private var block = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("この投稿を報告").font(.titleLarge).foregroundStyle(Mosimo.textPrimary)
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark").foregroundStyle(Mosimo.textSecondary).frame(width: 44, height: 44) }
+                    .accessibilityLabel("閉じる")
+            }
+            Text("報告はあなたの鍵で署名された公開情報として、周辺の端末やサーバーに届きます。報告をどう扱うかは、受け取った各アプリ・サーバーが判断します。")
+                .font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(reportTypes, id: \.type) { item in
+                        Button { type = item.type } label: {
+                            HStack {
+                                Image(systemName: type == item.type ? "largecircle.fill.circle" : "circle")
+                                    .foregroundStyle(type == item.type ? Mosimo.primary : Mosimo.textTertiary)
+                                Text(item.label).font(.bodyMedium).foregroundStyle(Mosimo.textPrimary)
+                                Spacer()
+                            }
+                            .padding(.vertical, 10).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    TextField("補足（任意・公開されます）", text: Binding(get: { comment }, set: { comment = String($0.prefix(90)) }), axis: .vertical)
+                        .lineLimit(2...4).padding(12).overlay(RoundedRectangle(cornerRadius: 8).stroke(Mosimo.borderStrong)).padding(.top, 8)
+                    // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+                    if !post.isPublic {
+                        Toggle("この投稿者をブロックする", isOn: $block).font(.bodyMedium).tint(Mosimo.primary).padding(.top, 12)
+                    }
+                }
+            }
+            Button {
+                guard let type else { return }
+                mesh.report(post.id, type: type, comment: comment, block: block)
+                onClose()
+                if block { onBlocked() }
+            } label: {
+                Text("報告する").font(.labelLarge).foregroundStyle(Mosimo.onPrimary).frame(maxWidth: .infinity).frame(height: 52)
+                    .background(type == nil ? Mosimo.textTertiary : Mosimo.danger, in: RoundedRectangle(cornerRadius: 26))
+            }
+            .disabled(type == nil)
+        }
+        .padding(16)
+        .background(Mosimo.bgSurface.ignoresSafeArea())
+        .presentationDetents([.large])
     }
 }

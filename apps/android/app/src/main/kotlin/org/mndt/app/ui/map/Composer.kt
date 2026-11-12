@@ -21,6 +21,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import org.mndt.app.ui.post.Category
+import org.mndt.app.ui.post.TermsAgreement
+import org.mndt.app.ui.post.rememberTermsAccepted
 import org.mndt.app.ui.theme.Mosimo
 
 private const val MAX_DETAIL = 140
@@ -32,6 +34,8 @@ fun Composer(vm: MapViewModel, fix: Location?, address: String?, online: Boolean
     val point = vm.picked ?: fix?.let { it.latitude to it.longitude }
     val fromFix = vm.picked == null && fix != null
     MapSheet({ vm.composing = false }, rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        val accepted by rememberTermsAccepted()
+        if (!accepted) { TermsAgreement(onClose = { vm.composing = false }, onAgree = {}); return@MapSheet }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("状況を伝える", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
@@ -48,7 +52,7 @@ fun Composer(vm: MapViewModel, fix: Location?, address: String?, online: Boolean
                     Text(when {
                         point == null -> "地図をタップして投稿する位置を指定してください"
                         fromFix -> listOfNotNull("GPS", fix?.takeIf { it.hasAccuracy() }?.let { "精度 ${accuracyLabel(it.accuracy)}" }, "この位置がそのまま付きます").joinToString("・")
-                        else -> "地図で指定した位置・この位置がそのまま付きます"
+                        else -> "地図で指定した位置・この地点の周辺（範囲）として付きます"
                     }, style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
                 }
                 TextButton(onPick) { Text(if (point == null) "地図で指定" else "変更", color = Mosimo.info) }

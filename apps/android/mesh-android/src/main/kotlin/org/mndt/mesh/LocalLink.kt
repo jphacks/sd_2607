@@ -129,7 +129,7 @@ internal class LocalLink(private val radios: List<Link>, private val ports: List
         val l = synchronized(lock) {
             val l = listener
             if (g != gen || conns.size >= MAX_CONNS || l == null) return@synchronized null
-            conn = TcpConn(s, { l.onFrame(this, peer, it) }) {
+            conn = TcpConn(s, { l.onMessage(this, peer, it) }, onDrained = { l.onDrained(this, peer) }, onClose = {
                 // Losing the holder we followed: it freed its port, so elect again. A checked port's hang-up is ask()'s.
                 val lost = synchronized(lock) {
                     conns.remove(peer, conn)
@@ -139,17 +139,17 @@ internal class LocalLink(private val radios: List<Link>, private val ports: List
                 }
                 if (lost) later(g, RETRY_MS) { elect(g) }
                 l.onDisconnected(this, peer)
-            }
+            })
             conns[peer] = conn
             if (follow) { holder = peer; holderOk = false }
             l
         } ?: run { runCatching { s.close() }; return null }
-        l.onConnected(this, peer)
+        l.onConnected(this, peer, null) // no advertised node on loopback, so lab peer isolation never applies
         conn.start()
         return peer
     }
 
-    override fun identified(peer: String, node: String) {
+    override fun hello(peer: String) {
         synchronized(lock) { if (peer == holder) { holderOk = true; hello?.countDown() } }
     }
 
@@ -169,7 +169,9 @@ internal class LocalLink(private val radios: List<Link>, private val ports: List
 
     private fun loopback(i: Int) = InetSocketAddress(LOOPBACK, ports[i])
 
-    override fun send(peer: String, frame: ByteArray) = synchronized(lock) { conns[peer] }?.offer(frame) ?: false
+    override fun send(peer: String, message: ByteArray) = synchronized(lock) { conns[peer] }?.offer(message) ?: false
+
+    override fun queued(peer: String) = synchronized(lock) { conns[peer] }?.queued ?: 0
 
     override fun disconnect(peer: String) { synchronized(lock) { conns[peer] }?.close() }
 

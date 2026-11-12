@@ -28,7 +28,7 @@ fun main(args: Array<String>) {
             val created = 1792326896L
             val content = "Android Kotlin typed-byte $rawHex"
             val tags = frozenTags(listOf(
-                listOf(AtRepository.TAG_PREFIX + "delivery-expires-at", "2030-01-01T00:00:00Z"),
+                listOf(AtRepository.TAG_EXP, "2030-01-01T00:00:00Z"),
                 listOf(name, encoded),
             ))
             val signing = nostrSigningBytes(pubkey, created, 1, tags, content)

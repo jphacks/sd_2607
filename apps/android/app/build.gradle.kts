@@ -19,8 +19,6 @@ android {
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
         manifestPlaceholders["mosimoPlcRegistration"] = providers.gradleProperty("mosimoPlcRegistration").orElse("true").get()
-        // Empty until the policy page is published; the settings row is hidden while empty.
-        buildConfigField("String", "PRIVACY_POLICY_URL", "\"\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -33,6 +31,11 @@ android {
         }
     }
     buildTypes {
+        // Installs next to a store/CI release build on the same phone without touching its keys and posts.
+        getByName("debug") {
+            applicationIdSuffix = providers.gradleProperty("mosimoDebugSuffix").orElse(".debug").get()
+            versionNameSuffix = "-debug"
+        }
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

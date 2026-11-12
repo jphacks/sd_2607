@@ -103,14 +103,16 @@ struct NimBLEUUID { explicit NimBLEUUID(const char*) {} };
 struct NimBLEAdvertisementData {
     void setFlags(int) {}
     void addServiceUUID(const char*) {}
-    void setServiceData(NimBLEUUID, const uint8_t*, size_t) {}
+    std::vector<uint8_t> serviceData;
+    bool setServiceData(NimBLEUUID, const uint8_t* p, size_t n) { serviceData.assign(p, p + n); return n <= 29 - 16; }
 };
 struct NimBLEAdvertising {
     bool active = false;
     unsigned starts = 0, stops = 0;
     std::function<void()> onStart;
     bool setAdvertisementData(const NimBLEAdvertisementData&) { return true; }
-    bool setScanResponseData(const NimBLEAdvertisementData&) { return true; }
+    std::vector<uint8_t> scanServiceData;
+    bool setScanResponseData(const NimBLEAdvertisementData& d) { scanServiceData = d.serviceData; return true; }
     void enableScanResponse(bool) {}
     bool start() {
         active = true; ++starts;
@@ -167,6 +169,9 @@ struct NimBLEDevice {
 
 namespace mesh {
 struct Relay {
+    static constexpr size_t MESSAGE_LIMIT = 4096;
+    uint8_t summary[4] = {0xe3, 0xb0, 0xc4, 0};
+    void advertisement(uint8_t out[4]) const { for (int i = 0; i < 4; ++i) out[i] = summary[i]; }
     unsigned connections = 0, disconnections = 0, ticks = 0;
     bool reject = false;
     std::vector<std::vector<uint8_t>> frames;

@@ -1,6 +1,7 @@
 package org.mndt.app.ui.post
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -8,17 +9,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.koinInject
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.theme.Mosimo
+import org.mndt.core.Attest
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.PostView
 import org.mndt.mesh.Relation
@@ -27,17 +31,59 @@ import java.time.OffsetDateTime
 
 private val sourceNames = mapOf("jma" to "気象庁")
 /** BSAF `source:` tag, e.g. `jma` → 「気象庁」. */
-fun PostView.bsafSource(): String = ext.bsaf?.tags?.firstOrNull { it.startsWith("source:") }?.removePrefix("source:")?.ifBlank { null }
-    ?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
+fun PostView.bsafSource(): String = ext.bsaf?.source?.ifBlank { null }?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
 
-/** Import-time importer authorization only; never claims the content is 公式. */
+/**
+ * importer §3.2: 「orgName が転載した botDid の情報」. The BSAF `source:` tag is self-declared (bsaf §7), so it is
+ * shown only as the post's own claim. Never claims the content is 公式.
+ */
 @Composable
 fun BsafVerification(post: PostView) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (post.importerAuthorized) {
-            Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(14.dp))
-            Text(" ${post.bsafSource()}（BSAF転載）・転載者認可済", style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
-        } else Text("${post.bsafSource()}（BSAF転載）・認可を確認できません", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+    val importer = post.chain?.takeIf { it.confirmedNow }?.name
+    val bot = post.ext.bsaf?.botDid?.let { shortDid(it, "") } ?: "Bot"
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (post.importerAuthorized) {
+                Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(14.dp))
+                Text(" ${importer ?: "転載者"}が転載した $bot の情報", style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+            } else Text("転載された情報・転載者の認可を確認できません", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+        }
+        Text("出典の表示: ${post.bsafSource()}（投稿内の申告）", style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
+    }
+}
+
+/**
+ * attest.chain §4.3: distinguishes confirmed now, confirmed at creation only, revoked, and unconfirmed. Never
+ * shows an organization name without the `identity` role and a current confirmation.
+ */
+@Composable
+fun SenderVerification(post: PostView) {
+    val chain = post.chain
+    val named = { c: org.mndt.core.PublicIngress.ChainView -> c.name?.takeIf { c.identity } }
+    val (icon, color, text) = when {
+        chain == null -> Triple(Icons.Outlined.Info, Mosimo.textTertiary, "発信者未確認（署名チェーンなし）")
+        chain.revocation == Attest.RevocationState.REVOKED -> Triple(Icons.Outlined.Info, Mosimo.danger, "この発信鍵は失効しています")
+        chain.confirmedNow -> named(chain)?.let {
+            Triple(Icons.Outlined.Verified, Mosimo.safe, "発信者確認済み: $it" + (chain.trustLevel?.let { l -> "（確認度 $l）" } ?: ""))
+        } ?: Triple(Icons.Outlined.Verified, Mosimo.textSecondary, "鍵は確認済み（組織名の表示は認められていません）")
+        chain.state == Attest.ChainState.VERIFIED && chain.revocation == Attest.RevocationState.REVOKED_LATER ->
+            Triple(Icons.Outlined.Info, Mosimo.warning, "作成時点では確認済み・その後に鍵が失効" + (named(chain)?.let { ": $it" } ?: ""))
+        chain.state == Attest.ChainState.VERIFIED ->
+            Triple(Icons.Outlined.Info, Mosimo.warning, (if (chain.expiredNow == true) "作成時点では確認済み（現在は期限切れ）" else "作成時点では確認済み（現在の有効性は時計未確認）") +
+                (named(chain)?.let { ": $it" } ?: ""))
+        chain.state == Attest.ChainState.EXPIRED -> Triple(Icons.Outlined.Info, Mosimo.danger, "作成時点で鍵の有効期間外です（発信者未確認）")
+        chain.state == Attest.ChainState.UNKNOWN_TIME -> Triple(Icons.Outlined.Info, Mosimo.warning, "端末時計が未確認のため検証できません")
+        chain.state == Attest.ChainState.UNVERIFIABLE -> Triple(Icons.Outlined.Info, Mosimo.textTertiary, "信頼していない発行元の証明です")
+        else -> Triple(Icons.Outlined.Info, Mosimo.danger, "署名チェーンを検証できません")
+    }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
+            Text(" $text", style = MaterialTheme.typography.bodySmall, color = color)
+        }
+        chain?.takeIf { it.revocation == Attest.RevocationState.NOT_REVOKED_AS_KNOWN }?.let {
+            Text("失効情報は手元の通知時点のものです", style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
+        }
     }
 }
 
@@ -62,6 +108,7 @@ private fun endsAt(value: String): String = runCatching { Instant.parse(value).e
     .recoverCatching { OffsetDateTime.parse(value).toEpochSecond() }.map(::dateTime).getOrDefault(value)
 
 /** Shared by the timeline (full screen) and the map (bottom sheet). [onShowOnMap] is null where already on the map. Scrolls itself. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -> Unit)? = null, onBlocked: () -> Unit = {}) {
     val mesh = koinInject<MeshCoordinator>()
@@ -69,6 +116,8 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
     val here by koinInject<LocationRepository>().location.collectAsStateWithLifecycle()
     val annotations = remember(state.posts, post.id) { annotationsByTarget(state.posts)[post.id].orEmpty().sortedBy { it.createdAt } }
     var confirmBlock by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var reporting by remember { mutableStateOf(false) }
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             KindLabel(post)
@@ -80,8 +129,11 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
             if (post.isPublic) Fact("転載", dateTime(post.createdAt))
             post.distanceFrom(here)?.let { Fact("距離", distanceLabel(it) + "先") }
             Fact("経路", post.routeLabel())
-            Fact(if (post.isPublic) "転載者" else "投稿者", shortDid(post.did, post.pubkey))
-            post.ext.validityEndsAt?.let { Fact("有効期限", endsAt(it)) }
+            Fact(if (post.isPublic) "転載者" else "投稿者", post.senderName ?: shortDid(post.did, post.pubkey))
+            post.ext.validity?.let { v ->
+                // validity: from <= t < until; an omitted bound is unknown, never inferred.
+                Fact("情報の有効期間", listOfNotNull(v.from?.let { endsAt(it) + " から" }, v.until?.let { endsAt(it) + " まで" }).joinToString("・").ifEmpty { "不明" })
+            }
             if (post.isPublic) {
                 BsafVerification(post)
                 post.publicAuthorization?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary) }
@@ -89,23 +141,45 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
                 Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(14.dp))
                 Text(" 署名検証済み", style = MaterialTheme.typography.bodySmall, color = Mosimo.safe)
             }
+            if (post.ext.hasChain || post.chain != null) SenderVerification(post)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onShowOnMap != null && post.latLng() != null) OutlinedButton(onClick = onShowOnMap) { Text("マップで見る") }
-            if (post.did != null && post.did != state.did) TextButton(onClick = { confirmBlock = true }) { Text("ブロック", color = Mosimo.danger) }
+            // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+            if (post.pubkey != state.publicKey) { if (!post.isPublic) TextButton(onClick = { confirmBlock = true }) { Text("ブロック", color = Mosimo.danger) } }
+            else if (!post.volatile) TextButton(onClick = { confirmDelete = true }) { Text("削除を依頼", color = Mosimo.danger) }
+            if (post.pubkey != state.publicKey) {
+                val done = post.id in state.reported
+                TextButton(onClick = { reporting = true }, enabled = !done && state.ready) { Text(if (done) "報告済み" else "報告", color = Mosimo.textSecondary) }
+            }
         }
         HorizontalDivider(color = Mosimo.border)
         if (post.isPublic) Text("確認した ${endorsers(annotations).size}人", style = MaterialTheme.typography.bodySmall, color = Mosimo.safe)
         else AnnotationActions(post, annotations)
         annotations.filter { it.ext.annotation?.relation != Relation.ENDORSEMENT }.forEach { AnnotationItem(it, post) }
     }
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        containerColor = Mosimo.bgElevated,
+        title = { Text("この投稿の削除を依頼しますか？") },
+        text = { Text("削除要求を署名して配送し、この端末では表示・中継をやめます。既に受け取った端末やサーバーから確実に消えるとは限りません。") },
+        confirmButton = {
+            TextButton(onClick = { confirmDelete = false; mesh.delete(post.id); onBlocked() }) { Text("削除を依頼", color = Mosimo.danger) }
+        },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("キャンセル") } },
+    )
+    if (reporting) ReportDialog(post, onDismiss = { reporting = false }) { type, comment, block ->
+        reporting = false
+        mesh.report(post.id, type, comment, block)
+        if (block) onBlocked()
+    }
     if (confirmBlock) AlertDialog(
         onDismissRequest = { confirmBlock = false },
         containerColor = Mosimo.bgElevated,
         title = { Text("この投稿者をブロックしますか？") },
-        text = { Text("この人の投稿はすべて表示されなくなります。") },
+        text = { Text("この発信鍵の投稿はすべて表示されず、中継もしません。相手の端末との通信は止めません。") },
         confirmButton = {
-            TextButton(onClick = { confirmBlock = false; post.did?.let(mesh::block); onBlocked() }) { Text("ブロック", color = Mosimo.danger) }
+            TextButton(onClick = { confirmBlock = false; mesh.block(post.pubkey); onBlocked() }) { Text("ブロック", color = Mosimo.danger) }
         },
         dismissButton = { TextButton(onClick = { confirmBlock = false }) { Text("キャンセル") } },
     )
@@ -131,4 +205,47 @@ private fun AnnotationItem(annotation: PostView, target: PostView) {
         Text("${shortDid(annotation.did, annotation.pubkey)} · ${dateTime(annotation.createdAt)}", style = MaterialTheme.typography.labelSmall,
             color = Mosimo.textTertiary)
     }
+}
+
+/** report §1: NIP-56 report types with the labels shown in both apps. */
+val REPORT_TYPES = listOf(
+    "spam" to "スパム・宣伝", "profanity" to "不快な表現・嫌がらせ", "illegal" to "違法な内容", "impersonation" to "なりすまし",
+    "nudity" to "性的な内容", "malware" to "有害なリンク", "other" to "その他（虚偽の情報・個人情報など）",
+)
+
+/** Publishes a signed report (report §1). It travels like a post; each receiver decides what to do with it. */
+@Composable
+private fun ReportDialog(post: PostView, onDismiss: () -> Unit, onReport: (String, String, Boolean) -> Unit) {
+    var type by remember { mutableStateOf<String?>(null) }
+    var comment by remember { mutableStateOf("") }
+    var block by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Mosimo.bgElevated,
+        title = { Text("この投稿を報告") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("報告はあなたの鍵で署名された公開情報として、周辺の端末やサーバーに届きます。報告をどう扱うかは、受け取った各アプリ・サーバーが判断します。",
+                    style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+                REPORT_TYPES.forEach { (value, label) ->
+                    Row(Modifier.fillMaxWidth().selectable(type == value, role = Role.RadioButton) { type = value }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(type == value, onClick = null)
+                        Text(label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary)
+                    }
+                }
+                OutlinedTextField(comment, { comment = it.take(90) }, Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 2,
+                    placeholder = { Text("補足（任意・公開されます）") })
+                // Official (importer) posts are report-only: blocking the importer key would hide all official information.
+                if (!post.isPublic) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("この投稿者をブロックする", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary)
+                    Switch(block, { block = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { type?.let { onReport(it, comment, block) } }, enabled = type != null) { Text("報告する", color = Mosimo.danger) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } },
+    )
 }

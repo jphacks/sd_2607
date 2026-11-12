@@ -17,14 +17,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-/** Only the lexicographically smaller node dials, so two nodes open one connection. */
+/** Only the lexicographically smaller node dials, so two nodes open one connection (mesh §4.2). */
 internal fun shouldDial(myNode: String, peerNode: String) = myNode < peerNode
 
-/** One TCP peer: a reader thread delivers frames, a writer thread drains a bounded queue. Android-free for JVM tests. */
+/**
+ * One TCP peer: a reader thread cuts the CBOR sequence into messages, a writer thread drains a bounded queue.
+ * Android-free for JVM tests.
+ */
 internal class TcpConn(
     private val socket: Socket,
-    private val onFrame: (ByteArray) -> Unit,
+    private val onMessage: (ByteArray) -> Unit,
     private val onClose: () -> Unit,
+    private val onDrained: () -> Unit = {},
 ) {
     private val queue = ArrayBlockingQueue<ByteArray>(64)
     private val closed = AtomicBoolean(false)
@@ -33,12 +37,12 @@ internal class TcpConn(
         thread(isDaemon = true, name = "lan-read") {
             try {
                 val input = socket.getInputStream()
-                val reader = FrameReader()
+                val reader = CborSequenceReader(Exchange.MESSAGE_LIMIT)
                 val buf = ByteArray(8192)
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
-                    reader.feed(buf.copyOf(n)).forEach(onFrame)
+                    reader.feed(buf.copyOf(n)).forEach(onMessage)
                 }
             } catch (_: Exception) {
             }
@@ -48,8 +52,9 @@ internal class TcpConn(
             try {
                 val out = socket.getOutputStream()
                 while (!closed.get()) {
-                    val frame = queue.poll(1, TimeUnit.SECONDS) ?: continue
-                    out.write(Frames.encode(frame)); out.flush()
+                    val message = queue.poll(1, TimeUnit.SECONDS) ?: continue
+                    out.write(message); out.flush()
+                    if (queue.isEmpty()) onDrained()
                 }
             } catch (_: Exception) {
             }
@@ -57,7 +62,8 @@ internal class TcpConn(
         }
     }
 
-    fun offer(frame: ByteArray) = !closed.get() && frame.size in 1..Frames.MAX_FRAME && queue.offer(frame)
+    fun offer(message: ByteArray) = !closed.get() && message.size in 1..Messages.MAX_MESSAGE_BYTES && queue.offer(message)
+    val queued: Int get() = queue.size
 
     /** Idempotent; [onClose] runs exactly once, on the calling thread. */
     fun close() {
@@ -71,7 +77,8 @@ internal class TcpConn(
 // multicast-filtering networks) are unreachable: manual host:port peers are not implemented.
 internal class LanLink(private val context: Context) : Link {
     companion object {
-        const val SERVICE_TYPE = "_mosimo._tcp" // provisional (protocol/mndt.md §3.1)
+        /** Mesh §4.2: DNS-SD service type; the instance name is the node ID. */
+        const val SERVICE_TYPE = "_mosimo._tcp"
         private const val TAG = "LanLink"
         private const val MAX_CONNS = 8
         private const val RETRY_S = 10L
@@ -173,7 +180,7 @@ internal class LanLink(private val context: Context) : Link {
         override fun onServiceFound(info: NsdServiceInfo) {
             val name = info.serviceName ?: return
             val e = synchronized(lock) {
-                if (g != gen || name == node || name == ownName) return
+                if (g != gen || name == node || name == ownName || !name.matches(Regex("[0-9a-f]{16}"))) return
                 found[name] = info; exec
             }
             runCatching { e?.execute { tick(g) } }
@@ -199,18 +206,20 @@ internal class LanLink(private val context: Context) : Link {
             peerNode?.let { dialing -= it }
             val l = listener
             if (g != gen || conns.size >= MAX_CONNS || l == null) return@synchronized null
-            conn = TcpConn(s, { l.onFrame(this, peer, it) }) {
+            conn = TcpConn(s, { l.onMessage(this, peer, it) }, {
                 synchronized(lock) { if (conns.remove(peer, conn)) outbound.remove(peer) }
                 l.onDisconnected(this, peer)
-            }
+            }, { l.onDrained(this, peer) })
             conns[peer] = conn; peerNode?.let { outbound[peer] = it }
             l
         } ?: run { runCatching { s.close() }; return }
-        l.onConnected(this, peer)
+        l.onConnected(this, peer, peerNode)
         conn.start()
     }
 
-    override fun send(peer: String, frame: ByteArray) = synchronized(lock) { conns[peer] }?.offer(frame) ?: false
+    override fun send(peer: String, message: ByteArray) = synchronized(lock) { conns[peer] }?.offer(message) ?: false
+
+    override fun queued(peer: String): Int = synchronized(lock) { conns[peer] }?.queued ?: 0
 
     override fun disconnect(peer: String) { synchronized(lock) { conns[peer] }?.close() }
 

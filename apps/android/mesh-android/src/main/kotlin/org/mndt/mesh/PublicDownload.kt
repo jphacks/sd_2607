@@ -1,33 +1,14 @@
 package org.mndt.mesh
 
-import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.*
 import okio.ByteString
+import org.mndt.core.AtRepository
 import org.mndt.core.ClockConfidence
 import org.mndt.core.NostrEvent
-import org.mndt.core.PublicIngress
 import java.time.Instant
-import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
-
-/** Optional new fields on the existing encrypted state; never reset identity on malformed history. */
-internal fun readPublicTrust(node: JsonNode?): PublicIngress.Memory {
-    if (node == null) return PublicIngress.Memory()
-    require(node.isObject && node.fieldNames().asSequence().toSet() == setOf("snapshots", "serials"))
-    val snapshots = node["snapshots"]; val serials = node["serials"]
-    require(snapshots.isObject && snapshots.size() <= PublicIngress.MAX_ROOTS && serials.isObject && serials.size() <= PublicIngress.MAX_SERIALS)
-    val saved = snapshots.properties().associate { (id, value) ->
-        require(id.matches(Regex("[0-9a-f]{64}")) && value.isTextual && value.textValue().length <= 43692)
-        id to Base64.getDecoder().decode(value.textValue()).also { require(it.size in 1..32768) }
-    }
-    val history = serials.properties().associate { (id, value) ->
-        require(id.matches(Regex("0[23][0-9a-f]{64}:[0-9a-f]{32}")) && value.isTextual && (value.textValue() == "equivocation" || value.textValue().matches(Regex("[0-9a-f]{64}"))))
-        id to value.textValue()
-    }
-    return PublicIngress.Memory(saved, history)
-}
 
 internal object PublicDownload {
     const val LIMIT = 32
@@ -36,20 +17,26 @@ internal object PublicDownload {
     const val MAX_EVENTS = 500
     // ponytail: fixed 8 MiB in-memory display cap; size it from device memory if 500 events ever stop fitting.
     const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
+    /** attest.revocation.list §2: default full response bound. */
+    const val MAX_REVOCATION_LIST_BYTES = 1_048_576
     /** Display pages download on any clock; only authorized ingress gets one, and PublicIngress fails closed on null. */
     fun ingressClock(confidence: ClockConfidence, nowMillis: Long): Instant? =
         if (confidence == ClockConfidence.TRUSTED) Instant.ofEpochMilli(nowMillis) else null
+    /** PDS §7: `MOSIMO-REQ` priority snapshot, or the standard `REQ` fallback with the same filter. */
     fun request(id: String, priority: Boolean, limit: Int = LIMIT, until: Long? = null): String {
-        val filter = mapOf("kinds" to listOf(1), "#t" to listOf("mosimo.oriom.dev"), "limit" to limit) + (until?.let { mapOf("until" to it) } ?: emptyMap())
+        val filter = mapOf("kinds" to listOf(1), "#t" to listOf(AtRepository.NAMESPACE), "limit" to limit) + (until?.let { mapOf("until" to it) } ?: emptyMap())
         return json.writeValueAsString(if (priority) listOf("MOSIMO-REQ", id, mapOf("order" to "priority-v1", "filter" to filter)) else listOf("REQ", id, filter))
     }
-    fun snapshot(http: OkHttpClient, root: PublicIngress.Root): ByteArray = http.newCall(Request.Builder()
-        .url(root.snapshotUrl).header("Accept", "application/cbor").build()).execute().use { response ->
-        require(response.isSuccessful && response.request.url.isHttps) { "Snapshot HTTPS failure" }
-        val body = response.body ?: error("Missing snapshot")
-        require(body.contentType()?.let { it.type == "application" && it.subtype == "cbor" } == true) { "Snapshot must be application/cbor" }
-        require(body.contentLength() <= 32768)
-        body.byteStream().use { it.readBounded(32768) }
+    /** attest.revocation.list §1: `https://D/.well-known/mosimo/attest/revocations` as canonical CBOR, no redirects. */
+    fun revocationList(http: OkHttpClient, domain: String): ByteArray {
+        require(domain.matches(Regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+")) && domain.length <= 253) { "Invalid issuer domain" }
+        return http.newCall(Request.Builder().url("https://$domain/.well-known/mosimo/attest/revocations").header("Accept", "application/cbor").build()).execute().use { response ->
+            require(response.isSuccessful && response.request.url.isHttps) { "Revocation list HTTPS failure" }
+            val body = response.body ?: error("Missing revocation list")
+            require(body.contentType()?.let { it.type == "application" && it.subtype == "cbor" } == true) { "Revocation list must be application/cbor" }
+            require(body.contentLength() <= MAX_REVOCATION_LIST_BYTES)
+            body.byteStream().use { it.readBounded(MAX_REVOCATION_LIST_BYTES) }
+        }
     }
     data class Batch(val events: List<NostrEvent>, val fallback: Boolean)
     /** [events] excludes the first batch; [failure] keeps the pages fetched before it. */
@@ -144,7 +131,7 @@ internal object PublicDownload {
                         "EVENT" -> {
                             require(n.size() == 3)
                             val event = NostrEvent.fromJson(n[2].toString())
-                            require(event.kind == 1 && event.tags.any { it == listOf("t", "mosimo.oriom.dev") })
+                            require(event.kind == 1 && event.tags.any { it == AtRepository.TOPIC_TAG })
                             if (event.id !in budget.events) {
                                 val bytes = event.toJson().toByteArray(Charsets.UTF_8).size
                                 require(budget.events.size < limit && bytes <= RelaySubscription.MAX_BYTES - budget.totalBytes) { "Public request capacity" }
