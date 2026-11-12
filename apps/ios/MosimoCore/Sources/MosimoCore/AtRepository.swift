@@ -79,7 +79,9 @@ public enum AtRepository {
     static func create(_ keys: SecretKeys, _ did: String, _ text: String, _ nowMillis: Int64, _ previous: RepositoryState,
                        _ deliveryExpiresAtSeconds: Int64, _ extensions: [[String: Cbor]]) throws -> ([[String]], RepositoryState) {
         try require(previous.records.count < maxRecords, "Repository limit: \(maxRecords) records")
-        try require(previous.lastRevMicros >= 0 && (previous.previousCommit == nil) == previous.records.isEmpty, "Inconsistent repository state")
+        // Records imply a commit, not the reverse: deleting the last post leaves an empty repository whose
+        // removal commit is the next post's base (delete §2).
+        try require(previous.lastRevMicros >= 0 && (previous.records.isEmpty || previous.previousCommit != nil), "Inconsistent repository state")
         if let p = previous.previousCommit { _ = try cidBytes(p) }
         let micros = max(nowMillis * 1000, previous.lastRevMicros + 1)
         // rev and record key are separate identifiers (core §6.2); one monotonic TID may serve both.

@@ -84,7 +84,9 @@ object AtRepository {
     internal fun create(keys: SecretKeys, did: String, text: String, nowMillis: Long, previous: RepositoryState,
         deliveryExpiresAtSeconds: Long, extensions: List<Map<String, Any?>>): Pair<List<List<String>>, RepositoryState> {
         require(previous.records.size < MAX_RECORDS) { "Repository limit: $MAX_RECORDS records" }
-        require(previous.lastRevMicros >= 0 && (previous.previousCommit == null) == previous.records.isEmpty()) { "Inconsistent repository state" }
+        // Records imply a commit, not the reverse: deleting the last post leaves an empty repository whose
+        // removal commit is the next post's base (delete §2).
+        require(previous.lastRevMicros >= 0 && (previous.records.isEmpty() || previous.previousCommit != null)) { "Inconsistent repository state" }
         previous.previousCommit?.let { cidBytes(it) }
         val micros = maxOf(Math.multiplyExact(nowMillis, 1000L), Math.addExact(previous.lastRevMicros, 1))
         // rev and record key are separate identifiers (core §6.2); one monotonic TID may serve both.

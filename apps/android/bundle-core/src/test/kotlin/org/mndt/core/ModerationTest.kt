@@ -27,6 +27,20 @@ class ModerationTest {
         assertThrows(IllegalArgumentException::class.java) { author(10).createDeletion(target.event, now, RepositoryState()) }
     }
 
+    @Test fun postingContinuesAfterTheLastPostWasDeleted() {
+        val a = author(3)
+        val only = a.createPost("唯一", now)
+        val del = a.createDeletion(only.event, now + 1000, only.repository)
+        assertTrue(del.repository.records.isEmpty())
+        val next = a.createPost("削除後", now + 2000, del.repository)
+        assertEquals(cid(AtRepository.deletion(del.event)!!.change!!.commitBytes), next.event.tags[3][1])
+        assertEquals(1, next.repository.records.size)
+        // A commit-less repository with records is still refused.
+        assertThrows(IllegalArgumentException::class.java) {
+            a.createPost("不整合", now + 3000, next.repository.copy(previousCommit = null))
+        }
+    }
+
     @Test fun deletionStopsAtOnceAndReportsAtTwoDistinctReporters() {
         val a = author(3); val b = author(10); val c = author(20)
         val post = a.createPost("対象", now)

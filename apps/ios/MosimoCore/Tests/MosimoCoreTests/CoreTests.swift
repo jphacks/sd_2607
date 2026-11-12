@@ -93,6 +93,19 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try EventCodec.decode(try EventCodec.encode(plc)), plc)
     }
 
+    /// delete §2: deleting the last post leaves an empty repository that later posts still build on.
+    func testPostingContinuesAfterLastPostDeleted() throws {
+        let a = try author()
+        let only = try a.createPost("唯一", nowMillis: now)
+        let del = try a.createDeletion(only.event, nowMillis: now + 1000, previous: only.repository)
+        XCTAssertTrue(del.repository.records.isEmpty)
+        let next = try a.createPost("削除後", nowMillis: now + 2000, previous: del.repository)
+        XCTAssertEqual(next.event.tags[3][1], cid(try XCTUnwrap(AtRepository.deletion(del.event)?.change).commitBytes))
+        XCTAssertEqual(next.repository.records.count, 1)
+        var broken = next.repository; broken.previousCommit = nil
+        XCTAssertThrowsError(try a.createPost("不整合", nowMillis: now + 3000, previous: broken))
+    }
+
     /// delete §1-2: the request carries the commit of the repository without the post, and the next post builds on it.
     func testDeletionCarriesRemovalCommit() throws {
         let a = try author()
