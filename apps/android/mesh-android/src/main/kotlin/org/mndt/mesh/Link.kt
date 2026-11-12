@@ -31,6 +31,8 @@ internal interface Link {
     fun disconnect(peer: String)
     /** Reconciliation with [peer] completed; a link may remember the peer's advertised summary to skip idle reconnects (mesh.adv §4). */
     fun synced(peer: String) {}
+    /** [peer] sent a valid HELLO; LocalLink uses it to tell a Mosimo holder from another app on its port. */
+    fun hello(peer: String) {}
 }
 
 /**
