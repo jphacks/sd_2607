@@ -25,6 +25,14 @@
       "sha256": "51c414baf157d632c0ecbeedce0f0b06af491f99fe36c48c5e56434b5d009bca"
     },
     {
+      "kind": "dmg-x64",
+      "platform": "macos",
+      "version": "0.1.0",
+      "file": "mosimo-simulator_0.1.0_x64.dmg",
+      "bytes": 5346352,
+      "sha256": "59439e8d77ddb8a1905d87c935a4c0d0ae5f100ad390bd37ae242a7903b08e4d"
+    },
+    {
       "kind": "appimage",
       "platform": "linux",
       "version": "0.1.0",
