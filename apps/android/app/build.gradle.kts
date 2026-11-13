@@ -19,6 +19,7 @@ android {
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
         manifestPlaceholders["mosimoPlcRegistration"] = providers.gradleProperty("mosimoPlcRegistration").orElse("true").get()
+        manifestPlaceholders["mosimoTestPublicRelay"] = ""
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -35,6 +36,8 @@ android {
         getByName("debug") {
             applicationIdSuffix = providers.gradleProperty("mosimoDebugSuffix").orElse(".debug").get()
             versionNameSuffix = "-debug"
+            // Local public-information checks against a test relay (e.g. ws://127.0.0.1:7777 over `adb reverse`). Release builds ignore it.
+            manifestPlaceholders["mosimoTestPublicRelay"] = providers.gradleProperty("mosimoTestPublicRelay").orElse("").get()
         }
         getByName("release") {
             isMinifyEnabled = true

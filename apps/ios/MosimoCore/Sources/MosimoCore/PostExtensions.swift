@@ -27,6 +27,38 @@ public struct Bsaf: Equatable, Sendable {
 public enum Relation: String, CaseIterable, Sendable { case correction, supplement, endorsement }
 /// [targetEventId] is the Nostr target (hex); atproto references are kept as [targetUri].
 public struct Annotation: Equatable, Sendable { public let relation: Relation; public let targetEventId: String?; public let targetUri: String? }
+public struct LocalizedText: Equatable, Sendable { public let text: String, lang: String }
+/// hazard §5: a regional scale kept in its original notation.
+public struct HazardScale: Equatable, Sendable { public let scheme: String, value: String; public let basis: String? }
+/// hazard §2: enum fields keep unknown values as raw strings (the UI treats them as Unknown).
+public struct Hazard: Equatable, Sendable {
+    public let status: String, category: [String], severity: String, urgency: String, certainty: String
+    public let responseTypes: [String]
+    public let onset: String?, event: LocalizedText?
+    public let scales: [HazardScale]
+    public let glide: String?
+    /// The single type-specific extension (hazard §7); nil when absent, malformed or ambiguous.
+    public let kind: HazardKind?
+    public var allClear: Bool { responseTypes.contains("AllClear") }
+}
+public enum HazardKind: Equatable, Sendable {
+    /// Coordinates in microdegrees, lengths in mm, magnitude in tenths, pressure in Pa, wind in mm/s.
+    public struct Hypocenter: Equatable, Sendable { public let lat: Int64?, lon: Int64?, depth: Int64?; public let name: LocalizedText? }
+    public struct Magnitude: Equatable, Sendable { public let value: Int64; public let type: String? }
+    public struct Height: Equatable, Sendable { public let value: Int64?; public let text: LocalizedText?; public let basis: String? }
+    public struct Volcano: Equatable, Sendable { public let name: LocalizedText?; public let gvp: String?; public let lat: Int64?, lon: Int64? }
+    public struct Point: Equatable, Sendable { public let lat: Int64, lon: Int64 }
+    public struct Cyclone: Equatable, Sendable {
+        public let name: LocalizedText?, designation: String?
+        public let center: Point?
+        public let pressure: Int64?, maxWind: Int64?, stormRadius: Int64?
+    }
+    case earthquake(kind: String, hypocenter: Hypocenter?, magnitude: Magnitude?)
+    case tsunami(maxHeight: Height?, arrival: String?)
+    case volcano(phenomenon: String, volcano: Volcano?)
+    case weather(phenomena: [String])
+    case cyclone(Cyclone)
+}
 public struct PostExtensions: Equatable, Sendable {
     public var origin: Origin?
     public var areas: [Area] = []
@@ -34,6 +66,7 @@ public struct PostExtensions: Equatable, Sendable {
     public var priority = 1
     public var bsaf: Bsaf?
     public var annotation: Annotation?
+    public var hazard: Hazard?
     /// An `attest.chain` extension is present (verification is the coordinator's).
     public var hasChain = false
     public var regions: [Region] { areas.flatMap(\.regions) }
@@ -45,6 +78,8 @@ public enum Extensions {
     public static let area = "dev.jisaku.mosimo.geo#area"
     public static let validity = "dev.jisaku.mosimo.validity"
     public static let annotation = "dev.jisaku.mosimo.annotation"
+    public static let hazard = "dev.jisaku.mosimo.hazard"
+    public static let hazardKinds = ["earthquake", "tsunami", "volcano", "weather", "cyclone"].map { "\(hazard).\($0)" }
     public static let priority = PublicIngress.priorityType
 
     public static func origin(_ o: Origin) -> [String: Cbor] {
@@ -128,7 +163,53 @@ public enum Extensions {
             if eventId != nil || uri != nil { p.annotation = Annotation(relation: relation, targetEventId: eventId, targetUri: uri) }
         }
         p.hasChain = ext.contains { $0["$type"] == .text(Attest.chain) }
+        if let m = first(hazard) {
+            // hazard §7: several type-specific extensions are forbidden, so none is trusted to be the subject.
+            let kinds = ext.filter { e in hazardKinds.contains { e["$type"] == .text($0) } }
+            p.hazard = Self.hazard(m, kind: kinds.count == 1 ? hazardKind(kinds[0]) : nil)
+        }
         return p
+    }
+
+    private static func texts(_ c: Cbor?) -> [String]? { c?.array.map { $0.compactMap(\.text) } }
+    private static func localized(_ c: Cbor?) -> LocalizedText? {
+        guard let text = c?["text"]?.text, let lang = c?["lang"]?.text else { return nil }
+        return LocalizedText(text: text, lang: lang)
+    }
+    /// Missing or wrong-typed required fields drop the hazard; wrong-typed optional fields read as absent.
+    static func hazard(_ m: [String: Cbor], kind: HazardKind?) -> Hazard? {
+        guard let status = m["status"]?.text, let category = texts(m["category"]), !category.isEmpty,
+              let severity = m["severity"]?.text, let urgency = m["urgency"]?.text, let certainty = m["certainty"]?.text else { return nil }
+        let scales = (m["scales"]?.array ?? []).compactMap { s -> HazardScale? in
+            guard let scheme = s["scheme"]?.text, let value = s["value"]?.text else { return nil }
+            return HazardScale(scheme: scheme, value: value, basis: s["basis"]?.text)
+        }
+        return Hazard(status: status, category: category, severity: severity, urgency: urgency, certainty: certainty,
+                      responseTypes: texts(m["responseTypes"]) ?? [], onset: m["onset"]?.text, event: localized(m["event"]),
+                      scales: scales, glide: m["glide"]?.text, kind: kind)
+    }
+    static func hazardKind(_ m: [String: Cbor]) -> HazardKind? {
+        switch m["$type"]?.text.map({ String($0.dropFirst(hazard.count + 1)) }) {
+        case "earthquake":
+            guard let kind = m["kind"]?.text else { return nil }
+            let h = m["hypocenter"]?.map.map { HazardKind.Hypocenter(lat: $0["lat"]?.int, lon: $0["lon"]?.int, depth: $0["depth"]?.int, name: localized($0["name"])) }
+            let mag = m["magnitude"].flatMap { c in c["value"]?.int.map { HazardKind.Magnitude(value: $0, type: c["type"]?.text) } }
+            return .earthquake(kind: kind, hypocenter: h, magnitude: mag)
+        case "tsunami":
+            let h = m["maxHeight"]?.map.map { HazardKind.Height(value: $0["value"]?.int, text: localized($0["text"]), basis: $0["basis"]?.text) }
+            return .tsunami(maxHeight: h, arrival: m["arrival"]?.text)
+        case "volcano":
+            guard let phenomenon = m["phenomenon"]?.text else { return nil }
+            let v = m["volcano"]?.map.map { HazardKind.Volcano(name: localized($0["name"]), gvp: $0["gvp"]?.text, lat: $0["lat"]?.int, lon: $0["lon"]?.int) }
+            return .volcano(phenomenon: phenomenon, volcano: v)
+        case "weather":
+            return texts(m["phenomena"]).map { .weather(phenomena: $0) }
+        case "cyclone":
+            let center = m["center"].flatMap { c in c["lat"]?.int.flatMap { lat in c["lon"]?.int.map { HazardKind.Point(lat: lat, lon: $0) } } }
+            return .cyclone(.init(name: localized(m["name"]), designation: m["designation"]?.text, center: center,
+                                  pressure: m["pressure"]?.int, maxWind: m["maxWind"]?.int, stormRadius: m["stormRadius"]?.int))
+        default: return nil
+        }
     }
 
     private static let geohashPattern = try! NSRegularExpression(pattern: "^[0-9b-hjkmnp-z]{1,12}$")

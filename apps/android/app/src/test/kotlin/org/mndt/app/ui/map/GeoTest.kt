@@ -19,6 +19,25 @@ class GeoTest {
         assertEquals(5, boundsRing(b).size)
     }
 
+    @Test fun geohashOutline() {
+        // Two neighbours share one side: 4 + 4 sides minus the shared pair.
+        assertEquals(6, geohashOutline(listOf("xn76", "xn77"))!!.size)
+        assertEquals(4, geohashOutline(listOf("xn7"))!!.size)
+        // A parent with one of its own children: traced on the child grid (4 × 8 children), the child adds no edges.
+        assertEquals(2 * 4 + 2 * 8, geohashOutline(listOf("xn7", "xn76"))!!.size)
+        // Too many fine cells to trace.
+        assertEquals(null, geohashOutline(listOf("x", "xn76kz")))
+    }
+
+    @Test fun geohashAnchorInside() {
+        val cells = listOf("xn76", "xn77", "xn7k")
+        val (lat, lng) = geohashAnchor(cells)!!
+        assertTrue(cells.any { h -> geohashBounds(h).let { b -> lat in b[0]..b[2] && lng in b[1]..b[3] } })
+        // Far-off islands (like Tokyo's Ogasawara) don't drag the pin away from the largest part.
+        val (iLat, iLng) = geohashAnchor(cells + listOf("xn10", "xn0b"))!!
+        assertTrue(cells.any { h -> geohashBounds(h).let { b -> iLat in b[0]..b[2] && iLng in b[1]..b[3] } })
+    }
+
     @Test fun circle() {
         val ring = circleRing(38.26, 140.87, 200.0)
         assertEquals(ring.first(), ring.last())

@@ -77,7 +77,7 @@ private fun SettingsScreen(nav: Navigator) {
     val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
-    val roots = remember { trustRoots(context) }
+    val roots = state.trustRoots.map { it.root }
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)

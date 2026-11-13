@@ -35,6 +35,8 @@ public protocol Link: AnyObject {
 public extension Link {
     func hello(_ peer: String) {}
     func rejected(_ peer: String) {}
+    /// Node IDs this link saw nearby within [seconds] (adverts, service discovery), connected or not.
+    func nearby(within seconds: Double) -> Set<String> { [] }
 }
 
 /// One link connection's contact state (mesh §4-5).
@@ -76,7 +78,11 @@ public final class Session {
         return hex(side == 0 ? nonce + p.nonce : p.nonce + nonce)
     }
 
-    init(link: Link, handle: String, began: Int64, node: String?) { self.link = link; self.handle = handle; self.began = began; self.node = node }
+    /// Last message received; a settled BLE link is released after a quiet period (mesh §3.4).
+    var lastActivity: Int64
+    init(link: Link, handle: String, began: Int64, node: String?) {
+        self.link = link; self.handle = handle; self.began = began; self.node = node; lastActivity = began
+    }
 
     final class OutTransfer {
         let id: Int64, eventId: String, bytes: [UInt8], requestId: Int64, startedAt: Int64
@@ -112,6 +118,8 @@ public final class Exchange {
     static let maxQueuedFragments = 2
     static let messagesPerMinute = 4096
     static let helloTimeoutMs: Int64 = 60_000, transferTimeoutMs: Int64 = 90_000, reconcileTimeoutMs: Int64 = 60_000
+    /// mesh §3.4: quiet time after reconciliation before a BLE link is released (as the ESP32 relay does).
+    static let settledMs: Int64 = 5_000
 
     private let engine: MeshEngine
     private let now: () -> Int64, elapsed: () -> Int64
@@ -168,6 +176,7 @@ public final class Exchange {
         if elapsed() - s.window >= 60_000 { s.window = elapsed(); s.messages = 0 }
         s.messages += 1
         if s.messages > Self.messagesPerMinute { drop(s); return }
+        s.lastActivity = elapsed()
         do {
             let m = try Messages.decode(bytes)
             if case let .hello(nonce, maxBundle, _, credit, maxMessage, ext) = m { try hello(s, nonce, maxBundle, credit, maxMessage, ext); return }
@@ -199,7 +208,8 @@ public final class Exchange {
     /// Offers newly held candidates to every peer; side 0 also re-reconciles when its set changed since the last pass.
     public func broadcastInventory() {
         for s in sessions where s.ready {
-            inventory(s)
+            // mesh §5.6: INVENTORY only offers what became a candidate after reconciliation, never the whole store.
+            if s.sawReconcile { inventory(s) }
             if s.side == 0 && s.reconcile == nil && s.reconciledSummary != engine.summary(nowMillis: now(), elapsedMillis: elapsed()) { startReconcile(s) }
         }
     }
@@ -215,7 +225,14 @@ public final class Exchange {
                 s.requests[i.requestId]?.remove(i.eventId)
             }
             for o in s.outgoing.values where o.complete && t - o.startedAt > Self.transferTimeoutMs { s.outgoing[o.id] = nil }
-            if s.reconcile != nil && t - s.reconcileStarted > Self.reconcileTimeoutMs { s.reconcile = nil; log("reconciliation timed out with \(s.label)") }
+            // mesh §3.4: a BLE link is released once reconciliation ran and nothing moved for a while; the summary
+            // in the next advert decides whether it is worth reconnecting (mesh.adv §4).
+            if s.link.name == "ble" && s.sawReconcile && s.reconcile == nil && s.queue.isEmpty && s.sending == nil && s.outgoing.isEmpty
+                && s.incoming.isEmpty && s.requests.values.allSatisfy({ $0.isEmpty }) && t - s.lastActivity >= Self.settledMs {
+                log("exchange with \(s.label) settled; releasing link"); drop(s); continue
+            }
+            // A peer that never answers is gone (killed app, stale link); free the slot so a fresh link can form.
+            if s.reconcile != nil && t - s.reconcileStarted > Self.reconcileTimeoutMs { log("reconciliation timed out with \(s.label); dropping"); drop(s); continue }
             s.requests = s.requests.filter { !$0.value.isEmpty }
             if s.ready { pump(s) }
         }
@@ -227,7 +244,18 @@ public final class Exchange {
     public func forgetRefused() { refused.removeAll() }
 
     private func hello(_ s: Session, _ nonce: [UInt8], _ maxBundle: Int, _ credit: Int, _ maxMessage: Int, _ ext: [[String: Cbor]]) throws {
-        try require(!s.ready, "Duplicate HELLO")
+        if let previous = s.peer {
+            // The same HELLO again is a duplicate; a new nonce on the same link means the peer restarted its
+            // session (e.g. a relay node reset after a subscription change). Start over instead of dropping the link.
+            if previous.nonce == nonce { return }
+            log("peer \(s.label) restarted its session on \(s.link.name):\(s.handle)")
+            sessions.removeAll { $0 === s }
+            connected(s.link, s.handle, node: s.node)
+            if let fresh = sessions.last, fresh !== s, fresh.handle == s.handle {
+                try hello(fresh, nonce, maxBundle, credit, maxMessage, ext)
+            }
+            return
+        }
         if nonce == s.nonce { drop(s); return }
         s.peer = (maxBundle, credit, maxMessage, nonce)
         s.side = s.nonce.lexicographicallyPrecedes(nonce) ? 0 : 1
@@ -267,8 +295,11 @@ public final class Exchange {
             s.link.synced(s.handle)
             return
         }
-        // Peer-initiated: answer from our current candidate set.
-        let responder = try Negentropy(candidates(), frameSizeLimit: frameLimit(s) - Messages.reconcileOverhead)
+        // Peer-initiated: answer from our current candidate set. The initiator wants what it lacks of these, so
+        // they count as offered and a later INVENTORY lists only newer candidates (mesh §5.6).
+        let items = candidates()
+        s.offered.formUnion(items.map { hex($0.id) })
+        let responder = try Negentropy(items, frameSizeLimit: frameLimit(s) - Messages.reconcileOverhead)
         if let reply = try responder.reconcile(message) { _ = send(s, .reconcile(id: id, message: reply)) }
     }
 
@@ -301,6 +332,8 @@ public final class Exchange {
             if eligible.contains(h) { s.queue.append((h, requestId)) }
             else { _ = send(s, .result(target: .event(side: s.peerSide, requestId: requestId, id: id), code: Messages.resultUnavailable, reason: Messages.reasonMissing)) }
         }
+        // mesh §9: higher effective priority first across everything this peer is waiting for.
+        s.queue = engine.sendOrder(s.queue) { $0.0 }
         log("want \(ids.count) from \(s.label), queued \(s.queue.count)")
         pump(s)
     }
@@ -421,9 +454,9 @@ public final class Exchange {
             return
         } catch {
             let why = "\(error)"
-            let reason = why.contains("size") || why.contains("limit") ? Messages.reasonSize
-                : why.contains("expired") || why.contains("deadline") ? Messages.reasonExpired
-                : why.contains("capacity") || why.contains("rate") ? Messages.reasonResources : Messages.reasonInvalid
+            let reason = why.contains("capacity") || why.contains("rate") ? Messages.reasonResources
+                : why.contains("size") || why.contains("limit") ? Messages.reasonSize
+                : why.contains("expired") || why.contains("deadline") ? Messages.reasonExpired : Messages.reasonInvalid
             log("rejected bundle from \(s.label): \(why)")
             _ = send(s, .result(target: target, code: Messages.resultRejected, reason: reason))
             return

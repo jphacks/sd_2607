@@ -35,6 +35,8 @@ internal interface Link {
     fun hello(peer: String) {}
     /** [peer] broke the exchange framing (mesh §7, e.g. a pre-v1 build); a link may stop redialing its node for a while. */
     fun rejected(peer: String) {}
+    /** Node IDs this link saw nearby within [withinMillis] (adverts, service discovery), connected or not. */
+    fun nearby(withinMillis: Long): Set<String> = emptySet()
 }
 
 /**

@@ -91,9 +91,10 @@ fun SenderVerification(post: PostView) {
 fun CategoryBadge(category: Category) = Text(category.label, Modifier.clip(MaterialTheme.shapes.small).background(category.color.copy(alpha = 0.16f))
     .padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelMedium, color = category.color, fontWeight = FontWeight.Bold)
 
-/** Tinted square icon + label heading a card: BSAF type or 「周辺の投稿」. */
+/** Tinted square icon + label heading a card: hazard kind, BSAF type or 「周辺の投稿」. */
 @Composable
 fun KindLabel(post: PostView) {
+    post.ext.hazard?.let { HazardLabel(post, it); return }
     val (icon, color, label) = if (post.isPublic) Triple(Icons.Outlined.Info, post.priorityColor(), bsafLabel(post.ext.bsaf?.type))
     else Triple(Icons.Outlined.Place, Mosimo.info, "周辺の投稿")
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -124,6 +125,7 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
             post.category()?.let { CategoryBadge(it) }
         }
         Text(if (post.isPublic) post.content else post.body(), style = MaterialTheme.typography.bodyLarge, color = Mosimo.textPrimary)
+        HazardSection(post)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Fact("時刻", dateTime(post.eventTime()))
             if (post.isPublic) Fact("転載", dateTime(post.createdAt))
@@ -186,7 +188,7 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
 }
 
 @Composable
-private fun Fact(label: String, value: String) = Row {
+internal fun Fact(label: String, value: String) = Row {
     Text(label, Modifier.width(72.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
     Text(value, style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
 }

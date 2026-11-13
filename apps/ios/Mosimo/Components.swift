@@ -67,13 +67,16 @@ struct CategoryBadge: View {
     }
 }
 
-/// Tinted square icon + label heading a card: BSAF type or 「周辺の投稿」.
+/// Tinted square icon + label heading a card: hazard badge, BSAF type or 「周辺の投稿」.
 struct KindLabel: View {
     let post: PostView
     var body: some View {
+        if let hazard = post.ext.hazard { HazardBadge(post: post, hazard: hazard) } else { plain }
+    }
+    private var plain: some View {
         let (icon, color, label) = post.isPublic ? ("info.circle", post.priorityColor, bsafLabel(post.ext.bsaf?.type))
             : ("mappin.and.ellipse", Mosimo.info, "周辺の投稿")
-        HStack(spacing: 8) {
+        return HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 14)).foregroundStyle(color)
                 .frame(width: 26, height: 26).background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
             Text(label).font(.labelLarge).foregroundStyle(color)

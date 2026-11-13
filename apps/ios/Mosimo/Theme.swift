@@ -18,6 +18,9 @@ enum Mosimo {
     static let warning = Color(hex: 0xFF8A00)
     /// Safe, shelters, verified signatures.
     static let safe = Color(hex: 0x34C759)
+    /// Hazard severity Extreme / Minor (official notices only); purple and amber read on the dark surfaces.
+    static let extreme = Color(hex: 0xA855F7)
+    static let minor = Color(hex: 0xFFD60A)
     /// Communication: mesh, BLE, own position, relayed.
     static let info = Color(hex: 0x4DA3FF)
 }

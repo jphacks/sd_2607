@@ -163,6 +163,8 @@ final class LanLink: Link {
     }
 
     func queued(_ peer: String) -> Int { queue.sync { conns[peer]?.queued ?? 0 } }
+    /// Services currently announced on the LAN (the browser reports their loss).
+    func nearby(within seconds: Double) -> Set<String> { queue.sync { Set(found.keys) } }
     func disconnect(_ peer: String) { queue.async { [self] in conns[peer]?.connection.cancel() } }
     func synced(_ peer: String) {}
 

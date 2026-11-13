@@ -23,6 +23,9 @@ targets:
       # Single source of truth for the shipped trust roots, shared with Android (read-only reference, not a copy).
       - path: ../android/mesh-android/src/main/assets/mosimo-public-trust.json
         buildPhase: resources
+      # The test-post root, for development builds only (Android: app/src/debug/assets). Release excludes it below.
+      - path: ../android/app/src/debug/assets/mosimo-public-trust-test.json
+        buildPhase: resources
     dependencies:
       - package: MosimoCore
     settings:
@@ -32,6 +35,9 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: もしもの防災
+      configs:
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: mosimo-public-trust-test.json
     info:
       path: Mosimo/Info.plist
       properties:
@@ -54,6 +60,8 @@ targets:
         # Local shelter relays may be plain ws:// (parity with Android usesCleartextTraffic).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # Debug-only local public-information relay (empty unless passed to xcodebuild; Release ignores it).
+        MosimoTestPublicRelay: $(MOSIMO_TEST_PUBLIC_RELAY)
   MosimoUITests:
     type: bundle.ui-testing
     platform: iOS

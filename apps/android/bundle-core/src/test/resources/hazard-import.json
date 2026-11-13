@@ -1,0 +1,247 @@
+{
+ "testOnly": "Generated demo keys; not a real importer.",
+ "config": {
+  "roots": [
+   {
+    "pubkey": "cb931bd4e70ea57ebdfe7e18df72ba90ebf003e293d84ed6b387ada181ff41f5",
+    "name": "テスト用 root（動作確認）",
+    "roles": [
+     "attest",
+     "import"
+    ],
+    "maxDepth": 2,
+    "enabled": true
+   }
+  ],
+  "selected": [
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "avalanche-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "dense-fog-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "dry-air-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "flood-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "frost-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "heavy-rain"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "heavy-rain-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "icing-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "landslide-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "linear-rainband-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "low-temperature-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "melting-snow-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "other-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "significant-snowfall-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "snow-accretion-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "snow-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "storm-surge-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "thunderstorm-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "tornado-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "typhoon"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "wave-warning"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "weather-info"
+   },
+   {
+    "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
+    "type": "wind-warning"
+   },
+   {
+    "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+    "type": "ashfall"
+   },
+   {
+    "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+    "type": "earthquake"
+   },
+   {
+    "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+    "type": "eruption"
+   },
+   {
+    "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+    "type": "nankai-trough"
+   },
+   {
+    "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
+    "type": "tsunami"
+   }
+  ]
+ },
+ "trusted": {
+  "kind": 1,
+  "content": "🔴 地震情報\n13日20時41分ころ、石川県能登地方で地震\nマグニチュード：6.1（深さ約10km）\n最大震度：5強\nこの地震による津波の心配はありません。\n（出典：気象庁）\n※動作確認用のテストデータです（メッシュ中継の確認）",
+  "created_at": 1794522705,
+  "tags": [
+   [
+    "t",
+    "mosimo.jisaku.dev"
+   ],
+   [
+    "mosimo:v",
+    "1"
+   ],
+   [
+    "mosimo:commit",
+    "pmNkaWR4IGRpZDpwbGM6Y2dsNnBzY251cmloYmRoNWtrZHd6ZWZpY3Jldm0zbjI1ams3eXhtMjIyY3NpZ1hAhDnEia7Xm2I9AeKLYWk6+AFpQNh0bOVIdEqhCmvuWidtSHGY3D/TwPO9nipfyMRERzkQlrrgXcq7HtkmYHdQsWRkYXRh2CpYJQABcRIg4AR6KihGeskoC9KDPsnNgphard7lBESgfus3ObM09C1kcHJldvZndmVyc2lvbgM"
+   ],
+   [
+    "mosimo:base",
+    ""
+   ],
+   [
+    "mosimo:rkey",
+    "3n25jk7yxm222"
+   ],
+   [
+    "mosimo:exp",
+    "2026-11-13T04:41:35Z"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.public.bsaf",
+    "o2R0YWdzhmdic2FmOnYxb3R5cGU6ZWFydGhxdWFrZWh2YWx1ZTo1K3gddGltZToyMDI2LTExLTEyVDIyOjMxOjA1LjAwMFpvdGFyZ2V0OmpwLWNodWJ1anNvdXJjZTpqbWFlbGFuZ3OBYmphaG9yaWdpbmFso2NjaWR4O2JhZnlyZWllNjdiMzU3b3psd2NudDRtbmd6ZWY3N25lejJtdnVtNGZwc2VqaGN4ZG83c2lkN21mb3o0Y3VyaXhGYXQ6Ly9kaWQ6cGxjOnZ3aTd6aGZ5YW15dnJnNXY2eWNqZ3p4aS9hcHAuYnNreS5mZWVkLnBvc3QvM2RlbW8wMDAwMDAwMWljcmVhdGVkQXR4GDIwMjYtMTEtMTJUMjI6MzE6MzUuMDAwWg"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.hazard",
+    "qGVldmVudKJkbGFuZ2JqYWR0ZXh0ZuWcsOmch2VvbnNldHgYMjAyNi0xMS0xMlQyMjozMTowNS4wMDBaZnNjYWxlc4GjZWJhc2lzaG9ic2VydmVkZXZhbHVlYjUrZnNjaGVtZW1qcC5qbWEuc2hpbmRvZnN0YXR1c2ZBY3R1YWxndXJnZW5jeWRQYXN0aGNhdGVnb3J5gWNHZW9oc2V2ZXJpdHlmU2V2ZXJlaWNlcnRhaW50eWhPYnNlcnZlZA"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.hazard.earthquake",
+    "o2RraW5kZWV2ZW50aW1hZ25pdHVkZaFldmFsdWUYPWpoeXBvY2VudGVyomRuYW1lomRsYW5nYmphZHRleHR155+z5bed55yM6IO955m75Zyw5pa5ZWRlcHRoGgCYloA"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.public#source",
+    "pWhkb2N1bWVudKRmZm9ybWF0Z2JzYWYtdjFmc2VudEF0eBgyMDI2LTExLTEyVDIyOjMxOjM1LjAwMFpoc2VuZGVySWR4IGRpZDpwbGM6dndpN3poZnlhbXl2cmc1djZ5Y2pnenhpaW1lc3NhZ2VJZHhGYXQ6Ly9kaWQ6cGxjOnZ3aTd6aGZ5YW15dnJnNXY2eWNqZ3p4aS9hcHAuYnNreS5mZWVkLnBvc3QvM2RlbW8wMDAwMDAwMWljb252ZXJ0ZXJ4IGRpZDpwbGM6Y2dsNnBzY251cmloYmRoNWtrZHd6ZWZpamNvbnZlcnNpb26iZHJ1bGV4JGRldi5qaXNha3UubW9zaW1vLnB1YmxpYy5ic2FmLmhhemFyZGhyZXZpc2lvbmExa3JldHJpZXZlZEF0eBgyMDI2LTExLTEyVDIyOjMxOjQwLjAwMFptcmV0cmlldmVkRnJvbXghd3NzOi8vamV0c3RyZWFtLmludmFsaWQvc3Vic2NyaWJl"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.attest.chain",
+    "oWxhdHRlc3RhdGlvbnOComNzaWdYQFEveyY36CVJyuGrup+TxGe8DSkSBOs9dq8zl9/SDN/Xn2/+xRk7ZY1yRwb2HnqaRVvutDfCn1QhQs615ZFRcc5kYm9keaZlJHR5cGV4J2Rldi5qaXNha3UubW9zaW1vLmF0dGVzdCNrZXlBdHRlc3RhdGlvbmVvd25lcqJiaWRnZGVtby1jYWRuYW1leB7jg4bjgrnjg4jou6LovInjgrXjg7zjg5Djg7wgQ0Flcm9sZXOCZmF0dGVzdGZpbXBvcnRmYmxvY2tzg6JlJHR5cGV4I2Rldi5qaXNha3UubW9zaW1vLmF0dGVzdCNkZWxlZ2F0aW9uaG1heERlcHRoAaJlJHR5cGV4JWRldi5qaXNha3UubW9zaW1vLmF0dGVzdCNpc3N1ZXJEb21haW5mZG9tYWluc21vc2ltby1kZW1vLmludmFsaWSiZSR0eXBleCFkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3QuaW1wb3J0ZXJnc291cmNlc4KiZXR5cGVzl3FhdmFsYW5jaGUtd2FybmluZ3FkZW5zZS1mb2ctd2FybmluZ29kcnktYWlyLXdhcm5pbmdtZmxvb2Qtd2FybmluZ21mcm9zdC13YXJuaW5namhlYXZ5LXJhaW5yaGVhdnktcmFpbi13YXJuaW5nbWljaW5nLXdhcm5pbmdxbGFuZHNsaWRlLXdhcm5pbmd3bGluZWFyLXJhaW5iYW5kLXdhcm5pbmd3bG93LXRlbXBlcmF0dXJlLXdhcm5pbmd0bWVsdGluZy1zbm93LXdhcm5pbmdtb3RoZXItd2FybmluZ3gcc2lnbmlmaWNhbnQtc25vd2ZhbGwtd2FybmluZ3Zzbm93LWFjY3JldGlvbi13YXJuaW5nbHNub3ctd2FybmluZ3NzdG9ybS1zdXJnZS13YXJuaW5ndHRodW5kZXJzdG9ybS13YXJuaW5nb3Rvcm5hZG8td2FybmluZ2d0eXBob29ubHdhdmUtd2FybmluZ2x3ZWF0aGVyLWluZm9sd2luZC13YXJuaW5nZmJvdERpZHggZGlkOnBsYzpreHd6NWN6N282ZzRqbG14aDZkb3lmc22iZXR5cGVzhWdhc2hmYWxsamVhcnRocXVha2VoZXJ1cHRpb25tbmFua2FpLXRyb3VnaGd0c3VuYW1pZmJvdERpZHggZGlkOnBsYzp2d2k3emhmeWFteXZyZzV2Nnljamd6eGlmaXNzdWVyWCDLkxvU5w6lfr3+fhjfcrqQ6/AD4pPYTtazh62hgf9B9WdzdWJqZWN0WCC3tMIFPG7mAhsyAvtCFJIYjwSTbqBKX5EHzLrxOWRtJqJjc2lnWEA1oJSSkZuKLZGJ4tf3WS6lfCz7LsVD8JWiHoCU9nx04R+VYpOZhgwm/xCDyOE1nTjLiKfsWeGHAK8j+9t5Bb84ZGJvZHmmZSR0eXBleCdkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qja2V5QXR0ZXN0YXRpb25lb3duZXKiYmlkeCBkaWQ6cGxjOmNnbDZwc2NudXJpaGJkaDVra2R3emVmaWRuYW1leCTjg4bjgrnjg4jou6LovInjgrXjg7zjg5Djg7wgaW1wb3J0ZXJlcm9sZXOBZmltcG9ydGZibG9ja3ODo2Rmcm9tdDIwMjYtMTEtMTJUMjE6NDE6MzVaZSR0eXBleCRkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qja2V5VmFsaWRpdHlldW50aWx0MjAyNi0xMS0yNlQyMjo0MTozNVqjZSR0eXBleCVkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qjb3JnYW5pemF0aW9uZW9yZ0lkd2V4YW1wbGUub3JnOm1vc2ltby1kZW1vZ29yZ05hbWV4MOODhuOCueODiOi7oui8ieOCteODvOODkOODvO+8iOWLleS9nOeiuuiqjeeUqO+8iaJlJHR5cGV4IWRldi5qaXNha3UubW9zaW1vLmF0dGVzdC5pbXBvcnRlcmdzb3VyY2VzgqJldHlwZXOXcWF2YWxhbmNoZS13YXJuaW5ncWRlbnNlLWZvZy13YXJuaW5nb2RyeS1haXItd2FybmluZ21mbG9vZC13YXJuaW5nbWZyb3N0LXdhcm5pbmdqaGVhdnktcmFpbnJoZWF2eS1yYWluLXdhcm5pbmdtaWNpbmctd2FybmluZ3FsYW5kc2xpZGUtd2FybmluZ3dsaW5lYXItcmFpbmJhbmQtd2FybmluZ3dsb3ctdGVtcGVyYXR1cmUtd2FybmluZ3RtZWx0aW5nLXNub3ctd2FybmluZ21vdGhlci13YXJuaW5neBxzaWduaWZpY2FudC1zbm93ZmFsbC13YXJuaW5ndnNub3ctYWNjcmV0aW9uLXdhcm5pbmdsc25vdy13YXJuaW5nc3N0b3JtLXN1cmdlLXdhcm5pbmd0dGh1bmRlcnN0b3JtLXdhcm5pbmdvdG9ybmFkby13YXJuaW5nZ3R5cGhvb25sd2F2ZS13YXJuaW5nbHdlYXRoZXItaW5mb2x3aW5kLXdhcm5pbmdmYm90RGlkeCBkaWQ6cGxjOmt4d3o1Y3o3bzZnNGpsbXhoNmRveWZzbaJldHlwZXOFZ2FzaGZhbGxqZWFydGhxdWFrZWhlcnVwdGlvbm1uYW5rYWktdHJvdWdoZ3RzdW5hbWlmYm90RGlkeCBkaWQ6cGxjOnZ3aTd6aGZ5YW15dnJnNXY2eWNqZ3p4aWZpc3N1ZXJYILe0wgU8buYCGzIC+0IUkhiPBJNuoEpfkQfMuvE5ZG0mZ3N1YmplY3RYIDcxNQ4UV2Rp5Q+4rbXrg2Wwwrn1pDH5FyLLqcp2YeNm"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.priority",
+    "oWVsZXZlbAE"
+   ]
+  ],
+  "pubkey": "3731350e14576469e50fb8adb5eb8365b0c2b9f5a431f91722cba9ca7661e366",
+  "id": "e3cd494f3633d71d0248e407ba18dbe5dde0c322024577a2626172f868620f43",
+  "sig": "1ee13c12d5dc29b537db899d7d944e08c73dd89f49efe9bedd86e4bee0252b1f56472fd549409092a7410c91e4e97d92ff48361d4d3c11ef1fcfcb2446edb616"
+ },
+ "untrusted": {
+  "kind": 1,
+  "content": "🟣 大津波警報\n13日20時55分発表\n大津波警報：千葉県九十九里・外房\n予想される最大高さ：10m超\n（出典：気象庁）\n※動作確認用のテストデータです（メッシュ中継の確認）",
+  "created_at": 1794523275,
+  "tags": [
+   [
+    "t",
+    "mosimo.jisaku.dev"
+   ],
+   [
+    "mosimo:v",
+    "1"
+   ],
+   [
+    "mosimo:commit",
+    "pmNkaWR4IGRpZDpwbGM6ajc0Nmd6a3JvazVzajNqaDN6b2RvazduY3Jldm0zbjI1azM3bHlhMjIyY3NpZ1hAraY+FkMIPnpQ+IkxtqWYsbMKGYlQmCSJ7pDo5xqYMCMLHS7KHQYL8oJGRqRsuIvM6pojscw5KncIcASfx60F0GRkYXRh2CpYJQABcRIg9b3mOQNcHRXQWDXiYYxcohDsihJx7ZxV4R8/S/HwPsRkcHJldvZndmVyc2lvbgM"
+   ],
+   [
+    "mosimo:base",
+    ""
+   ],
+   [
+    "mosimo:rkey",
+    "3n25k37lya222"
+   ],
+   [
+    "mosimo:exp",
+    "2026-11-13T04:41:35Z"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.public.bsaf",
+    "o2R0YWdzhmdic2FmOnYxbHR5cGU6dHN1bmFtaXV2YWx1ZTpzcGVjaWFsLXdhcm5pbmd4HXRpbWU6MjAyNi0xMS0xMlQyMjo0MDozNS4wMDBab3RhcmdldDpqcC1rYW50b2pzb3VyY2U6am1hZWxhbmdzgWJqYWhvcmlnaW5hbKNjY2lkeDtiYWZ5cmVpZnV0M3RrZWdzazc0d2VxZjV0YXJzd2J3dWlxaXI0NmJ1ZnAzYnEycDNwcGJudjdrNHRtaWN1cml4RmF0Oi8vZGlkOnBsYzp2d2k3emhmeWFteXZyZzV2Nnljamd6eGkvYXBwLmJza3kuZmVlZC5wb3N0LzNkZW1vMDAwMDAwMTFpY3JlYXRlZEF0eBgyMDI2LTExLTEyVDIyOjQxOjA1LjAwMFo"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.hazard",
+    "qGVldmVudKJkbGFuZ2JqYWR0ZXh0Zua0peazomZzY2FsZXOBomV2YWx1ZW1tYWpvci13YXJuaW5nZnNjaGVtZW5qcC5qbWEudHN1bmFtaWZzdGF0dXNmQWN0dWFsZ3VyZ2VuY3lpSW1tZWRpYXRlaGNhdGVnb3J5gWNHZW9oc2V2ZXJpdHlnRXh0cmVtZWljZXJ0YWludHlmTGlrZWx5bXJlc3BvbnNlVHlwZXOBaEV2YWN1YXRl"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.hazard.tsunami",
+    "oWltYXhIZWlnaHSiZHRleHSiZGxhbmdiamFkdGV4dGYxMG3otoVlYmFzaXNoZm9yZWNhc3Q"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.public#source",
+    "pWhkb2N1bWVudKRmZm9ybWF0Z2JzYWYtdjFmc2VudEF0eBgyMDI2LTExLTEyVDIyOjQxOjA1LjAwMFpoc2VuZGVySWR4IGRpZDpwbGM6dndpN3poZnlhbXl2cmc1djZ5Y2pnenhpaW1lc3NhZ2VJZHhGYXQ6Ly9kaWQ6cGxjOnZ3aTd6aGZ5YW15dnJnNXY2eWNqZ3p4aS9hcHAuYnNreS5mZWVkLnBvc3QvM2RlbW8wMDAwMDAxMWljb252ZXJ0ZXJ4IGRpZDpwbGM6ajc0Nmd6a3JvazVzajNqaDN6b2RvazduamNvbnZlcnNpb26iZHJ1bGV4JGRldi5qaXNha3UubW9zaW1vLnB1YmxpYy5ic2FmLmhhemFyZGhyZXZpc2lvbmExa3JldHJpZXZlZEF0eBgyMDI2LTExLTEyVDIyOjQxOjEwLjAwMFptcmV0cmlldmVkRnJvbXghd3NzOi8vamV0c3RyZWFtLmludmFsaWQvc3Vic2NyaWJl"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.attest.chain",
+    "oWxhdHRlc3RhdGlvbnOComNzaWdYQFanUmbAwZGkpMIBAN4zRMxt4OG4eiCsxGKQv0lq0T8jp2Kxyp+Bs8QfVrLXonQZN6L5b3X+uLkQtu0FOGAvvc1kYm9keaZlJHR5cGV4J2Rldi5qaXNha3UubW9zaW1vLmF0dGVzdCNrZXlBdHRlc3RhdGlvbmVvd25lcqJiaWRnZGVtby1jYWRuYW1leCrkv6HpoLzjgZfjgabjgYTjgarjgYTou6LovInjgrXjg7zjg5Djg7wgQ0Flcm9sZXOCZmF0dGVzdGZpbXBvcnRmYmxvY2tzg6JlJHR5cGV4I2Rldi5qaXNha3UubW9zaW1vLmF0dGVzdCNkZWxlZ2F0aW9uaG1heERlcHRoAaJlJHR5cGV4JWRldi5qaXNha3UubW9zaW1vLmF0dGVzdCNpc3N1ZXJEb21haW5mZG9tYWluc21vc2ltby1kZW1vLmludmFsaWSiZSR0eXBleCFkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3QuaW1wb3J0ZXJnc291cmNlc4KiZXR5cGVzl3FhdmFsYW5jaGUtd2FybmluZ3FkZW5zZS1mb2ctd2FybmluZ29kcnktYWlyLXdhcm5pbmdtZmxvb2Qtd2FybmluZ21mcm9zdC13YXJuaW5namhlYXZ5LXJhaW5yaGVhdnktcmFpbi13YXJuaW5nbWljaW5nLXdhcm5pbmdxbGFuZHNsaWRlLXdhcm5pbmd3bGluZWFyLXJhaW5iYW5kLXdhcm5pbmd3bG93LXRlbXBlcmF0dXJlLXdhcm5pbmd0bWVsdGluZy1zbm93LXdhcm5pbmdtb3RoZXItd2FybmluZ3gcc2lnbmlmaWNhbnQtc25vd2ZhbGwtd2FybmluZ3Zzbm93LWFjY3JldGlvbi13YXJuaW5nbHNub3ctd2FybmluZ3NzdG9ybS1zdXJnZS13YXJuaW5ndHRodW5kZXJzdG9ybS13YXJuaW5nb3Rvcm5hZG8td2FybmluZ2d0eXBob29ubHdhdmUtd2FybmluZ2x3ZWF0aGVyLWluZm9sd2luZC13YXJuaW5nZmJvdERpZHggZGlkOnBsYzpreHd6NWN6N282ZzRqbG14aDZkb3lmc22iZXR5cGVzhWdhc2hmYWxsamVhcnRocXVha2VoZXJ1cHRpb25tbmFua2FpLXRyb3VnaGd0c3VuYW1pZmJvdERpZHggZGlkOnBsYzp2d2k3emhmeWFteXZyZzV2Nnljamd6eGlmaXNzdWVyWCD2KDsw4lPQguFDbpUGYiJxXskotm7N1Gjzjo/Uq9mQn2dzdWJqZWN0WCDA2JtjyuBRE0pfTsfWBv9Spf9478pWeKbURYrCzQ3heaJjc2lnWEC0M1UiLwxhs3mvJdVtxhsAsg2sfCyapbt/EcaRpqHMO5TZ4RN+sy4kXVaNB2UdJyJGesRNjXQ4IZ7GBCY6i672ZGJvZHmmZSR0eXBleCdkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qja2V5QXR0ZXN0YXRpb25lb3duZXKiYmlkeCBkaWQ6cGxjOmo3NDZnemtyb2s1c2ozamgzem9kb2s3bmRuYW1leDDkv6HpoLzjgZfjgabjgYTjgarjgYTou6LovInjgrXjg7zjg5Djg7wgaW1wb3J0ZXJlcm9sZXOBZmltcG9ydGZibG9ja3ODo2Rmcm9tdDIwMjYtMTEtMTJUMjE6NDE6MzVaZSR0eXBleCRkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qja2V5VmFsaWRpdHlldW50aWx0MjAyNi0xMS0yNlQyMjo0MTozNVqjZSR0eXBleCVkZXYuamlzYWt1Lm1vc2ltby5hdHRlc3Qjb3JnYW5pemF0aW9uZW9yZ0lkd2V4YW1wbGUub3JnOm1vc2ltby1kZW1vZ29yZ05hbWV4POS/oemgvOOBl+OBpuOBhOOBquOBhOi7oui8ieOCteODvOODkOODvO+8iOWLleS9nOeiuuiqjeeUqO+8iaJlJHR5cGV4IWRldi5qaXNha3UubW9zaW1vLmF0dGVzdC5pbXBvcnRlcmdzb3VyY2VzgqJldHlwZXOXcWF2YWxhbmNoZS13YXJuaW5ncWRlbnNlLWZvZy13YXJuaW5nb2RyeS1haXItd2FybmluZ21mbG9vZC13YXJuaW5nbWZyb3N0LXdhcm5pbmdqaGVhdnktcmFpbnJoZWF2eS1yYWluLXdhcm5pbmdtaWNpbmctd2FybmluZ3FsYW5kc2xpZGUtd2FybmluZ3dsaW5lYXItcmFpbmJhbmQtd2FybmluZ3dsb3ctdGVtcGVyYXR1cmUtd2FybmluZ3RtZWx0aW5nLXNub3ctd2FybmluZ21vdGhlci13YXJuaW5neBxzaWduaWZpY2FudC1zbm93ZmFsbC13YXJuaW5ndnNub3ctYWNjcmV0aW9uLXdhcm5pbmdsc25vdy13YXJuaW5nc3N0b3JtLXN1cmdlLXdhcm5pbmd0dGh1bmRlcnN0b3JtLXdhcm5pbmdvdG9ybmFkby13YXJuaW5nZ3R5cGhvb25sd2F2ZS13YXJuaW5nbHdlYXRoZXItaW5mb2x3aW5kLXdhcm5pbmdmYm90RGlkeCBkaWQ6cGxjOmt4d3o1Y3o3bzZnNGpsbXhoNmRveWZzbaJldHlwZXOFZ2FzaGZhbGxqZWFydGhxdWFrZWhlcnVwdGlvbm1uYW5rYWktdHJvdWdoZ3RzdW5hbWlmYm90RGlkeCBkaWQ6cGxjOnZ3aTd6aGZ5YW15dnJnNXY2eWNqZ3p4aWZpc3N1ZXJYIMDYm2PK4FETSl9Ox9YG/1Kl/3jvylZ4ptRFisLNDeF5Z3N1YmplY3RYIAX1hBbXu0tlHzEhtPEnLc9XKJ/in6VYCa1z63XNYyWm"
+   ],
+   [
+    "mosimo:ext:dev.jisaku.mosimo.priority",
+    "oWVsZXZlbAI"
+   ]
+  ],
+  "pubkey": "05f58416d7bb4b651f3121b4f1272dcf57289fe29fa55809ad73eb75cd6325a6",
+  "id": "e4e29982c9faa238b9e010d197750c54e9c1864c547e669090ba226180077bdf",
+  "sig": "616cabdb0557c584699250cd7ec609afbd7b7d0d8c3e7c3094d5888cc8ab70cbd74d2bbaf625a6084b1f82d9af746d137cf9f933c29d071f4f1675d40e7efd85"
+ }
+}

@@ -1,0 +1,15 @@
+{
+  "roots": [
+    {
+      "pubkey": "fcf986bb79a0527e4b6af50ae8bc32dde9ae81c189b06614a6a1fe3c44bca2ff",
+      "name": "テスト投稿用 root（開発版のみ）",
+      "roles": [
+        "attest",
+        "import"
+      ],
+      "maxDepth": 2,
+      "enabled": true
+    }
+  ],
+  "selected": []
+}

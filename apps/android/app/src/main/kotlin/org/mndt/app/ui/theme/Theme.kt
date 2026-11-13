@@ -30,6 +30,9 @@ object Mosimo {
     val safe = Color(0xFF34C759)
     /** Communication: mesh, BLE, own position, relayed. */
     val info = Color(0xFF4DA3FF)
+    /** Hazard severity Extreme and Minor (official information only); Severe/Moderate use danger/warning. */
+    val extreme = Color(0xFFA855F7)
+    val minor = Color(0xFFFFD60A)
 
     /** JetBrains Mono Bold 18 in Figma: counts, times, heights. */
     val number = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 18.sp)

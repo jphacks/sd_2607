@@ -302,7 +302,8 @@ struct MapScreen: View {
         guard nav.focusToken != vm.handledFocus, let id = nav.mapFocus, map.ready,
               let post = mesh.state.posts.first(where: { $0.id == id }) else { return }
         vm.handledFocus = nav.focusToken
-        if let c = post.coordinate { vm.centered = true; map.moveTo(c, zoom: 15, bottomFraction: 0.5) }
+        // An alert usually covers a prefecture or more, so it opens zoomed out.
+        if let c = post.mapPoint { vm.centered = true; map.moveTo(c, zoom: post.alert ? 8 : 15, bottomFraction: 0.5) }
         vm.stack = [id]; vm.selected = id
     }
 
@@ -361,10 +362,10 @@ private struct StackRow: View {
         let c = post.category
         Button(action: onTap) {
             HStack(spacing: 12) {
-                Image(systemName: Category.symbol(c)).font(.system(size: 13, weight: .bold)).foregroundStyle(Mosimo.bgBase)
-                    .frame(width: 28, height: 28).background(c?.color ?? Mosimo.info, in: Circle())
+                Image(systemName: post.ext.hazard.map(hazardSymbol) ?? Category.symbol(c)).font(.system(size: 13, weight: .bold)).foregroundStyle(Mosimo.bgBase)
+                    .frame(width: 28, height: 28).background(post.hazardColor ?? c?.color ?? Mosimo.info, in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    let first = post.body.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
+                    let first = post.hazardTitle ?? post.body.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
                     Text(first.trimmingCharacters(in: .whitespaces).isEmpty ? c?.label ?? "" : first).font(.bodyMedium)
                         .foregroundStyle(Mosimo.textPrimary).lineLimit(1)
                     Text("\(dateTime(post.createdAt))・\(shortDid(post.did, post.pubkey))").font(.bodySmall).foregroundStyle(Mosimo.textTertiary)
@@ -445,7 +446,7 @@ private struct HereSheet: View {
 private struct Connectivity: View {
     let state: MeshState
     var body: some View {
-        let mesh = "メッシュ接続中 \(state.neighbors.count)台"
+        let mesh = "近くの端末 \(state.neighbors.count)台"
         if state.network && state.onlineActive {
             HStack(spacing: 8) { Pill(text: "オンライン", color: Mosimo.safe); Pill(text: mesh, color: Mosimo.info) }
                 .padding(.horizontal, 16).padding(.vertical, 8)

@@ -20,11 +20,31 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToLong
 import org.mndt.app.ui.post.latLng
+import org.mndt.app.ui.post.officialHazard
+import org.mndt.mesh.HazardKind
 
-/** Posts drawn on the map: those with a position (origin or area), minus annotations whose target is shown (they live in its detail). */
+/** An official hazard notice: shown at every zoom and above ordinary pins. A user's own hazard claim is an ordinary post. */
+val PostView.alert get() = ext.hazard != null && officialHazard
+
+/**
+ * Where a post's pin goes: its own position, else for a hazard the epicentre / volcano / cyclone centre it carries,
+ * else a point inside its area (the cell nearest the middle of a geohash union, or the first circle's centre).
+ */
+fun PostView.mapPoint(): Pair<Double, Double>? = latLng() ?: ext.hazard?.let { h ->
+    when (val k = h.kind) {
+        is HazardKind.Earthquake -> k.hypocenter?.let { c -> c.lat?.let { lat -> c.lon?.let { lat to it } } }
+        is HazardKind.Volcano -> k.volcano?.let { v -> v.lat?.let { lat -> v.lon?.let { lat to it } } }
+        is HazardKind.Cyclone -> k.center
+        else -> null
+    }?.let { (lat, lon) -> lat / 1e6 to lon / 1e6 }
+        ?: geohashAnchor(ext.regions.filterIsInstance<Region.Geohash>().map { it.hash })
+        ?: ext.regions.filterIsInstance<Region.Circle>().firstOrNull()?.let { it.lat / 1e6 to it.lon / 1e6 }
+}
+
+/** Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail). */
 fun mapPosts(posts: List<PostView>): List<PostView> {
     val ids = posts.mapTo(HashSet()) { it.id }
-    return posts.filter { it.latLng() != null && it.ext.annotation?.targetEventId !in ids }
+    return posts.filter { it.mapPoint() != null && it.ext.annotation?.targetEventId !in ids }
 }
 
 class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepository) : ViewModel() {

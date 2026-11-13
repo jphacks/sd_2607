@@ -32,6 +32,10 @@ class PublicDownloadTest {
         assertEquals(p[2]["filter"], f[2])
         assertEquals(32, f[2]["limit"].intValue())
         assertEquals("mosimo.jisaku.dev", f[2]["#t"][0].textValue())
+        // The ingress window bounds the priority candidate set; the fallback asks for the same window.
+        val windowed = json.readTree(PublicDownload.request("w", true, since = 1792368000))
+        assertEquals(1792368000L, windowed[2]["filter"]["since"].longValue())
+        assertEquals(null, p[2]["filter"]["since"])
     }
 
     private fun fetch(mode: String): Pair<PublicDownload.Batch, List<String>> = runBlocking {

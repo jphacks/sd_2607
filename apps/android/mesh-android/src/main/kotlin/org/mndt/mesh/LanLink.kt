@@ -219,6 +219,9 @@ internal class LanLink(private val context: Context) : Link {
 
     override fun send(peer: String, message: ByteArray) = synchronized(lock) { conns[peer] }?.offer(message) ?: false
 
+    /** Services currently announced on the LAN (NSD reports their loss). */
+    override fun nearby(withinMillis: Long): Set<String> = synchronized(lock) { found.keys.toSet() }
+
     override fun queued(peer: String): Int = synchronized(lock) { conns[peer] }?.queued ?: 0
 
     override fun disconnect(peer: String) { synchronized(lock) { conns[peer] }?.close() }

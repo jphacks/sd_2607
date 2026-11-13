@@ -9,6 +9,7 @@
         <meta-data android:name="mosimo.test.peer.node" android:value="${mosimoTestPeerNode}" />
         <meta-data android:name="mosimo.test.author.pubkey" android:value="${mosimoTestAuthor}" />
         <meta-data android:name="mosimo.test.node" android:value="${mosimoTestNode}" />
+        <meta-data android:name="mosimo.test.public.relay" android:value="${mosimoTestPublicRelay}" />
         <activity android:name="org.mndt.app.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

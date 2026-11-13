@@ -44,6 +44,9 @@ public enum PublicIngress {
         public let roles: [String]
         public let trustLevel: Int64?
         public let reason: String
+        /// importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
+        /// (Bot DID, type), and that pair locally selected. Decided from the post alone, however it arrived.
+        public let importAuthorized: Bool
         public var identity: Bool { roles.contains(Attest.roleIdentity) }
         public var publicInformation: Bool { roles.contains(Attest.rolePublicInformation) }
         public var confirmedNow: Bool { state == .verified && expiredNow == false && revocation == .notRevokedAsKnown }
@@ -85,12 +88,87 @@ public enum PublicIngress {
         return Config(roots: roots, selected: Set(selected))
     }
 
+    /// Where a trusted root came from: shipped with the app, shipped only in development builds, or added by the user.
+    public enum RootOrigin: Sendable { case builtin, test, user }
+    public struct RootEntry: Equatable, Sendable {
+        public let root: Attest.Root
+        public let origin: RootOrigin
+        public init(root: Attest.Root, origin: RootOrigin) { self.root = root; self.origin = origin }
+    }
+
+    /// The user's local trust choices: roots switched off (by key, hex) and roots added by hand. Kept apart from the shipped
+    /// config so an app update can change its roots without losing them. Never filled from received data (attest §3).
+    public struct TrustChoices: Equatable, Sendable {
+        public struct Added: Equatable, Sendable {
+            public let pubkey, name: String
+            public init(pubkey: String, name: String) { self.pubkey = pubkey; self.name = name }
+        }
+        public var disabled: Set<String> = []
+        public var added: [Added] = []
+        public init(disabled: Set<String> = [], added: [Added] = []) { self.disabled = disabled; self.added = added }
+
+        public func toJson() -> String {
+            Json.object([("disabled", .array(disabled.sorted().map { .string($0) })),
+                         ("added", .array(added.map { .object([("pubkey", .string($0.pubkey)), ("name", .string($0.name))]) }))]).serialized
+        }
+        /// Anything unreadable gives the empty choices, as on Android.
+        public static func parse(_ json: String?) -> TrustChoices {
+            guard let json, let n = try? Json.parse(json), let d = n["disabled"]?.array, let a = n["added"]?.array else { return TrustChoices() }
+            let disabled = d.compactMap(\.string), added = a.compactMap { e in e["pubkey"]?.string.flatMap { k in e["name"]?.string.map { Added(pubkey: k, name: $0) } } }
+            guard disabled.count == d.count, added.count == a.count else { return TrustChoices() }
+            return TrustChoices(disabled: Set(disabled), added: added)
+        }
+    }
+    /// Roles and depth given to a user-added root: it may certify importers and public-information issuers below it.
+    public static let userRootRoles: Set<String> = [Attest.roleImport, Attest.rolePublicInformation, "attest"]
+    public static let userRootDepth = 2
+
+    private static let rootKeyPattern = try! NSRegularExpression(pattern: "^[0-9a-f]{64}$")
+    /// A root key typed by the user: 64 hex digits (x-only, as in Nostr and the attest chain).
+    public static func rootKey(_ text: String) -> String? {
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard matches(rootKeyPattern, key), let bytes = try? unhex(key, 32), (try? Attest.publicKey(.bytes(bytes))) != nil else { return nil }
+        return key
+    }
+
+    /// The config in force: the shipped [builtin] and, in development builds, [test] roots, plus user-added ones, each
+    /// switched by [choices]. Selections come from the shipped configs. A key listed twice keeps its first origin.
+    public static func effective(_ builtin: Config, _ test: Config?, _ choices: TrustChoices) -> (Config, [RootEntry]) {
+        var entries = [RootEntry]()
+        func add(_ root: Attest.Root, _ origin: RootOrigin) {
+            if !entries.contains(where: { $0.root.pubkeyHex == root.pubkeyHex }) { entries.append(RootEntry(root: root, origin: origin)) }
+        }
+        builtin.roots.forEach { add($0, .builtin) }
+        test?.roots.forEach { add($0, .test) }
+        for a in choices.added {
+            // Same cut as Kotlin's take(64): 64 UTF-16 units, so the name always fits the root's byte limit.
+            guard let key = rootKey(a.pubkey), let bytes = try? unhex(key, 32),
+                  let root = try? Attest.Root(pubkey: bytes, name: String(decoding: Array(a.name.utf16.prefix(64)), as: UTF16.self),
+                                              roles: userRootRoles, maxDepth: userRootDepth) else { continue }
+            add(root, .user)
+        }
+        let list: [RootEntry] = entries.prefix(maxRoots).compactMap { e in
+            let r = e.root
+            return (try? Attest.Root(pubkey: r.pubkey, name: r.name, roles: r.roles, maxDepth: r.maxDepth,
+                                     enabled: r.enabled && !choices.disabled.contains(r.pubkeyHex))).map { RootEntry(root: $0, origin: e.origin) }
+        }
+        return (Config(roots: list.map(\.root), selected: builtin.selected.union(test?.selected ?? [])), list)
+    }
+
     /// priority §2: exactly one valid extension gives the hint; anything else is level 1. Never raised by itself.
     public static func priority(_ event: NostrEvent) -> Int {
         guard let ext = try? AtRepository.extensions(event) else { return 1 }
         let p = ext.filter { $0["$type"] == .text(priorityType) }
         guard p.count == 1, let level = p[0]["level"]?.int, (0...3).contains(level) else { return 1 }
         return Int(level)
+    }
+
+    /// priority §2: the author's hint when the sender is authorized now (a confirmed chain; for an `import` leaf, only a
+    /// locally authorized re-post), otherwise at most 1. Independent of how the event arrived.
+    public static func effectivePriority(_ event: NostrEvent, _ view: ChainView?) -> Int {
+        let hint = priority(event)
+        let authorized = view.map { $0.confirmedNow && ($0.importAuthorized || !$0.roles.contains(Attest.roleImport)) } ?? false
+        return authorized ? hint : min(hint, 1)
     }
 
     /// Parsed BSAF extension of an import candidate: the original post's author DID and the `type:` tag value.
@@ -131,13 +209,16 @@ public enum PublicIngress {
 
     /// Evaluates every chain of [event] against [roots]; the first chain whose leaf belongs to the event decides.
     /// [now] nil means the clock is untrusted: the result is unknownTime, never verified.
-    public static func chainView(_ event: NostrEvent, roots: [Attest.Root], revocations: RevocationStore, now: Instant?, seenAt: Instant) -> ChainView? {
+    public static func chainView(_ event: NostrEvent, roots: [Attest.Root], revocations: RevocationStore, now: Instant?, seenAt: Instant,
+                                 selected: Set<Selection> = []) -> ChainView? {
         let chains: [Attest.Chain]
         do { chains = try Attest.chains(event) } catch {
-            return ChainView(state: .invalid, expiredNow: nil, revocation: nil, name: nil, orgId: nil, roles: [], trustLevel: nil, reason: "malformed chain: \(error)")
+            return ChainView(state: .invalid, expiredNow: nil, revocation: nil, name: nil, orgId: nil, roles: [], trustLevel: nil, reason: "malformed chain: \(error)",
+                             importAuthorized: false)
         }
         if chains.isEmpty { return nil }
         let createdAt = Instant(epochSecond: event.createdAt)
+        let original = (try? bsafOriginal(event)).flatMap { selected.contains(Selection(botDid: $0.botDid, type: $0.type)) ? $0 : nil }
         var best: ChainView?
         for chain in chains {
             let leaf = chain.attestations.last!
@@ -147,8 +228,12 @@ public enum PublicIngress {
                 result = Attest.verifyChain(chain.attestations, roots: roots, createdAt: createdAt, now: now)
             } catch { result = Attest.ChainResult(state: .invalid, reason: "leaf: \(error)") }
             let revocation = result.root != nil ? Attest.revocationState(result, known: revocations.of, createdAt: createdAt, seenAt: seenAt) : nil
+            let imported = original.map { o in
+                result.state == .verified && leaf.roles.contains(Attest.roleImport) && leaf.orgId != nil && leaf.importerSources?[o.botDid]?.contains(o.type) == true
+            } ?? false
             let view = ChainView(state: result.state, expiredNow: result.expiredNow, revocation: revocation, name: result.leaf?.displayName,
-                                 orgId: result.leaf?.orgId, roles: result.leaf?.roles ?? [], trustLevel: result.leaf?.trustLevel, reason: result.reason)
+                                 orgId: result.leaf?.orgId, roles: result.leaf?.roles ?? [], trustLevel: result.leaf?.trustLevel, reason: result.reason,
+                                 importAuthorized: imported)
             if view.confirmedNow { return view }
             if best.map({ view.state.rawValue > $0.state.rawValue }) ?? true { best = view }
         }
@@ -178,7 +263,7 @@ public enum PublicIngress {
                 let result = Attest.verifyChain(chain.attestations, roots: config.roots, createdAt: createdAt, now: now)
                 let revocation = result.root.map { _ in Attest.revocationState(result, known: revocations.of, createdAt: createdAt, seenAt: seen) }
                 view = ChainView(state: result.state, expiredNow: result.expiredNow, revocation: revocation, name: leaf.displayName, orgId: leaf.orgId,
-                                 roles: leaf.roles, trustLevel: leaf.trustLevel, reason: result.reason)
+                                 roles: leaf.roles, trustLevel: leaf.trustLevel, reason: result.reason, importAuthorized: false)
                 if result.state != .verified { failure = result.reason; continue }
                 if result.expiredNow == true { failure = "chain expired now"; continue }
                 if !leaf.roles.contains(Attest.roleImport) { failure = "leaf lacks import role"; continue }

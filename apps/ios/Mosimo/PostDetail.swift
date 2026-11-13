@@ -43,6 +43,7 @@ struct PostDetail: View {
                     }
                     if post.ext.hasChain || post.chain != nil { SenderVerification(chain: post.chain) }
                 }
+                if let hazard = post.ext.hazard { HazardSection(post: post, hazard: hazard) }
                 FlowLayout(spacing: 8) {
                     if let onShowOnMap, post.coordinate != nil {
                         Button("マップで見る", action: onShowOnMap).font(.labelLarge).foregroundStyle(Mosimo.primary)
@@ -85,12 +86,13 @@ struct PostDetail: View {
             Button("削除を依頼", role: .destructive) { mesh.delete(post.id); onBlocked() }
         } message: { Text("削除要求を署名して配送し、この端末では表示・中継をやめます。既に受け取った端末やサーバーから確実に消えるとは限りません。") }
     }
+}
 
-    private func fact(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(label).font(.bodySmall).foregroundStyle(Mosimo.textTertiary).frame(width: 72, alignment: .leading)
-            Text(value).font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
-        }
+/// Label/value row of the detail facts.
+func fact(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .top, spacing: 0) {
+        Text(label).font(.bodySmall).foregroundStyle(Mosimo.textTertiary).frame(width: 72, alignment: .leading)
+        Text(value).font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
     }
 }
 

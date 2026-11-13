@@ -225,11 +225,58 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(x.summary(nowMillis: now, elapsedMillis: 0), y.summary(nowMillis: now, elapsedMillis: 0))
     }
 
+    func testPeerRestartingItsSessionOnTheSameLinkIsFollowedNotDropped() throws {
+        let x = MeshEngine(clockConfidence: .trusted), y = MeshEngine(clockConfidence: .trusted)
+        let link = Loopback() // disconnect() fails the test
+        let ex = Exchange(engine: x, now: { self.now }, elapsed: { 0 }), ey = Exchange(engine: y, now: { self.now }, elapsed: { 0 })
+        link.ends = [("x", ex), ("y", ey)]
+        ex.connected(link, "x", node: nil); ey.connected(link, "y", node: nil)
+        link.run()
+        // A relay node resets its session (new nonce) on the still-open link, e.g. after a subscription change.
+        let post = try author().createPost("再開後の投稿", nowMillis: now).event
+        try y.originate(post, nowMillis: now, elapsedMillis: 0)
+        ey.disconnected(link, "y"); ey.connected(link, "y", node: nil)
+        link.run()
+        XCTAssertEqual(x.entries().map(\.event.id), [post.id])
+    }
+
     private func resign(_ a: Author, _ e: NostrEvent, _ edit: (inout [[String]]) -> Void) throws -> NostrEvent {
         var tags = e.tags; edit(&tags)
         let digest = sha256(nostrSigningBytes(e.pubkey, e.createdAt, e.kind, tags, e.content))
         return NostrEvent(id: hex(digest), pubkey: e.pubkey, createdAt: e.createdAt, kind: e.kind, tags: tags, content: e.content,
                           sig: hex(try Secp.signSchnorr(digest, a.keys.nostr)))
+    }
+
+    func testRateLimitAppliesOnLinksOnly() throws {
+        // Local and relay-fetched events (originate) are bounded by their own fetch limits; the brake is per link peer.
+        let a = try author(), source = MeshEngine(), b = MeshEngine()
+        let bundles = try (0...MeshPolicy.perAuthorPerMinute).map { try source.originate(try a.createPost("message \($0)", nowMillis: now).event, nowMillis: now, elapsedMillis: 0).bytes }
+        for bytes in bundles.dropLast() { _ = try b.accept(bytes, nowMillis: now, elapsedMillis: 0) }
+        XCTAssertThrowsError(try b.accept(bundles.last!, nowMillis: now, elapsedMillis: 0)) { XCTAssertTrue("\($0)".contains("rate")) }
+    }
+
+    func testEffectivePriorityOrdersSendingAndEviction() throws {
+        let a = try author(), engine = MeshEngine()
+        var urgent = Set<String>()
+        engine.priority = { urgent.contains($0.id) ? 3 : $0.content.hasPrefix("bulk") ? 0 : 1 }
+        let older = try engine.originate(try a.createPost("normal old", nowMillis: now).event, nowMillis: now, elapsedMillis: 0)
+        let highEvent = try a.createPost("urgent", nowMillis: now).event
+        urgent.insert(highEvent.id)
+        let high = try engine.originate(highEvent, nowMillis: now, elapsedMillis: 0)
+        let newer = try engine.originate(try a.createPost("normal new", nowMillis: now + 1000).event, nowMillis: now + 1000, elapsedMillis: 0)
+        XCTAssertEqual(engine.inventory(nowMillis: now + 1000, elapsedMillis: 0), [high.event.id, newer.event.id, older.event.id])
+        // A peer's WANT queue: higher priority first, IDs no longer held last.
+        XCTAssertEqual(engine.sendOrder([older.event.id, "gone", high.event.id]) { $0 }, [high.event.id, older.event.id, "gone"])
+
+        // Full of forwardable entries: the lowest priority (oldest among equals) goes; a lower newcomer is refused.
+        for i in 0..<(MeshPolicy.maxEntries - 3) { try engine.originate(try a.createPost("normal \(i)", nowMillis: now).event, nowMillis: now, elapsedMillis: 0) }
+        XCTAssertThrowsError(try engine.originate(try a.createPost("bulk late", nowMillis: now).event, nowMillis: now, elapsedMillis: 0)) { XCTAssertTrue("\($0)".contains("capacity")) }
+        let late = try a.createPost("urgent late", nowMillis: now).event
+        urgent.insert(late.id)
+        try engine.originate(late, nowMillis: now, elapsedMillis: 0)
+        XCTAssertEqual(engine.entries().count, MeshPolicy.maxEntries)
+        XCTAssertFalse(engine.entries().contains { $0.event.id == older.event.id })
+        XCTAssertTrue(engine.entries().contains { $0.event.id == high.event.id })
     }
 }
 

@@ -26,9 +26,12 @@ final class FixtureTests: XCTestCase {
         XCTAssertNotNil(try MeshEngine().accept(bytes, nowMillis: 0, elapsedMillis: 0))
     }
 
-    /// The shipped trust asset is still in the pre-overhaul shape; like Android, it must fail closed (ingress disabled).
-    func testShippedTrustAssetFailsClosed() throws {
+    /// The shipped trust asset holds only the production root and its Bot/type selections.
+    func testShippedTrustAssetHasProductionRoot() throws {
         let json = try fixture("apps/android/mesh-android/src/main/assets/mosimo-public-trust.json").serialized
-        XCTAssertThrowsError(try PublicIngress.config(json))
+        let config = try PublicIngress.config(json)
+        XCTAssertEqual(config.roots.filter(\.enabled).map(\.pubkeyHex), ["3b92115866d54bb1799529ac39312bcd60bbfc1f5235b5785f4f7db748c62510"])
+        XCTAssertEqual(config.roots.count, 1)
+        XCTAssertEqual(config.selected.count, 28)
     }
 }

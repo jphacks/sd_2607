@@ -44,6 +44,13 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
     var admit: (NostrEvent) -> Boolean = { true }
     /** Held but no longer offered or forwarded: author-deleted (core §11) or revoked (attest.chain §4.2) events. */
     var suppressed: (NostrEvent) -> Boolean = { false }
+    /**
+     * priority §2: the effective priority (0..3) of an event, the same whichever link or relay it came from. It orders
+     * sending and decides eviction and whether a full store takes a new event at all (priority §2.1, mesh §11).
+     */
+    var priority: (NostrEvent) -> Int = { 1 }
+    /** Higher effective priority first, then newer (mesh §9). */
+    private val byPriority = compareByDescending<NostrEvent> { priority(it) }.thenByDescending { it.createdAt }.thenBy { it.id }
 
     private val rates = mutableMapOf<String, MutableList<Long>>()
     private val sendRates = mutableMapOf<String, MutableList<Long>>()
@@ -67,7 +74,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
             .addBlock(hopCountBlockData(MeshPolicy.MAX_HOPS, 0).crcType(CRCType.CRC32))
             .addBlock(ageBlock(0).crcType(CRCType.CRC32))
             .addBlock(payloadBlock(EventCodec.encode(event)).crcType(CRCType.CRC32))
-        return accept(bundle.cborMarshal(), nowMillis, elapsedMillis)
+        return insert(bundle.cborMarshal(), nowMillis, elapsedMillis, applyRateLimit = false)
             ?: throw IllegalArgumentException("already stored")
     }
 
@@ -106,8 +113,18 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         return entry.copy(bytes = bytes, receivedAtMillis = nowMillis, receivedElapsedMillis = elapsedMillis)
     }
 
+    /** Forwardable event IDs in send order (mesh §9: effective priority first). */
     fun inventory(nowMillis: Long, elapsedMillis: Long): List<String> =
-        stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { it.event.id }
+        stored.values.filter { eligible(it, nowMillis, elapsedMillis) }.map { it.event }.sortedWith(byPriority).map { it.id }
+
+    /** Orders requested IDs for sending; unknown IDs go last and keep their relative order. */
+    fun <T> sendOrder(items: List<T>, id: (T) -> String): List<T> {
+        val events = items.associateWith { stored[id(it)]?.event }
+        return items.sortedWith { a, b ->
+            val ea = events[a]; val eb = events[b]
+            if (ea == null || eb == null) (ea == null).compareTo(eb == null) else byPriority.compare(ea, eb)
+        }
+    }
 
     /** Mesh §5.5 reconciliation set: forwardable events as `(created_at, id)` items. */
     fun candidates(nowMillis: Long, elapsedMillis: Long): List<Negentropy.Item> =
@@ -177,7 +194,7 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         if (stored.containsKey(event.id)) return null
         if (!admit(event)) throw BlockedAuthor(event.id)
         val victim = if (stored.size >= MeshPolicy.MAX_ENTRIES)
-            requireNotNull(victim(nowMillis, elapsedMillis)) { "storage capacity reached: all entries protected" }
+            requireNotNull(victim(event, nowMillis, elapsedMillis)) { "storage capacity reached: all entries protected or of higher priority" }
         else null
         if (applyRateLimit) {
             rates.values.forEach { samples -> samples.removeAll { elapsedMillis - it >= 60_000 || elapsedMillis < it } }
@@ -193,11 +210,17 @@ class MeshEngine(var clockConfidence: ClockConfidence = ClockConfidence.UNKNOWN)
         return entry
     }
 
+    /**
+     * mesh §11: non-forwardable and relay-accepted → non-forwardable → lowest effective priority (oldest received among
+     * equals). With only forwardable entries left, an incoming event below all of them is refused instead.
+     */
     // ponytail: no per-author fairness; the per-author accept rate is the only flood brake.
-    private fun victim(nowMillis: Long, elapsedMillis: Long): String? {
+    private fun victim(incoming: NostrEvent, nowMillis: Long, elapsedMillis: Long): String? {
         val candidates = stored.values.filter { canEvict(it) }
         val dead = candidates.filterNot { eligible(it, nowMillis, elapsedMillis) }
-        return (dead.firstOrNull { relayed(it.event.id) } ?: dead.firstOrNull() ?: candidates.firstOrNull())?.event?.id
+        (dead.firstOrNull { relayed(it.event.id) } ?: dead.firstOrNull())?.let { return it.event.id }
+        val lowest = candidates.minByOrNull { priority(it.event) } ?: return null
+        return lowest.event.id.takeIf { priority(lowest.event) <= priority(incoming) }
     }
 
     private fun eligible(entry: StoredBundle, nowMillis: Long, elapsedMillis: Long): Boolean {

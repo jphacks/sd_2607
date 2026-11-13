@@ -66,18 +66,14 @@ struct MeshState: Equatable {
     var forwardedTo: [String: Int] = [:]
     /// Trusted roots from the local config, held revocations, and the last revocation-list check per issuer domain.
     var roots: [Attest.Root] = []
+    /// Every root in the local config with where it came from (shipped, development-only test, user-added), switched on or off.
+    var trustRoots: [PublicIngress.RootEntry] = []
     var revocationCount = 0
     var revocationChecked: [String: Int64] = [:]
     /// Unverified peer clock hints, newest first (mesh.time).
     var clockSkews: [ClockSkew] = []
     /// Posts reported from this device in this run.
     var reported: Set<String> = []
-}
-
-/// A locally trusted root key from the trust config.
-struct TrustRoot: Identifiable {
-    let name: String, pubkey: String, roles: [String], enabled: Bool
-    var id: String { pubkey }
 }
 
 /// One Bot DID selected for ingress, with the BSAF types selected for it.
