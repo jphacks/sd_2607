@@ -45,6 +45,10 @@ run = [
 description = "Regenerate the WiX/NSIS installer bitmaps in src-tauri/icons/installer (Windows fonts required)"
 run = "uv run --with pillow python src-tauri/icons/installer/generate.py ../hp/public/images/mosimo-bosai-icon.png src-tauri/icons/installer"
 
+[tasks.installer-images-macos]
+description = "Regenerate the DMG background and icon.icns (macOS required)"
+run = "uv run --with pillow python src-tauri/icons/installer/generate_macos.py ../hp/public/images/mosimo-bosai-icon.png src-tauri/icons/installer src-tauri/icons/icon.icns"
+
 [tasks.publish-hp]
 description = "Copy the built installers into ../hp/public/downloads/simulator and update the download manifest (run after build)"
 run = "uv run python scripts/publish_hp.py"

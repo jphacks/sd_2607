@@ -79,6 +79,7 @@ mise run dev                 # アプリを起動（初回は npm ci も行う�
 mise run build               # 配布用にビルド
 mise run publish-hp          # ビルドしたインストーラーを ../hp のダウンロードページに置く
 mise run installer-images    # インストーラーの画像を作り直す（Windows のみ）
+mise run installer-images-macos # DMG の背景と mac 用アイコンを作り直す（mac のみ）
 mise run test                # シミュレーションのテストと型チェック
 mise run sim -- noto 0 0.5 0.9 --seeds 3              # 画面なしで計算し、導入率ごとの平均を出す
 mise run sim -- noto 0 0.4 --carnav-sweep --adoption 0 # カーナビの普及率だけを変える
