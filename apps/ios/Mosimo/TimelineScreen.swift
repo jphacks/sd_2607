@@ -101,6 +101,7 @@ private struct PostCard: View {
                 Spacer()
                 if let c = post.category { CategoryBadge(category: c) }
             }
+            if let hazard = post.ext.hazard { HazardSummary(hazard: hazard) }
             Text(title).font(.titleMedium).foregroundStyle(Mosimo.textPrimary)
             if !rest.isEmpty { Text(rest).font(.bodyMedium).foregroundStyle(Mosimo.textSecondary).lineLimit(3) }
             HStack(spacing: 0) {

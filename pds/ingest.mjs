@@ -3,7 +3,7 @@ import { sqliteNow } from './store.mjs';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { decodePost, verifyCommit, reconstruct, isBsafImport, isPost, REPORT_KIND, validateReport } from './repository.mjs';
+import { decodePost, decodeDeletion, verifyCommit, reconstruct, isBsafImport, isPost, isDeletionCommit, REPORT_KIND, validateReport } from './repository.mjs';
 import { CONTROL_KIND, controlType, decodeRevocationEvent } from './attest.mjs';
 import { commitFrame, encodeFrame, futureRevisionDelay } from './sync.mts';
 
@@ -36,11 +36,14 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
     return store.transaction(async tx => {
       // Serializing insertion until COMMIT makes arrival a gap-free multi-node poll cursor.
       if (!sqlite) await tx.query('SELECT pg_advisory_xact_lock(2607, 1)');
-      if (event.kind !== 5 && (await tx.query('SELECT 1 FROM deletions WHERE event_id=$1 AND pubkey=$2', [event.id, event.pubkey])).rowCount) {
-        return { accepted: false, message: 'blocked: deleted by author' };
-      }
+      // delete §3: an author's device still exports a post deleted before it reached us, because the post-deletion
+      // commit can only be verified on top of the commit that added it. A deleted post of kind 1 is therefore stored
+      // for repository verification but stays hidden (`visible`); other deleted kinds are refused.
+      const deleted = event.kind !== 5
+        && (await tx.query('SELECT 1 FROM deletions WHERE event_id=$1 AND pubkey=$2', [event.id, event.pubkey])).rowCount;
+      if (deleted && !isPost(event)) return { accepted: false, message: 'blocked: deleted by author' };
       if ((await tx.query('SELECT 1 FROM events WHERE id=$1', [event.id])).rowCount) {
-        return { accepted: true, duplicate: true, message: 'duplicate: already stored' };
+        return { accepted: true, duplicate: true, message: deleted ? 'duplicate: deleted by author' : 'duplicate: already stored' };
       }
       if (Number((await tx.query('SELECT count(*) AS count FROM events')).rows[0].count) >= config.maxEvents) {
         return { accepted: false, message: 'restricted: storage capacity reached' };
@@ -54,6 +57,8 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
               ON CONFLICT(event_id,pubkey) DO NOTHING`, [tag[1], event.pubkey, event.created_at]);
           }
         }
+        // delete §4: the post-deletion commit is applied to the repository like a post's commit.
+        if (isDeletionCommit(event)) await tx.query('INSERT INTO jobs(event_id) VALUES($1)', [event.id]);
       } else if (revocation) {
         await tx.query(`INSERT INTO revocations(id,subject,issuer,effective_at,seen_at,revocation) VALUES($1,$2,$3,$4,$5,$6)
           ON CONFLICT(id) DO NOTHING`, [revocation.id, revocation.subject, revocation.issuer, Math.floor(revocation.effectiveAt),
@@ -66,6 +71,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
           await tx.query('INSERT INTO outbox(peer,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [peer.url, event.id]);
         }
       }
+      if (deleted) return { accepted: true, message: 'stored: deleted by author; kept hidden for repository verification' };
       return { accepted: true, message: revocation ? 'stored: revocation notice' : event.kind === REPORT_KIND ? 'stored: report'
         : isPost(event) && isBsafImport(event) ? 'stored: Nostr-only BSAF import' : 'stored: repository verification is asynchronous' };
     });
@@ -82,7 +88,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
         return true;
       }
       let decoded;
-      try { decoded = await decodePost(job.event); }
+      try { decoded = await (job.event.kind === 5 ? decodeDeletion(job.event) : decodePost(job.event)); }
       catch (error) {
         await tx.query("UPDATE jobs SET status='invalid',error=$2 WHERE event_id=$1", [job.event_id, error.message]);
         return true;
@@ -127,9 +133,11 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
       const blocks = new BlockMap();
       for (const block of rebuilt.blocks) blocks.set(block.cid, block.bytes);
       if (previous) {
+        // Carry over the records still in the tree; a deleted record leaves the repository CAR.
         const old = await readCar(previous.car);
-        for (const entry of previous.entries) {
-          const cid = CID.parse(entry.value);
+        for (const entry of rebuilt.entries) {
+          const cid = entry.value;
+          if (blocks.has(cid)) continue;
           const bytes = old.blocks.get(cid);
           if (!bytes) throw new Error('Stored base CAR is incomplete');
           blocks.set(cid, bytes);
@@ -172,7 +180,8 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
           const bytes = await commitFrame({ commitCid, commitBytes: decoded.commitBytes,
             data: commit.data, blocks, repo: commit.did, rev: commit.rev,
             since: head?.rev ?? null, prevData: previous ? cbor.decode(previous.commit_bytes).data : undefined,
-            ops: [{ action: 'create', path: decoded.path, cid: decoded.recordCid }],
+            ops: [decoded.op === 'delete' ? { action: 'delete', path: decoded.path, cid: null, prev: rebuilt.removed }
+              : { action: 'create', path: decoded.path, cid: decoded.recordCid }],
             time, seq: Number(seq), maxBufferedBytes: config.maxBufferedBytes });
           await tx.query('INSERT INTO streams(group_id,seq,frame) VALUES($1,$2,$3)', [group.id, seq.toString(), bytes]);
           await tx.query('UPDATE group_sequences SET seq=$2 WHERE group_id=$1', [group.id, seq.toString()]);

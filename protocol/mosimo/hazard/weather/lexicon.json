@@ -1,0 +1,23 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard.weather",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Meteorological and hydrological warning facts of a hazard notice. Used together with dev.jisaku.mosimo.hazard. The warning class is a scale of the common extension, not a phenomenon.",
+      "required": ["phenomena"],
+      "properties": {
+        "phenomena": {
+          "type": "array",
+          "description": "Phenomena the notice concerns. Empty when it names none. Receivers ignore unknown values.",
+          "maxLength": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "knownValues": ["rain", "flood", "landslide", "storm-surge", "wave", "wind", "tornado", "thunderstorm", "snow", "snowmelt", "avalanche", "fog", "dry-air", "cold", "heat", "frost", "icing", "snow-accretion"]
+          }
+        }
+      }
+    }
+  }
+}

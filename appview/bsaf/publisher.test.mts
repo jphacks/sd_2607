@@ -58,6 +58,9 @@ test('receiver exports carry only public root settings, the selection and the re
   assert.deepEqual(Object.keys(files.pds.publicInformation).sort(), ['revocationDomains', 'roots', 'selection']);
   assert.deepEqual(files.pds.publicInformation.revocationDomains, ['pds.oriom.dev']);
   assert.equal(files.android.selected.length, 28); assert.equal(files.pds.publicInformation.selection.length, 2);
+  // Exactly the shape the apps' PublicIngress.config accepts.
+  assert.deepEqual(Object.keys(files.android).sort(), ['roots', 'selected']);
+  assert.deepEqual(Object.keys(files.android.roots[0]).sort(), ['enabled', 'maxDepth', 'name', 'pubkey', 'roles']);
   assert.ok(!JSON.stringify(files).includes('must-never-appear') && !JSON.stringify(files).includes('secretKey'));
   assert.throws(() => receiverConfigurations(root, 'pds.oriom.dev', [{ botDid, types: ['b', 'a'] }]));
 });
@@ -138,10 +141,19 @@ test('direct collector DB conversion archives original/provenance, durable dedup
   assert.equal(row.deadline, timestamp(now + 570));
   assert.equal(event.pubkey, f.importer.nostrPubkey);
   assert.deepEqual(event.tags.slice(0, 2), [['t', 'mosimo.jisaku.dev'], ['mosimo:v', '1']]);
-  assert.deepEqual(event.tags.slice(6).map((tag: string[]) => tag[0]), ['mosimo:ext:dev.jisaku.mosimo.public.bsaf', 'mosimo:ext:dev.jisaku.mosimo.attest.chain', 'mosimo:ext:dev.jisaku.mosimo.priority']);
+  assert.deepEqual(event.tags.slice(6).map((tag: string[]) => tag[0]), ['mosimo:ext:dev.jisaku.mosimo.public.bsaf',
+    'mosimo:ext:dev.jisaku.mosimo.hazard', 'mosimo:ext:dev.jisaku.mosimo.hazard.earthquake', 'mosimo:ext:dev.jisaku.mosimo.public#source',
+    'mosimo:ext:dev.jisaku.mosimo.attest.chain', 'mosimo:ext:dev.jisaku.mosimo.priority']);
   const decoded = await decodePost(event);
   assert.equal(decoded.commit.did, f.importer.did); assert.equal(decoded.record.exp, row.deadline);
   assert.deepEqual(decoded.record.ext[0].original, { uri: row.uri, cid: row.cid, createdAt: source.record.createdAt });
+  // public.bsaf.hazard: the JMA Bot's earthquake/5+ becomes the common meaning; its first-region target gives no area.
+  assert.deepEqual(decoded.record.ext[1], { $type: 'dev.jisaku.mosimo.hazard', status: 'Actual', category: ['Geo'], severity: 'Severe',
+    urgency: 'Past', certainty: 'Observed', onset: source.record.tags[3].slice(5), event: { text: '地震', lang: 'ja' },
+    scales: [{ scheme: 'jp.jma.shindo', value: '5+', basis: 'observed' }] });
+  assert.equal(decoded.record.ext.some((e: any) => e.$type === 'dev.jisaku.mosimo.geo#area'), false);
+  assert.deepEqual(decoded.record.ext[3].conversion, { rule: 'dev.jisaku.mosimo.public.bsaf.hazard', revision: '1' });
+  assert.equal(decoded.record.ext[3].converter, f.importer.did);
   assert.equal((await f.authorize(event)).authorized, true);
   const retry = await stageNext(f.store, f.config, f.credentials, f.roots, now + 20);
   assert.equal(retry!.event_json, row.event_json); assert.equal(retry!.deadline, row.deadline);
@@ -176,9 +188,10 @@ test('a signed pending event with appended text is held unchanged and never sent
   assert.equal(sent, 0);
   const saved = f.store.db.prepare('SELECT * FROM mosimo_bsaf_publications WHERE seq=?').get(row.seq!)!;
   assert.equal(saved.event_json, JSON.stringify(altered));
-  assert.equal(saved.status, 'pending');
+  assert.equal(saved.status, 'held');
   assert.equal(saved.hold_reason, 'Original text mismatch; operator review required; signed EVENT retained');
-  assert.deepEqual(await stageNext(f.store, f.config, f.credentials, f.roots, now), saved);
+  // Held for review, it no longer blocks the queue.
+  assert.equal(await stageNext(f.store, f.config, f.credentials, f.roots, now), null);
 });
 
 test('OK failure/loss retries exact EVENT; accepted dedup persists; CID changes are distinct', async t => {
@@ -206,7 +219,7 @@ test('unsupported original semantics, CID/envelope mismatch, old/future source a
   await f.ingest({ reply: { root: {}, parent: {} } });
   await f.ingest({ labels: { values: [] } });
   await f.ingest({ createdAt: timestamp(now - 601) });
-  await f.ingest({ createdAt: timestamp(now + 1) });
+  await f.ingest({ createdAt: timestamp(now + 301) });
   await f.ingest({ facets: [{ index: { byteStart: 0, byteEnd: 4 }, features: [{ $type: 'app.bsky.richtext.facet#link', uri: 'https://not-visible.invalid' }] }] });
   await f.ingest({}, 'cid-mismatch');
   f.store.db.prepare(`UPDATE happyview_records SET record=json_set(record,'$.text','tampered') WHERE rkey='cid-mismatch'`).run();
@@ -231,9 +244,33 @@ test('failed staging rolls repo/outbox back; unknown roots and expired retries n
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_publications').get()!.n, 0);
   const row = await stageNext(f.store, f.config, f.credentials, f.roots, now); assert.ok(row);
   let sends = 0;
-  await assert.rejects(pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async () => { sends++; return true; }), /deadline/);
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async () => { sends++; return true; }), false);
   assert.equal(sends, 0);
-  assert.equal(f.store.db.prepare('SELECT event_json FROM mosimo_bsaf_publications').get()!.event_json, row.event_json);
+  const held = f.store.db.prepare('SELECT * FROM mosimo_bsaf_publications').get()!;
+  assert.equal(held.event_json, row.event_json);
+  assert.equal(held.status, 'held');
+  assert.match(String(held.hold_reason), /deadline/);
+});
+
+test('one unsendable row is held and the records behind it still publish', async t => {
+  const f = await fixture(t); await f.ingest({}, 'first');
+  const first = await stageNext(f.store, f.config, f.credentials, f.roots, now); assert.ok(first);
+  // The relay keeps refusing until the first row's deadline passes; a later record must not wait behind it forever.
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now, new AbortController().signal, async () => false), false);
+  await f.ingest({ createdAt: timestamp(now + 560) }, 'second');
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async () => true), false);
+  assert.equal(f.store.db.prepare('SELECT status FROM mosimo_bsaf_publications WHERE uri=?').get(first.uri)!.status, 'held');
+  const sent: any[] = [];
+  assert.equal(await pushOnce(f.store, f.config, f.credentials, f.roots, now + 570, new AbortController().signal, async (_u, e) => { sent.push(e); return true; }), true);
+  assert.equal(sent.length, 1);
+  assert.notEqual(sent[0].id, JSON.parse(String(first.event_json)).id);
+});
+
+test('a source a few seconds ahead of our clock waits instead of being held', async t => {
+  const f = await fixture(t); await f.ingest({ createdAt: timestamp(now + 5) });
+  assert.equal(await stageNext(f.store, f.config, f.credentials, f.roots, now), null);
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM mosimo_bsaf_publications').get()!.n, 0);
+  assert.ok(await stageNext(f.store, f.config, f.credentials, f.roots, now + 6));
 });
 
 test('revocation lists from the issuer domain are fetched, persisted across restarts and stop publication; failures keep state', async t => {
@@ -277,8 +314,9 @@ test('revocation lists from the issuer domain are fetched, persisted across rest
 });
 
 const priorityCases: [string, string, number][] = [
-  ['tsunami', 'severe-warning', 3], ['tsunami', 'special-warning', 3], ['tsunami', 'warning', 2], ['tsunami', 'advisory', 2],
-  ['nankai-trough', 'warning', 3], ['nankai-trough', 'advisory', 2], ['eruption', 'warning', 3], ['eruption', 'advisory', 2],
+  ['tsunami', 'special-warning', 3], ['tsunami', 'warning', 2], ['tsunami', 'advisory', 2], ['tsunami', 'severe-warning', 1],
+  ['nankai-trough', 'special-warning', 3], ['nankai-trough', 'warning', 3], ['nankai-trough', 'advisory', 2],
+  ['eruption', 'special-warning', 3], ['eruption', 'warning', 3], ['eruption', 'advisory', 2],
   ['earthquake', '5-', 2], ['earthquake', '5+', 2], ['earthquake', '6-', 3], ['earthquake', '6+', 3], ['earthquake', '7', 3],
   ['earthquake', '4', 1], ['earthquake', '05+', 1], ['earthquake', '5+ ', 1], ['tsunami', 'WARNING', 1],
   ['tsunami', 'future-warning', 1], ['nankai-trough', 'unknown', 1], ['ashfall', 'warning', 1], ['ashfall', 'severe-warning', 1],

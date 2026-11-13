@@ -27,6 +27,8 @@ struct BundleInfo {
     uint64_t age = 0, lifetime = 0;
     uint32_t hop = 0, hopLimit = 0;
     uint16_t kind = 0;
+    // priority §2 hint: the `level` of exactly one valid priority extension, else 1.
+    uint8_t priorityHint = 1;
 };
 
 // Mesh §2: BPv7 Bundle with destination dtn://mosimo.jisaku.dev/~post whose

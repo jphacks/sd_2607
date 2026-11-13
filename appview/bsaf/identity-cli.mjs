@@ -62,7 +62,10 @@ export function receiverConfigurations(root, domain, selection) {
   if (!/^[0-9a-f]{64,66}$/.test(publicRoot.pubkey) || !Array.isArray(publicRoot.roles)) throw new Error('Invalid root settings');
   return {
     pds: { publicInformation: { roots: [publicRoot], selection, revocationDomains: [domain] } },
-    android: { roots: [publicRoot], selected: selection.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))), revocationDomains: [domain] },
+    // The apps' trust asset (PublicIngress.config on Android and iOS) takes exactly {roots, selected}, each root with a name;
+    // issuer domains for revocation lists come from the chains themselves.
+    android: { roots: [{ pubkey: publicRoot.pubkey, name: publicRoot.name ?? 'Mosimo BSAF trust root', roles: publicRoot.roles,
+      maxDepth: publicRoot.maxDepth, enabled: publicRoot.enabled }], selected: selection.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))) },
   };
 }
 

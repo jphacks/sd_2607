@@ -65,7 +65,9 @@ data class MeshState(
     /** Every stored mesh event of any kind (for apps built on other kinds), and how many peers took each one from us this run. */
     val events: List<NostrEvent> = emptyList(), val forwardedTo: Map<String, Int> = emptyMap(),
     /** Trusted roots from the local config, held revocations, and the last revocation-list check per issuer domain. */
-    val roots: List<Attest.Root> = emptyList(), val revocationCount: Int = 0, val revocationChecked: Map<String, Long> = emptyMap(),
+    val roots: List<Attest.Root> = emptyList(),
+    /** Every configured root with its origin; disabled ones included so the user can switch them back on. */
+    val trustRoots: List<PublicIngress.RootEntry> = emptyList(), val revocationCount: Int = 0, val revocationChecked: Map<String, Long> = emptyMap(),
     /** Unverified peer clock hints, newest first (mesh.time). */
     val clockSkews: List<ClockSkew> = emptyList(),
     /** Posts reported from this device in this run. */
@@ -84,9 +86,12 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var disk: DiskState? = null
     private var dirty = false
     private var publicConfig = PublicIngress.Config()
+    private var trustEntries = emptyList<PublicIngress.RootEntry>()
     private var publicGeneration = 0L
     private var publicBusy = false
     private var publicNext = 0L
+    /** A relay-subscription event arrived since the last public request; the next allowed tick re-runs ingress. */
+    private var publicStale = false
     private var publicJob: Job? = null
     private var publicEvents: List<NostrEvent> = emptyList()
     private val engine = MeshEngine()
@@ -97,6 +102,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PublicIngress.ChainView?>) = size > 1024
     }
     private var chainGeneration = 0L
+    /** Effective priority per event ID, valid while its generation equals [chainGeneration]. Guarded by chainCache. */
+    private val priorityCache = HashMap<String, Pair<Long, Int>>()
     private var revocationBusy = false
     private var revocationNext = 0L
     private val clockSkews = linkedMapOf<String, ClockSkew>()
@@ -115,6 +122,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var lastSync = 0L
     private val random = SecureRandom()
     private val metadata = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
+    /** Public-information relay; a debug build may point it at a local test relay (`mosimoTestPublicRelay`). */
+    private val publicRelay = metadata?.getString("mosimo.test.public.relay")?.takeIf { it.isNotEmpty() } ?: DiskState.PDS_RELAY
     private val node = meshNode(metadata?.getString("mosimo.test.node")) {
         ByteArray(8).also(random::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
     }
@@ -127,7 +136,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private val gatt = GattLink(context, allowedPeerNode)
     // BLE and LAN run only in the app that holds this phone's LocalLink port; other Mosimo apps on the phone relay through it.
-    private val links: List<Link> = listOf(LocalLink(listOf(gatt, LanLink(context))))
+    private val lan = LanLink(context)
+    private val links: List<Link> = listOf(LocalLink(listOf(gatt, lan)))
     private val blocked get() = disk?.blockedPubkeys.orEmpty()
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
@@ -183,6 +193,13 @@ class MeshCoordinator private constructor(private val context: Context) {
         // Stopped targets (deleted by their author, or reported enough) are refused too (delete §3, report §2).
         engine.admit = { it.pubkey !in blocked && !moderation.stopped(it) }
         engine.suppressed = { moderation.stopped(it) || chainOf(it)?.revocation == Attest.RevocationState.REVOKED }
+        // Sorting asks for this often; chain checks are memoized per event until the chain cache is invalidated.
+        engine.priority = { e ->
+            synchronized(chainCache) {
+                priorityCache[e.id]?.takeIf { it.first == chainGeneration }?.second
+                    ?: PublicIngress.effectivePriority(e, chainOf(e)).also { priorityCache[e.id] = chainGeneration to it; if (priorityCache.size > 1024) priorityCache.clear() }
+            }
+        }
         // PDS OK confirms event storage, not atproto publication; keep our base chain until then.
         // Kinds the PDS never accepts would otherwise be pinned forever and fill the store.
         engine.canEvict = { entry ->
@@ -299,7 +316,7 @@ class MeshCoordinator private constructor(private val context: Context) {
     private fun chainOf(event: NostrEvent): PublicIngress.ChainView? = synchronized(chainCache) {
         chainCache.getOrPut(event.id) {
             val clock = PublicDownload.ingressClock(engine.clockConfidence, now())
-            PublicIngress.chainView(event, publicConfig.roots, revocations, clock, seenAt[event.id] ?: Instant.ofEpochMilli(now()))
+            PublicIngress.chainView(event, publicConfig.roots, revocations, clock, seenAt[event.id] ?: Instant.ofEpochMilli(now()), publicConfig.selected)
         }
     }
     /**
@@ -398,8 +415,16 @@ class MeshCoordinator private constructor(private val context: Context) {
                     PlcCurrentState.UNKNOWN -> if (registrationBusy) "現在状態確認中" else "現在状態不明（オフライン・未設定・未確認）"
                 } + " / PDS 受入・公開未確認",
             // HELLO-completed peers only, one entry per peer: the same phone may be reachable over BLE and LAN at once.
-            neighbors = exchange.sessions.values.filter { it.peer != null }.map { it.label to it.link.name }
-                .groupBy({ it.first }, { it.second }).map { (label, links) -> Neighbor(label, label, "同期中（${links.joinToString("・")}）") },
+            // BLE links are released after each exchange (mesh §3.4), so "nearby" is what the radios saw recently plus
+            // the peers in session now; one entry per node even when it is reachable over BLE and LAN at once.
+            neighbors = run {
+                val syncing = exchange.sessions.values.filter { it.peer != null }.map { it.label to it.link.name }
+                    .groupBy({ it.first }, { it.second })
+                val seen = (listOf(gatt, lan).flatMap { link -> link.nearby(NEARBY_MS).map { it to link.name } })
+                    .groupBy({ it.first }, { it.second })
+                syncing.map { (label, via) -> Neighbor(label, label, "同期中（${via.joinToString("・")}）") } +
+                    (seen - syncing.keys).map { (node, via) -> Neighbor(node, node, "近く（${via.distinct().joinToString("・")}）") }
+            },
             // Other apps' kinds (DMs, profiles) are relayed but are not posts.
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
@@ -416,7 +441,7 @@ class MeshCoordinator private constructor(private val context: Context) {
             publicBusy = publicBusy, blockedPubkeys = blocked, hideExpired = hideExpired,
             events = if (fatal) emptyList() else engine.entries().map { it.event },
             forwardedTo = forwarded.apply { keys.retainAll(engine.entries().mapTo(hashSetOf()) { it.event.id }) }.mapValues { it.value.size },
-            roots = publicConfig.roots, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
+            roots = publicConfig.roots, trustRoots = trustEntries, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
             clockSkews = clockSkews.values.reversed(),
             reported = reported.toSet(),
         ) }
@@ -540,19 +565,37 @@ class MeshCoordinator private constructor(private val context: Context) {
         publicConfig = PublicIngress.Config()
         synchronized(chainCache) { chainCache.clear() }
         chainGeneration++
-        val loaded = runCatching {
-            val asset = assetName ?: metadata?.getString("mosimo.public.trust.asset") ?: "mosimo-public-trust.json"
-            require(asset.matches(Regex("[A-Za-z0-9_.-]{1,128}")))
-            val bytes = context.assets.open(asset).use { it.readBounded(65536) }
-            val text = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
-            PublicIngress.config(text)
+        fun asset(name: String): PublicIngress.Config {
+            require(name.matches(Regex("[A-Za-z0-9_.-]{1,128}")))
+            val bytes = context.assets.open(name).use { it.readBounded(65536) }
+            return PublicIngress.config(Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString())
         }
-        loaded.onSuccess { publicConfig = it }
+        val loaded = runCatching {
+            val builtin = asset(assetName ?: metadata?.getString("mosimo.public.trust.asset")?.takeIf { it.isNotEmpty() } ?: "mosimo-public-trust.json")
+            // Development builds alone ship the test-post root (app/src/debug/assets); release builds have no such asset.
+            val test = runCatching { asset(TEST_TRUST_ASSET) }.getOrNull()
+            PublicIngress.effective(builtin, test, trustChoices())
+        }
+        loaded.onSuccess { (config, entries) -> publicConfig = config; trustEntries = entries }
         mutableState.update { it.copy(publicStatus = loaded.fold(
-            { c -> "公的情報: 有効 root ${c.roots.count { r -> r.enabled }} / 選択 Bot/type ${c.selected.size}（未設定は投入不可）" },
+            { (c, _) -> "公的情報: 有効 root ${c.roots.count { r -> r.enabled }} / 選択 Bot/type ${c.selected.size}（未設定は投入不可）" },
             { "公的情報: config 読込失敗 / fail closed（既存鍵・失効履歴は保持）" })) }
     }
+    private fun trustChoices() = PublicIngress.TrustChoices.parse(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TRUST_CHOICES, null))
+    /** Local trust choices (attest §3): only the user changes them, then the config and every chain verdict are rebuilt. */
+    private fun updateTrustChoices(change: (PublicIngress.TrustChoices) -> PublicIngress.TrustChoices) = enqueue(critical = true) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TRUST_CHOICES, change(trustChoices()).toJson()).apply()
+        reloadPublicConfigInternal()
+    }
+    fun setRootEnabled(pubkey: String, enabled: Boolean) = updateTrustChoices { c -> c.copy(disabled = if (enabled) c.disabled - pubkey else c.disabled + pubkey) }
+    /** False when [key] is not a 64-hex public key; the root is then not added. */
+    fun addRoot(key: String, name: String): Boolean {
+        val hex = PublicIngress.rootKey(key) ?: return false
+        updateTrustChoices { c -> c.copy(added = c.added.filterNot { it.first == hex } + (hex to name.trim().ifEmpty { "追加した root" })) }
+        return true
+    }
+    fun removeRoot(pubkey: String) = updateTrustChoices { c -> c.copy(added = c.added.filterNot { it.first == pubkey }, disabled = c.disabled - pubkey) }
     private fun cancelPublicDownload() {
         publicGeneration++
         publicJob?.cancel(); publicJob = null; publicBusy = false
@@ -566,6 +609,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (!onlineAllowed() || !validatedInternet()) return skip("公的情報: オンライン接続が必要 / 保留")
         if (elapsed() < publicNext) return skip("公的情報: 取得頻度制限（30秒）")
         publicNext = elapsed() + 30000
+        publicStale = false
         publicBusy = true
         val generation = ++publicGeneration
         val config = publicConfig
@@ -574,7 +618,8 @@ class MeshCoordinator private constructor(private val context: Context) {
         mutableState.update { it.copy(publicStatus = "PDS relay から priority-v1 取得中…", publicResults = emptyList()) }
         publicJob = scope.launch {
             // Network IO is never run inside inbox's serialized actor. No redirects or unbounded body reads.
-            val batch = runCatching { PublicDownload.fetch(http, generation) }
+            val since = now() / 1000 - PublicDownload.INGRESS_WINDOW_SECONDS
+            val batch = runCatching { PublicDownload.fetch(http, generation, publicRelay, since = since) }
             ensureActive()
             val clock = PublicDownload.ingressClock(confidence, now())
             // Crypto is bounded worker work too; decisions are made against the revocations held at request time.
@@ -598,7 +643,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                         if (fatal) break
                         val receipt = decision.receipt
                         val insertionTime = PublicDownload.ingressClock(engine.clockConfidence, now())
-                        val outcome = if (receipt == null) "投入拒否/保留: ${decision.reason}"
+                        val outcome = if (receipt == null) (if (keepOnline(event, publicRelay)) "通常投稿として保持" else "保持済み・対象外") + " / 認可なし: ${decision.reason}"
                         // importer §3: re-check the whole authorization (incl. revocations learned meanwhile) at insertion.
                         else if (!PublicIngress.readyToInsert(receipt, event, insertionTime) ||
                             PublicIngress.verify(event, publicConfig, revocations, insertionTime).receipt == null) "投入保留: 待機中に証明・失効・期限・時計が無効化"
@@ -619,7 +664,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                 }.onFailure { failure -> mutableState.update { it.copy(publicStatus = "公的情報取得失敗: ${failure.message}") } }
             }
             val first = batch.getOrNull() ?: return@launch
-            val pages = PublicDownload.more(http, generation, first)
+            val pages = PublicDownload.more(http, generation, first, publicRelay)
             ensureActive()
             enqueue(critical = true) pages@{
                 if (generation != publicGeneration || fatal || !onlineAllowed()) return@pages
@@ -665,6 +710,25 @@ class MeshCoordinator private constructor(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * mesh §12: an event fetched from [relay] joins the mesh store like one received over a link; effective priority
+     * (engine.priority), deadlines and capacity decide what is kept and sent first. False if it was not stored.
+     */
+    private fun keepOnline(event: NostrEvent, relay: String): Boolean {
+        if (fatal || disk == null || engine.entries().any { it.event.id == event.id }) return false
+        if (engine.deadline(event, now()) == DeliveryDeadline.EXPIRED) return false
+        if (runCatching { engine.originate(event, now(), elapsed()) }.isFailure) return false
+        seenAt[event.id] = Instant.ofEpochMilli(now())
+        absorbControl(event)
+        // It came from this relay, so there is nothing to export back to it. A relay backlog arrives in bursts:
+        // the tick persists once a second, and an entry lost to a crash is simply fetched again.
+        val d = checkNotNull(disk)
+        disk = d.copy(relayAccepted = d.relayAccepted + (relay to d.relayAccepted[relay].orEmpty() + event.id))
+        // The tick offers it to peers within 10 s; a backlog burst must not re-offer per event.
+        dirty = true
+        return true
     }
 
     /** Activity visibility permits online IO even while the mesh service is stopped. */
@@ -809,8 +873,9 @@ class MeshCoordinator private constructor(private val context: Context) {
             relaySubscription.receive(socketGeneration, text, elapsed(), engine.entries().map { it.event.id }.toSet())
         } catch (_: Exception) { relayFailure(); return }
         when (reply) {
-            // General subscription remains display-only; authorized ingress uses the explicit public request.
-            is RelayReply.Event -> { received(online = true); if (relaySubscription.atCapacity) closeRelayRead() }
+            // General subscription remains display-only; authorized ingress uses the explicit public request, which a
+            // live event re-triggers (tick) so information published while the app stays open still reaches the mesh.
+            is RelayReply.Event -> { received(online = true); keepOnline(reply.event, activeRelay); publicStale = true; if (relaySubscription.atCapacity) closeRelayRead() }
             RelayReply.Full -> closeRelayRead()
             RelayReply.Eose, RelayReply.Closed -> relayReadDeadline = 0
             is RelayReply.Ok -> relayOk(reply)
@@ -925,6 +990,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         if (relayDeadline > 0 && clock >= relayDeadline) relayFailure()
         if (relayReadDeadline > 0 && clock >= relayReadDeadline) closeRelayRead()
         drainRelay()
+        if (publicStale && clock >= publicNext) requestPublic(manual = false)
         if (!running) return
         exchange.dropStale()
         if (clock - lastSync >= 10_000) { lastSync = clock; exchange.broadcastInventory(); advertiseSummary() }
@@ -932,8 +998,12 @@ class MeshCoordinator private constructor(private val context: Context) {
     companion object {
         private const val PREFS = "mesh-coordinator"
         private const val CLOCK_TRUSTED = "clockTrusted"
+        private const val TRUST_CHOICES = "publicTrustChoices"
+        private const val TEST_TRUST_ASSET = "mosimo-public-trust-test.json"
         private const val HIDE_EXPIRED = "hideExpired"
         private const val REVOCATION_INTERVAL_MS = 15 * 60_000L
+        /** A node seen by a radio within this long counts as nearby. */
+        private const val NEARBY_MS = 60_000L
         @Volatile private var instance: MeshCoordinator? = null
         fun get(context: Context): MeshCoordinator = instance ?: synchronized(this) {
             instance ?: MeshCoordinator(context.applicationContext).also { instance = it }

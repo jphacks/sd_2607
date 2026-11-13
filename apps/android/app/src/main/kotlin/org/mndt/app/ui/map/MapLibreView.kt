@@ -39,6 +39,8 @@ fun Color.hex() = "#%06X".format(Locale.ROOT, toArgb() and 0xFFFFFF)
 private val EMPTY = featureCollection(emptyList())
 /** Zoomed out as far as this, a phone shows the whole of Japan (~23° of longitude); further out is just ocean. */
 private const val MIN_ZOOM = 3.3
+/** Ordinary posts and their areas appear from this zoom (a city or so); official alerts show at every zoom. */
+const val POST_MIN_ZOOM = 10.0
 
 // GSI pale tiles turned dark in the shader: brightness min/max swapped inverts, saturation -1 drops the tint.
 // Tune raster-contrast / brightness here if roads read too faint on device.
@@ -52,8 +54,10 @@ private val STYLE = """
  "layers":[
   {"id":"bg","type":"background","paint":{"background-color":"${Mosimo.bgBase.hex()}"}},
   {"id":"gsi","type":"raster","source":"gsi","paint":{"raster-brightness-min":0.55,"raster-brightness-max":0.04,"raster-saturation":-1,"raster-contrast":0.1}},
-  {"id":"regions-fill","type":"fill","source":"regions","paint":{"fill-color":["get","color"],"fill-opacity":0.16}},
-  {"id":"regions-line","type":"line","source":"regions","paint":{"line-color":["get","color"],"line-width":1.5,"line-opacity":0.8,"line-dasharray":[2,2]}},
+  {"id":"post-fill","type":"fill","source":"regions","minzoom":$POST_MIN_ZOOM,"filter":["==",["get","layer"],"post-fill"],"paint":{"fill-color":["get","color"],"fill-opacity":0.16,"fill-antialias":false}},
+  {"id":"post-line","type":"line","source":"regions","minzoom":$POST_MIN_ZOOM,"filter":["==",["get","layer"],"post-line"],"paint":{"line-color":["get","color"],"line-width":1.5,"line-opacity":0.8,"line-dasharray":[2,2]}},
+  {"id":"alert-fill","type":"fill","source":"regions","filter":["==",["get","layer"],"alert-fill"],"paint":{"fill-color":["get","color"],"fill-opacity":0.22,"fill-antialias":false}},
+  {"id":"alert-line","type":"line","source":"regions","filter":["==",["get","layer"],"alert-line"],"paint":{"line-color":["get","color"],"line-width":2,"line-opacity":0.9}},
   {"id":"me-accuracy","type":"fill","source":"me","filter":["==",["geometry-type"],"Polygon"],"paint":{"fill-color":"${Mosimo.info.hex()}","fill-opacity":0.15}},
   {"id":"me","type":"circle","source":"me","filter":["==",["geometry-type"],"Point"],"paint":{"circle-radius":7,"circle-color":"${Mosimo.info.hex()}","circle-stroke-width":3,"circle-stroke-color":"${Mosimo.textPrimary.hex()}"}}
  ]}

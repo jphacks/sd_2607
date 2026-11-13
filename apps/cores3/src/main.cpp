@@ -104,8 +104,8 @@ void setup() {
 
     Serial.printf("mesh node=%s profile=mosimo-mesh-v1 peripheral-only\n", node);
     if (relay.begin([](const uint8_t* bytes, size_t size) { return ble.send(bytes, size); }, note, accepted)) {
-        // Posts kept from before this reboot are shown as local information. They stay cold:
-        // the relay still neither offers nor forwards them in this boot.
+        // Posts kept from before this reboot are shown as local information. The relay offers
+        // them again only within its restored window (MeshRelay RESTORED_RESIDENCE_MS).
         size_t shown = 0;
         relay.forEachStored([&](const mesh::BundleInfo& info, bool) {
             if (info.kind == 1) { screen.addStored(info); ++shown; }

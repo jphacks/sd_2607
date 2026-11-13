@@ -1,6 +1,16 @@
 import CoreImage
 import MapKit
+import MosimoCore
 import SwiftUI
+
+/// Ordinary posts and their areas appear from this web-mercator zoom (a city or so); official alerts show at every zoom.
+let postMinZoom = 10.0
+
+/// Web-mercator zoom level of [v]'s current camera (MapKit has no zoom of its own; derived from the longitude span).
+@MainActor func webZoom(_ v: MKMapView) -> Double {
+    guard v.bounds.width > 0, v.region.span.longitudeDelta > 0 else { return 5 }
+    return log2(360 * Double(v.bounds.width) / 256 / v.region.span.longitudeDelta)
+}
 
 /// GSI "pale" raster tiles turned dark like the Android MapLibre style (raster-brightness-min 0.55 / max 0.04, saturation -1).
 final class GsiTileOverlay: MKTileOverlay {
@@ -50,10 +60,7 @@ final class MapController: ObservableObject {
     var center: CLLocationCoordinate2D? { view?.centerCoordinate }
 
     /// Web-mercator zoom level of the current camera.
-    var zoom: Double {
-        guard let v = view, v.bounds.width > 0 else { return 5 }
-        return log2(360 * Double(v.bounds.width) / 256 / v.region.span.longitudeDelta)
-    }
+    var zoom: Double { view.map(webZoom) ?? 5 }
 
     /// [bottomFraction] of the view is treated as covered (by a sheet), so the point lands in the visible part.
     func moveTo(_ c: CLLocationCoordinate2D, zoom target: Double? = nil, bottomFraction: Double = 0) {
@@ -77,8 +84,12 @@ final class ComposeAnnotation: NSObject, MKAnnotation {
     dynamic var coordinate: CLLocationCoordinate2D
     init(_ c: CLLocationCoordinate2D) { coordinate = c }
 }
-private final class RegionCircle: MKCircle { var color = UIColor.systemBlue }
-private final class RegionPolygon: MKPolygon { var color = UIColor.systemBlue }
+/// Area overlays: circles are a filled ring with an outline; geohash cells are one fill without edges ([RegionFill])
+/// plus one outline of the union's perimeter ([RegionLine]). [alert] gives a solid outline and a stronger fill.
+private protocol RegionStyle: AnyObject { var color: UIColor { get set }; var alert: Bool { get set } }
+private final class RegionCircle: MKCircle, RegionStyle { var color = UIColor.systemBlue; var alert = false }
+private final class RegionFill: MKMultiPolygon, RegionStyle { var color = UIColor.systemBlue; var alert = false }
+private final class RegionLine: MKMultiPolyline, RegionStyle { var color = UIColor.systemBlue; var alert = false }
 
 struct GsiMapView: UIViewRepresentable {
     let posts: [PostView]
@@ -113,19 +124,14 @@ struct GsiMapView: UIViewRepresentable {
         tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
         controller.view = map
+        context.coordinator.zoomedIn = webZoom(map) >= postMinZoom
         DispatchQueue.main.async { controller.ready = true }
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
-        let wanted = Dictionary(posts.compactMap { p in p.coordinate.map { (p.id, ($0, p)) } }, uniquingKeysWith: { a, _ in a })
-        let existing = map.annotations.compactMap { $0 as? PostAnnotation }
-        let stale = existing.filter { wanted[$0.post.id] == nil }
-        if !stale.isEmpty { map.removeAnnotations(stale) }
-        let have = Set(existing.map(\.post.id))
-        let added = wanted.filter { !have.contains($0.key) }.map { PostAnnotation($0.value.1, $0.value.0) }
-        if !added.isEmpty { map.addAnnotations(added) }
+        context.coordinator.sync(map)
 
         let compose = map.annotations.compactMap { $0 as? ComposeAnnotation }.first
         switch (compose, composePoint) {
@@ -134,50 +140,88 @@ struct GsiMapView: UIViewRepresentable {
         case let (nil, p?): map.addAnnotation(ComposeAnnotation(p))
         default: break
         }
-
-        let key = posts.map { "\($0.id)\($0.ext.regions)" }.joined()
-        if key != context.coordinator.regionKey {
-            context.coordinator.regionKey = key
-            map.removeOverlays(map.overlays.filter { !($0 is GsiTileOverlay) })
-            map.addOverlays(posts.flatMap(regionOverlays), level: .aboveLabels)
-        }
     }
 
-    private func regionOverlays(_ p: PostView) -> [MKOverlay] {
-        let color = UIColor(p.category?.color ?? Mosimo.info)
-        return p.ext.regions.compactMap { r in
+    fileprivate static func regionOverlays(_ p: PostView) -> [MKOverlay] {
+        // An official hazard tints its area by severity; user claims keep the default colour.
+        let color = UIColor(p.hazardAreaColor ?? p.category?.color ?? Mosimo.info)
+        let alert = p.alert
+        func styled<T: MKOverlay & RegionStyle>(_ o: T) -> T { o.color = color; o.alert = alert; return o }
+        var circles = [MKOverlay](), hashes = [String]()
+        for r in p.ext.regions {
             switch r {
             case let .circle(lat, lng, radius):
-                let c = RegionCircle(center: CLLocationCoordinate2D(latitude: Double(lat) / 1e6, longitude: Double(lng) / 1e6), radius: Double(radius) / 1000)
-                c.color = color
-                return c
-            case let .geohash(hash):
-                guard let (s, w, n, e) = geohashBounds(hash) else { return nil }
-                var pts = [CLLocationCoordinate2D(latitude: s, longitude: w), CLLocationCoordinate2D(latitude: s, longitude: e),
-                           CLLocationCoordinate2D(latitude: n, longitude: e), CLLocationCoordinate2D(latitude: n, longitude: w)]
-                let poly = RegionPolygon(coordinates: &pts, count: pts.count)
-                poly.color = color
-                return poly
+                circles.append(styled(RegionCircle(center: CLLocationCoordinate2D(latitude: Double(lat) / 1e6, longitude: Double(lng) / 1e6),
+                                                   radius: Double(radius) / 1000)))
+            case let .geohash(hash): hashes.append(hash)
             }
         }
+        let cells = hashes.compactMap(geohashBounds).map { s, w, n, e in
+            [GeoPoint(lat: s, lng: w), GeoPoint(lat: s, lng: e), GeoPoint(lat: n, lng: e), GeoPoint(lat: n, lng: w)]
+        }
+        guard !cells.isEmpty else { return circles }
+        func coords(_ pts: [GeoPoint]) -> [CLLocationCoordinate2D] { pts.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lng) } }
+        // One multi-polygon fills every cell in a single path, so adjacent cells show no seam.
+        let fill = styled(RegionFill(cells.map { c in var pts = coords(c); return MKPolygon(coordinates: &pts, count: pts.count) }))
+        let outline = geohashOutline(hashes) ?? cells.map { $0 + [$0[0]] }
+        let line = styled(RegionLine(outline.map { l in var pts = coords(l); return MKPolyline(coordinates: &pts, count: pts.count) }))
+        return circles + [fill, line]
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: GsiMapView
-        var regionKey = ""
+        /// The camera is at [postMinZoom] or closer: ordinary posts and their areas are shown, not only alerts.
+        var zoomedIn = false
+        /// Region overlays on the map, keyed by post (id and the flags that change its look).
+        private var shownRegions = [String: [MKOverlay]]()
         init(_ parent: GsiMapView) { self.parent = parent }
+
+        private func key(_ p: PostView) -> String { "\(p.id)|\(p.alert)|\(p.officialHazard)" }
+
+        /// Puts on the map the pins and areas of the posts visible at the current zoom, adding and removing only the difference.
+        @MainActor func sync(_ map: MKMapView) {
+            let visible = zoomedIn ? parent.posts : parent.posts.filter(\.alert)
+            var wanted = [String: (CLLocationCoordinate2D, PostView)]()
+            for p in visible where wanted[p.id] == nil { if let c = p.mapPoint { wanted[p.id] = (c, p) } }
+            let existing = map.annotations.compactMap { $0 as? PostAnnotation }
+            let stale = existing.filter { a in wanted[a.post.id].map { key($0.1) != key(a.post) } ?? true }
+            if !stale.isEmpty { map.removeAnnotations(stale) }
+            let have = Set(existing.map(\.post.id)).subtracting(stale.map(\.post.id))
+            let added = wanted.filter { !have.contains($0.key) }.map { PostAnnotation($0.value.1, $0.value.0) }
+            if !added.isEmpty { map.addAnnotations(added) }
+
+            let posts = Dictionary(visible.map { (key($0), $0) }, uniquingKeysWith: { a, _ in a })
+            for (k, overlays) in shownRegions where posts[k] == nil {
+                map.removeOverlays(overlays)
+                shownRegions[k] = nil
+            }
+            for (k, p) in posts where shownRegions[k] == nil {
+                let overlays = GsiMapView.regionOverlays(p)
+                shownRegions[k] = overlays
+                if !overlays.isEmpty { map.addOverlays(overlays, level: .aboveLabels) }
+            }
+        }
+
+        func mapViewDidChangeVisibleRegion(_ map: MKMapView) {
+            let z = webZoom(map) >= postMinZoom
+            guard z != zoomedIn else { return }
+            zoomedIn = z
+            sync(map)
+        }
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tiles = overlay as? MKTileOverlay { return MKTileOverlayRenderer(tileOverlay: tiles) }
-            func style(_ r: MKOverlayPathRenderer, _ color: UIColor) -> MKOverlayRenderer {
-                r.fillColor = color.withAlphaComponent(0.16)
-                r.strokeColor = color.withAlphaComponent(0.8)
-                r.lineWidth = 1.5
-                r.lineDashPattern = [4, 4]
+            // Official alerts: solid outline, slightly stronger fill; ordinary posts: dashed.
+            func style(_ r: MKOverlayPathRenderer, _ o: RegionStyle, fill: Bool, stroke: Bool) -> MKOverlayRenderer {
+                r.fillColor = fill ? o.color.withAlphaComponent(o.alert ? 0.22 : 0.16) : nil
+                r.strokeColor = stroke ? o.color.withAlphaComponent(o.alert ? 0.9 : 0.8) : nil
+                r.lineWidth = stroke ? (o.alert ? 2 : 1.5) : 0
+                r.lineDashPattern = stroke && !o.alert ? [4, 4] : nil
                 return r
             }
-            if let c = overlay as? RegionCircle { return style(MKCircleRenderer(circle: c), c.color) }
-            if let p = overlay as? RegionPolygon { return style(MKPolygonRenderer(polygon: p), p.color) }
+            if let c = overlay as? RegionCircle { return style(MKCircleRenderer(circle: c), c, fill: true, stroke: true) }
+            if let f = overlay as? RegionFill { return style(MKMultiPolygonRenderer(multiPolygon: f), f, fill: true, stroke: false) }
+            if let l = overlay as? RegionLine { return style(MKMultiPolylineRenderer(multiPolyline: l), l, fill: false, stroke: true) }
             return MKOverlayRenderer(overlay: overlay)
         }
 
@@ -198,7 +242,7 @@ struct GsiMapView: UIViewRepresentable {
             map.deselectAnnotation(annotation, animated: false)
             if parent.picking { return }
             if let cluster = annotation as? MKClusterAnnotation {
-                let members = cluster.memberAnnotations.compactMap { $0 as? PostAnnotation }.sorted { $0.post.createdAt > $1.post.createdAt }
+                let members = cluster.memberAnnotations.compactMap { $0 as? PostAnnotation }.sorted { pinOrder($0.post, $1.post) }
                 parent.onSelect(members.map(\.post.id))
             } else if let a = annotation as? PostAnnotation {
                 parent.onSelect([a.post.id])
@@ -229,9 +273,10 @@ final class PinAnnotationView: MKAnnotationView {
     private func configure() {
         let post: PostView, count: Int
         if let cluster = annotation as? MKClusterAnnotation {
+            // Official alerts win the top of a stack (most severe, then newest); otherwise the newest post.
             let members = cluster.memberAnnotations.compactMap { $0 as? PostAnnotation }
-            guard let newest = members.max(by: { $0.post.createdAt < $1.post.createdAt }) else { return }
-            post = newest.post; count = members.count
+            guard let top = members.min(by: { pinOrder($0.post, $1.post) }) else { return }
+            post = top.post; count = members.count
             clusteringIdentifier = nil
         } else if let a = annotation as? PostAnnotation {
             post = a.post; count = 1
@@ -242,7 +287,7 @@ final class PinAnnotationView: MKAnnotationView {
         image = renderImage(PinLabel(post: post, count: count))
         // Anchor on the 32pt icon circle's centre (16pt from the top, plus the badge headroom).
         centerOffset = CGPoint(x: 0, y: (image?.size.height ?? 0) / 2 - 22)
-        accessibilityLabel = post.category?.label ?? "投稿"
+        accessibilityLabel = post.hazardTitle ?? post.category?.label ?? "投稿"
     }
 }
 
@@ -251,12 +296,16 @@ struct PinLabel: View {
     let count: Int
     var body: some View {
         let c = post.category
-        let color = c?.color ?? Mosimo.info
-        let first = post.body.split(separator: "\n", omittingEmptySubsequences: false).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-        let label = first.isEmpty ? (c?.label ?? "") : first.count > 10 ? String(first.prefix(10)) + "…" : first
+        let color = post.hazardColor ?? c?.color ?? Mosimo.info
+        // A hazard reads as its title plus the first scale (「大雨 警戒レベル4」); ordinary posts as their first line.
+        let hazard = post.ext.hazard
+        let limit = hazard != nil ? 16 : 10
+        let first = post.hazardTitle.map { t in ([t] + (hazard?.scales.first.map { [HazardLabels.scale($0)] } ?? [])).joined(separator: " ") }
+            ?? post.body.split(separator: "\n", omittingEmptySubsequences: false).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let label = first.isEmpty ? (c?.label ?? "") : first.count > limit ? String(first.prefix(limit)) + "…" : first
         VStack(spacing: 4) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: Category.symbol(c)).font(.system(size: 15, weight: .bold)).foregroundStyle(Mosimo.bgBase)
+                Image(systemName: post.ext.hazard.map(hazardSymbol) ?? Category.symbol(c)).font(.system(size: 15, weight: .bold)).foregroundStyle(Mosimo.bgBase)
                     .frame(width: 32, height: 32).background(color, in: Circle())
                     .overlay(Circle().stroke(Mosimo.bgBase, lineWidth: 2))
                 if count > 1 {

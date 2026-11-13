@@ -25,8 +25,11 @@ fun PostView.body(): String = if (category() != null) content.replaceFirst(prefi
 /** A re-posted BSAF alert (`original` present); native BSAF posts of our own are ordinary posts. */
 val PostView.isPublic get() = ext.bsaf?.imported == true
 
-/** Authorized at import time by a trusted importer attestation; volatile fetches were never checked. */
-val PostView.importerAuthorized get() = publicAuthorization != null
+/**
+ * importer §3: the post's own chain, confirmed now against the local roots, ends in an importer authorized for its
+ * (Bot, type). Decided from the post alone, so it reads the same however the post arrived (relay, mesh or ingress).
+ */
+val PostView.importerAuthorized get() = chain?.let { it.confirmedNow && it.importAuthorized } == true
 
 /** attest.chain §4.1: the sender may be shown by organization name only with the `identity` role. */
 val PostView.senderName: String? get() = chain?.takeIf { it.identity && it.confirmedNow }?.name
@@ -50,10 +53,10 @@ fun PostView.priorityColor(): Color = when (if (importerAuthorized) ext.priority
     3 -> Mosimo.danger; 2 -> Mosimo.warning; else -> Mosimo.textSecondary
 }
 
-/** Event time: BSAF `time:` (source event) when parseable, else Nostr created_at. Epoch seconds. */
-fun PostView.eventTime(): Long = ext.bsaf?.time?.let { t ->
-    runCatching { Instant.parse(t).epochSecond }.recoverCatching { OffsetDateTime.parse(t).toEpochSecond() }.getOrNull()
-} ?: createdAt
+fun epochOf(t: String): Long? = runCatching { Instant.parse(t).epochSecond }.recoverCatching { OffsetDateTime.parse(t).toEpochSecond() }.getOrNull()
+
+/** Event time: hazard `onset`, then BSAF `time:` (source event) when parseable, else Nostr created_at. Epoch seconds. */
+fun PostView.eventTime(): Long = ext.hazard?.onset?.let(::epochOf) ?: ext.bsaf?.time?.let(::epochOf) ?: createdAt
 
 private val zone get() = ZoneId.systemDefault()
 fun hhmm(epochSeconds: Long): String = DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochSecond(epochSeconds).atZone(zone))

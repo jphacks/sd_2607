@@ -39,7 +39,9 @@ import java.util.concurrent.Executors
  * What a node puts in its scan response (mesh §3.1 + mesh.adv §1): node ID, role flags, and optionally the
  * 3-byte candidate-set summary with extension flags.
  */
-internal data class GattAdvert(val node: String, val peripheralOnly: Boolean, val summary: ByteArray? = null, val extFlags: Int = 0) {
+/** [nameOnly]: an iOS peer, which can only put its node in the local name (mesh §3.1), not Service Data. */
+internal data class GattAdvert(val node: String, val peripheralOnly: Boolean, val summary: ByteArray? = null, val extFlags: Int = 0,
+    val nameOnly: Boolean = false) {
     val urgent: Boolean get() = extFlags and 1 != 0
 }
 
@@ -50,6 +52,10 @@ internal fun parseGattAdvert(data: ByteArray?): GattAdvert? {
     val extension = data.size >= 13
     return GattAdvert(node, data[8].toInt() and 1 != 0, if (extension) data.copyOfRange(9, 12) else null, if (extension) data[12].toInt() and 255 else 0)
 }
+
+/** iOS advertises the service UUID with its 16-hex node as the local name, and no Service Data. */
+internal fun nameAdvert(name: String?): GattAdvert? =
+    name?.takeIf { it.matches(Regex("[0-9a-f]{16}")) }?.let { GattAdvert(it, peripheralOnly = false, nameOnly = true) }
 
 internal fun gattServiceData(node: String, flags: Int = 0, summary: ByteArray? = null, extFlags: Int = 0): ByteArray {
     val head = ByteArray(9) { if (it < 8) node.substring(it * 2, it * 2 + 2).toInt(16).toByte() else flags.toByte() }
@@ -86,6 +92,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
 
     private class Peer(val handle: String, val device: BluetoothDevice, val gatt: BluetoothGatt?, val node: String?) {
         var connected = false
+        /** The exchange reconciled over this link; a drop before that counts as a failed attempt. */
+        var synced = false
         var mtu = 23
         val reader = CborSequenceReader(Exchange.MESSAGE_LIMIT)
         val out = ArrayDeque<ByteArray>() // whole messages; [offset] bytes of the first are already sent
@@ -113,6 +121,10 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private val incompatible = HashMap<String, Long>()
     /** First time each node was seen; lets the tie-break loser dial when the winner cannot see us. */
     private val firstSeen = HashMap<String, Long>()
+    /** Last time each node's advert was seen, for the nearby count. */
+    private val lastSeen = HashMap<String, Long>()
+    /** Last reconciliation per node; a peer without an advertised summary is not redialed sooner than [RESYNC_MS]. */
+    private val lastSyncedAt = HashMap<String, Long>()
     /** mesh.adv: our candidate summary and flags, the last advertised summary per node, and the pair recorded at the last sync. */
     private var summary = ByteArray(3)
     private var extFlags = 0
@@ -207,7 +219,11 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
 
     override fun synced(peer: String) {
         synchronized(lock) {
-            val n = peers[peer]?.node ?: return
+            val p = peers[peer] ?: return
+            p.synced = true
+            backoff.remove(p.device.address)
+            val n = p.node ?: return
+            lastSyncedAt[n] = SystemClock.elapsedRealtime()
             lastAdvertSummary[n]?.let { lastSynced[n] = it to summary.copyOf() }
         }
     }
@@ -231,15 +247,25 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         events.execute { f(l) }
     }
 
+    override fun nearby(withinMillis: Long): Set<String> = synchronized(lock) {
+        val now = SystemClock.elapsedRealtime()
+        lastSeen.entries.removeAll { now - it.value > maxOf(withinMillis, RESYNC_MS) }
+        lastSeen.filterValues { now - it <= withinMillis }.keys.toSet()
+    }
+
     private fun connect(g: Int, device: BluetoothDevice, ad: GattAdvert) {
+        if (ad.node != node) lastSeen[ad.node] = SystemClock.elapsedRealtime()
         if (ad.node == node || peers.size >= MAX_LINKS || allowedPeerNode != null && ad.node != allowedPeerNode) return
         val now = SystemClock.elapsedRealtime()
+        // Without a summary we cannot tell whether anything changed (mesh.adv §4), so a synced peer rests a while.
+        if (ad.summary == null && now - (lastSyncedAt[ad.node] ?: Long.MIN_VALUE / 2) < RESYNC_MS) return
         ad.summary?.let { lastAdvertSummary[ad.node] = it }
         if ((incompatible[ad.node] ?: 0) > now) return
         if (!worthConnecting(ad, lastSynced[ad.node], summary)) return
         val waited = now - firstSeen.getOrPut(ad.node) { now } >= ASYMMETRIC_FALLBACK_MS
         // Visibility can be one-way (one phone's scanner misses the other's advert), so the loser dials too after a wait.
-        if (!shouldConnect(node, ad) && !waited) return
+        // An iOS peer always dials us (it reads our Service Data); we dial it only when it has not within the wait.
+        if ((ad.nameOnly || !shouldConnect(node, ad)) && !waited) return
         val addr = device.address
         if (peers.values.any { it.device.address == addr || it.node == ad.node }) return
         if ((backoff[addr]?.second ?: 0) > SystemClock.elapsedRealtime()) return
@@ -255,7 +281,6 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         if (p.connected) return
         p.connected = true
         Log.i(TAG, "connected ${p.handle}")
-        backoff.remove(p.device.address)
         emit { it.onConnected(this, p.handle, p.node) }
     }
 
@@ -293,7 +318,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         runCatching { if (p.gatt != null) { p.gatt.disconnect(); p.gatt.close() } else server?.cancelConnection(p.device) }
         p.node?.let { firstSeen.remove(it) }
         if (p.connected) emit { it.onDisconnected(this, p.handle) }
-        else if (p.gatt != null) {
+        // A link dropped before reconciling (refused HELLO, incompatible peer, full peer) backs off like a failed dial.
+        if (!p.synced && p.gatt != null) {
             val n = (backoff[p.device.address]?.first ?: 0) + 1
             backoff[p.device.address] = n to SystemClock.elapsedRealtime() + BACKOFF_MS[minOf(n, BACKOFF_MS.size) - 1]
         }
@@ -346,7 +372,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 locked(g) {
                     // Results without the scan response lack the node id; the merged one follows.
-                    val ad = parseGattAdvert(result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID))) ?: return
+                    val ad = parseGattAdvert(result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)))
+                        ?: nameAdvert(result.scanRecord?.deviceName) ?: return
                     connect(g, result.device, ad)
                 }
             }
@@ -481,6 +508,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         const val FLAG_PERIPHERAL_ONLY = 1
         const val MAX_LINKS = 7
+        /** A peer that advertises no summary (iOS) is not redialed within this long after a reconciliation. */
+        const val RESYNC_MS = 60_000L
         const val MAX_QUEUE = 64
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val ASYMMETRIC_FALLBACK_MS = 10_000L

@@ -14,9 +14,10 @@ export interface LexiconFile {
 const PREFIX = '../../../protocol/mosimo/';
 const files = import.meta.glob<string>('../../../protocol/mosimo/**/*.json', { eager: true, query: '?raw', import: 'default' });
 
-/** protocol/mosimo 以下の全 Lexicon JSON を列挙する。 */
+/** protocol/mosimo 以下の全 Lexicon JSON を列挙する。変換規則の対応表など Lexicon でない JSON は除く。 */
 export function listLexicons(): LexiconFile[] {
   return Object.entries(files)
+    .filter(([, json]) => (JSON.parse(json) as { lexicon?: unknown }).lexicon === 1)
     .map(([key, json]) => {
       const rel = key.slice(PREFIX.length);
       const data = JSON.parse(json) as { id: string; defs?: Record<string, unknown> };

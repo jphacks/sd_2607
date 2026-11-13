@@ -49,8 +49,9 @@ extension PostView {
     var isPublic: Bool { ext.bsaf?.imported == true }
     /// The confirmed sender name (attest.chain §4.3): shown only when the chain is confirmed now and the leaf may name itself.
     var senderName: String? { chain.flatMap { $0.identity && $0.confirmedNow ? $0.name : nil } }
-    /// Authorized at import time by a trusted importer certificate; volatile fetches were never checked.
-    var importerAuthorized: Bool { publicAuthorization != nil }
+    /// The post's own chain, confirmed now, ends in an importer authorized for its (Bot, type) (importer §3). Decided from
+    /// the post alone, so relay, mesh and import show the same verdict; `publicAuthorization` is only the import-time record.
+    var importerAuthorized: Bool { chain.map { $0.confirmedNow && $0.importAuthorized } == true }
 
     /// #priority colors: 3 urgent → danger, 2 important → warning, else neutral. Unauthorized is capped at 1 by protocol.
     var priorityColor: Color {
@@ -60,8 +61,10 @@ extension PostView {
         default: return Mosimo.textSecondary
         }
     }
-    /// Event time: BSAF `time:` (source event) when parseable, else Nostr created_at. Epoch seconds.
-    var eventTime: Int64 { ext.bsaf?.time.flatMap(Instant.parse)?.epochSecond ?? createdAt }
+    /// Event time: hazard `onset`, else BSAF `time:` (source event) when parseable, else Nostr created_at. Epoch seconds.
+    var eventTime: Int64 {
+        (ext.hazard?.onset.flatMap(Instant.parse) ?? ext.bsaf?.time.flatMap(Instant.parse))?.epochSecond ?? createdAt
+    }
 
     /// The origin, else the centre of the first circular area (a point picked on the map is sent as geo#area).
     var coordinate: CLLocationCoordinate2D? {
@@ -149,25 +152,57 @@ func standalone(_ posts: [PostView]) -> [PostView] {
 func endorsers(_ annotations: [PostView]) -> Set<String> {
     Set(annotations.filter { $0.ext.annotation?.relation == .endorsement }.map { $0.did ?? $0.pubkey })
 }
-/// Posts drawn on the map: those with a position (origin or area), minus annotations whose target is shown (they live in its detail).
-func mapPosts(_ posts: [PostView]) -> [PostView] {
+/// Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail).
+@MainActor func mapPosts(_ posts: [PostView]) -> [PostView] {
     let ids = Set(posts.map(\.id))
-    return posts.filter { $0.coordinate != nil && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
+    return posts.filter { $0.mapPoint != nil && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
 }
 
-private let geohashBase32 = Array("0123456789bcdefghjkmnpqrstuvwxyz")
-/// Geohash cell as (south, west, north, east) degrees.
-func geohashBounds(_ hash: String) -> (Double, Double, Double, Double)? {
-    var lat = (-90.0, 90.0), lng = (-180.0, 180.0)
-    var even = true
-    for c in hash.lowercased() {
-        guard let v = geohashBase32.firstIndex(of: c) else { return nil }
-        for bit in stride(from: 4, through: 0, by: -1) {
-            let on = (v >> bit) & 1 == 1
-            if even { let mid = (lng.0 + lng.1) / 2; if on { lng.0 = mid } else { lng.1 = mid } }
-            else { let mid = (lat.0 + lat.1) / 2; if on { lat.0 = mid } else { lat.1 = mid } }
-            even.toggle()
+/// Geohash anchors keyed by their cell list: tracing a prefecture cover is too slow to redo on every view update.
+@MainActor private var anchorCache = [[String]: GeoPoint?]()
+@MainActor private func cachedAnchor(_ hashes: [String]) -> GeoPoint? {
+    if let hit = anchorCache[hashes] { return hit }
+    if anchorCache.count > 512 { anchorCache.removeAll() }
+    let a = geohashAnchor(hashes)
+    anchorCache[hashes] = a
+    return a
+}
+
+extension PostView {
+    /// An official hazard notice: shown at every zoom and above ordinary pins. A user's own hazard claim is an ordinary post.
+    var alert: Bool { ext.hazard != nil && officialHazard }
+
+    /// Where a post's pin goes: its own position, else for a hazard the epicentre / volcano / cyclone centre it carries,
+    /// else a point inside its area (the cell nearest the middle of a geohash union, or the first circle's centre).
+    @MainActor var mapPoint: CLLocationCoordinate2D? {
+        if let c = coordinate { return c }
+        guard let h = ext.hazard else { return nil }
+        func point(_ lat: Int64?, _ lon: Int64?) -> CLLocationCoordinate2D? {
+            guard let lat, let lon else { return nil }
+            return CLLocationCoordinate2D(latitude: Double(lat) / 1e6, longitude: Double(lon) / 1e6)
         }
+        let kindPoint: CLLocationCoordinate2D?
+        switch h.kind {
+        case let .earthquake(_, hypo, _)?: kindPoint = point(hypo?.lat, hypo?.lon)
+        case let .volcano(_, v)?: kindPoint = point(v?.lat, v?.lon)
+        case let .cyclone(c)?: kindPoint = point(c.center?.lat, c.center?.lon)
+        default: kindPoint = nil
+        }
+        if let kindPoint { return kindPoint }
+        let hashes = ext.regions.compactMap { r -> String? in if case let .geohash(g) = r { return g } else { return nil } }
+        if !hashes.isEmpty, let a = cachedAnchor(hashes) { return CLLocationCoordinate2D(latitude: a.lat, longitude: a.lng) }
+        // coordinate already falls back to the first circle's centre.
+        return nil
     }
-    return (lat.0, lng.0, lat.1, lng.1)
+}
+
+private let severityRank = ["Extreme", "Severe", "Moderate", "Minor"]
+/// Pin stack order: official alerts first (most severe, then newest), then ordinary posts newest first.
+func pinOrder(_ a: PostView, _ b: PostView) -> Bool {
+    func rank(_ p: PostView) -> (Int, Int) {
+        guard p.alert else { return (1, severityRank.count) }
+        return (0, p.ext.hazard.flatMap { severityRank.firstIndex(of: $0.severity) } ?? severityRank.count)
+    }
+    let ra = rank(a), rb = rank(b)
+    return ra != rb ? ra < rb : a.createdAt > b.createdAt
 }

@@ -34,7 +34,10 @@ object PublicIngress {
 
     /** What the UI shows about a post's sender confirmation (attest.chain §4.3). */
     data class ChainView(val state: Attest.ChainState, val expiredNow: Boolean?, val revocation: Attest.RevocationState?, val name: String?,
-        val orgId: String?, val roles: List<String>, val trustLevel: Long?, val reason: String) {
+        val orgId: String?, val roles: List<String>, val trustLevel: Long?, val reason: String,
+        /** importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
+         *  (Bot DID, type), and that pair locally selected. Decided from the post alone, however it arrived. */
+        val importAuthorized: Boolean = false) {
         val identity: Boolean get() = Attest.ROLE_IDENTITY in roles
         val publicInformation: Boolean get() = Attest.ROLE_PUBLIC_INFORMATION in roles
         val confirmedNow: Boolean get() = state == Attest.ChainState.VERIFIED && expiredNow == false && revocation == Attest.RevocationState.NOT_REVOKED_AS_KNOWN
@@ -67,12 +70,64 @@ object PublicIngress {
         return Config(roots, selected.toSet())
     }
 
+    /** Where a trusted root came from: shipped with the app, shipped only in development builds, or added by the user. */
+    enum class RootOrigin { BUILTIN, TEST, USER }
+    data class RootEntry(val root: Attest.Root, val origin: RootOrigin)
+
+    /**
+     * The user's local trust choices: roots switched off (by key, hex) and roots added by hand. Kept apart from the shipped
+     * config so an app update can change its roots without losing them. Never filled from received data (attest §3).
+     */
+    data class TrustChoices(val disabled: Set<String> = emptySet(), val added: List<Pair<String, String>> = emptyList()) {
+        fun toJson(): String = mapper.writeValueAsString(mapOf("disabled" to disabled.sorted(),
+            "added" to added.map { (key, name) -> mapOf("pubkey" to key, "name" to name) }))
+        companion object {
+            private val mapper = com.fasterxml.jackson.databind.ObjectMapper()
+            fun parse(json: String?): TrustChoices = runCatching {
+                val n = mapper.readTree(json!!)
+                TrustChoices(n["disabled"].map { it.textValue()!! }.toSet(), n["added"].map { it["pubkey"].textValue()!! to it["name"].textValue()!! })
+            }.getOrDefault(TrustChoices())
+        }
+    }
+    /** Roles and depth given to a user-added root: it may certify importers and public-information issuers below it. */
+    val USER_ROOT_ROLES = setOf(Attest.ROLE_IMPORT, Attest.ROLE_PUBLIC_INFORMATION, "attest")
+    const val USER_ROOT_DEPTH = 2
+
+    /** A root key typed by the user: 64 hex digits (x-only, as in Nostr and the attest chain). */
+    fun rootKey(text: String): String? = text.trim().lowercase().takeIf { it.matches(Regex("[0-9a-f]{64}")) && runCatching { Attest.publicKey(unhex(it, 32)) }.isSuccess }
+
+    /**
+     * The config in force: the shipped [builtin] and, in development builds, [test] roots, plus user-added ones, each
+     * switched by [choices]. Selections come from the shipped configs. A key listed twice keeps its first origin.
+     */
+    fun effective(builtin: Config, test: Config?, choices: TrustChoices): Pair<Config, List<RootEntry>> {
+        val entries = LinkedHashMap<String, RootEntry>()
+        fun add(root: Attest.Root, origin: RootOrigin) { entries.putIfAbsent(root.pubkeyHex, RootEntry(root, origin)) }
+        builtin.roots.forEach { add(it, RootOrigin.BUILTIN) }
+        test?.roots?.forEach { add(it, RootOrigin.TEST) }
+        choices.added.forEach { (key, name) ->
+            rootKey(key)?.let { add(Attest.Root(unhex(it, 32), name.take(64), USER_ROOT_ROLES, USER_ROOT_DEPTH), RootOrigin.USER) }
+        }
+        val list = entries.values.take(MAX_ROOTS).map { e -> e.copy(root = e.root.copy(enabled = e.root.enabled && e.root.pubkeyHex !in choices.disabled)) }
+        return Config(list.map { it.root }, builtin.selected + test?.selected.orEmpty()) to list
+    }
+
     /** priority §2: exactly one valid extension gives the hint; anything else is level 1. Never raised by itself. */
     fun priority(event: NostrEvent): Int = runCatching {
         val p = AtRepository.extensions(event).filter { it["\$type"] == PRIORITY }
         if (p.size != 1) return 1
         (p[0]["level"] as? Long ?: error("level"))!!.also { require(it in 0..3) }.toInt()
     }.getOrDefault(1)
+
+    /**
+     * priority §2: the author's hint when the sender is authorized now (a confirmed chain; for an `import` leaf, only a
+     * locally authorized re-post), otherwise at most 1. Independent of how the event arrived.
+     */
+    fun effectivePriority(event: NostrEvent, view: ChainView?): Int {
+        val hint = priority(event)
+        val authorized = view != null && view.confirmedNow && (view.importAuthorized || Attest.ROLE_IMPORT !in view.roles)
+        return if (authorized) hint else minOf(hint, 1)
+    }
 
     /** Parsed BSAF extension of an import candidate: the original post's author DID and the `type:` tag value. */
     data class BsafOriginal(val botDid: String, val type: String, val uri: String, val cid: String)
@@ -104,10 +159,12 @@ object PublicIngress {
      * Evaluates every chain of [event] against [roots]; the first chain whose leaf belongs to the event decides.
      * [now] null means the clock is untrusted: the result is UNKNOWN_TIME, never VERIFIED.
      */
-    fun chainView(event: NostrEvent, roots: List<Attest.Root>, revocations: RevocationStore, now: Instant?, seenAt: Instant): ChainView? {
+    fun chainView(event: NostrEvent, roots: List<Attest.Root>, revocations: RevocationStore, now: Instant?, seenAt: Instant,
+        selected: Set<Selection> = emptySet()): ChainView? {
         val chains = runCatching { Attest.chains(event) }.getOrElse { return ChainView(Attest.ChainState.INVALID, null, null, null, null, emptyList(), null, "malformed chain: ${it.message}") }
         if (chains.isEmpty()) return null
         val createdAt = Instant.ofEpochSecond(event.createdAt)
+        val original = runCatching { bsafOriginal(event) }.getOrNull()?.takeIf { Selection(it.botDid, it.type) in selected }
         var best: ChainView? = null
         for (chain in chains) {
             val leaf = chain.attestations.last()
@@ -115,8 +172,10 @@ object PublicIngress {
             val result = if (bound.isFailure) Attest.ChainResult(Attest.ChainState.INVALID, "leaf: ${bound.exceptionOrNull()?.message}")
                 else Attest.verifyChain(chain.attestations, roots, createdAt, now)
             val revocation = if (result.root != null) Attest.revocationState(result, revocations::of, createdAt, seenAt) else null
+            val imported = original != null && result.state == Attest.ChainState.VERIFIED && Attest.ROLE_IMPORT in leaf.roles &&
+                leaf.orgId != null && leaf.importerSources?.get(original.botDid)?.contains(original.type) == true
             val view = ChainView(result.state, result.expiredNow, revocation, result.leaf?.displayName, result.leaf?.orgId,
-                result.leaf?.roles.orEmpty(), result.leaf?.trustLevel, result.reason)
+                result.leaf?.roles.orEmpty(), result.leaf?.trustLevel, result.reason, imported)
             if (view.confirmedNow) return view
             if (best == null || rank(view) > rank(best)) best = view
         }

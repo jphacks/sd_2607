@@ -129,9 +129,15 @@ public enum PublicDownload {
         confidence == .trusted ? Instant(epochMillis: nowMillis) : nil
     }
 
-    public static func request(_ id: String, priority: Bool, limit: Int = limit, until: Int64? = nil) -> String {
+    /// Ingress window: only posts created this recently are asked for, so the relay's fixed priority candidate budget
+    /// (pds §7.2 answers CLOSED rather than a newest-only prefix) is not exhausted by long-expired posts. Mesh residence
+    /// is capped at 24 h too, so older posts could not be imported anyway.
+    public static let ingressWindowSeconds: Int64 = 86_400
+
+    public static func request(_ id: String, priority: Bool, limit: Int = limit, until: Int64? = nil, since: Int64? = nil) -> String {
         var filter: [(String, Json)] = [("kinds", .array([.int(1)])), ("#t", .array([.string(AtRepository.namespace)])), ("limit", .int(Int64(limit)))]
         if let until { filter.append(("until", .int(until))) }
+        if let since { filter.append(("since", .int(since))) }
         let msg: Json = priority ? .array([.string("MOSIMO-REQ"), .string(id), .object([("order", .string("priority-v1")), ("filter", .object(filter))])])
             : .array([.string("REQ"), .string(id), .object(filter)])
         return msg.serialized
@@ -159,9 +165,9 @@ public enum PublicDownload {
     public struct Pages: Sendable { public let events: [NostrEvent]; public let failure: String? }
 
     /// Each attempt gets a fresh socket: old relays may disconnect on an unknown verb.
-    public static func fetch(token: Int64, relay: String = pdsRelay, timeout: Double = 15) async throws -> Batch {
+    public static func fetch(token: Int64, relay: String = pdsRelay, timeout: Double = 15, since: Int64? = nil) async throws -> Batch {
         for priority in [true, false] {
-            if let events = try? await attempt(relay, "public-\(token)-\(priority ? "p" : "r")", priority: priority, timeout: timeout) {
+            if let events = try? await attempt(relay, "public-\(token)-\(priority ? "p" : "r")", priority: priority, timeout: timeout, since: since) {
                 return Batch(events: events, fallback: !priority)
             }
         }
@@ -195,13 +201,13 @@ public enum PublicDownload {
         return Pages(events: extra, failure: nil)
     }
 
-    static func attempt(_ relay: String, _ id: String, priority: Bool, timeout: Double, limit: Int = limit, until: Int64? = nil) async throws -> [NostrEvent] {
+    static func attempt(_ relay: String, _ id: String, priority: Bool, timeout: Double, limit: Int = limit, until: Int64? = nil, since: Int64? = nil) async throws -> [NostrEvent] {
         guard let url = URL(string: relay) else { throw CoreError("Invalid relay URL") }
         let task = URLSession.shared.webSocketTask(with: url)
         task.maximumMessageSize = RelaySubscription.maxFrameBytes
         task.resume()
         defer { task.cancel(with: .goingAway, reason: nil) }
-        let request = Self.request(id, priority: priority, limit: limit, until: until)
+        let request = Self.request(id, priority: priority, limit: limit, until: until, since: since)
         try await withTimeout(15) { try await task.send(.string(request)) }
         return try await withTimeout(timeout) {
             var events = [String: NostrEvent](), order = [String](), total = 0, frames = 0

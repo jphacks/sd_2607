@@ -1,56 +1,14 @@
 {
   "roots": [
     {
-      "rootId": "9d60fc70a23705b9c350caba47acf117374046442950da94979bbe500855676a",
-      "rootPubkey": "03abafed84e161ddcb39e8d7c6937e4c982364fa32a6b642f86daee0dde01e8627",
-      "enabled": true,
-      "scope": {
-        "orgIds": [
-          "mosimo-bsaf-importer"
-        ],
-        "bsaf": [
-          {
-            "botDid": "did:plc:kxwz5cz7o6g4jlmxh6doyfsm",
-            "types": [
-              "avalanche-warning",
-              "dense-fog-warning",
-              "dry-air-warning",
-              "flood-warning",
-              "frost-warning",
-              "heavy-rain",
-              "heavy-rain-warning",
-              "icing-warning",
-              "landslide-warning",
-              "linear-rainband-warning",
-              "low-temperature-warning",
-              "melting-snow-warning",
-              "other-warning",
-              "significant-snowfall-warning",
-              "snow-accretion-warning",
-              "snow-warning",
-              "storm-surge-warning",
-              "thunderstorm-warning",
-              "tornado-warning",
-              "typhoon",
-              "wave-warning",
-              "weather-info",
-              "wind-warning"
-            ]
-          },
-          {
-            "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
-            "types": [
-              "ashfall",
-              "earthquake",
-              "eruption",
-              "nankai-trough",
-              "tsunami"
-            ]
-          }
-        ]
-      },
-      "snapshotUrl": "https://pds.oriom.dev/.well-known/mosimo/trust/snapshot.cbor",
-      "minSequence": 4
+      "pubkey": "3b92115866d54bb1799529ac39312bcd60bbfc1f5235b5785f4f7db748c62510",
+      "name": "Mosimo BSAF 転載 root（oriom.dev）",
+      "roles": [
+        "attest",
+        "import"
+      ],
+      "maxDepth": 2,
+      "enabled": true
     }
   ],
   "selected": [

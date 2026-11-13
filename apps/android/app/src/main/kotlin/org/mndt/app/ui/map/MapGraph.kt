@@ -65,6 +65,11 @@ import org.mndt.app.ui.post.body
 import org.mndt.app.ui.post.category
 import org.mndt.app.ui.post.distanceFrom
 import org.mndt.app.ui.post.latLng
+import org.mndt.app.ui.post.color
+import org.mndt.app.ui.post.officialHazard
+import org.mndt.app.ui.post.title
+import org.mndt.app.ui.post.icon
+import org.mndt.app.ui.post.scaleLabel
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.mesh.MeshState
 import org.mndt.mesh.PostView
@@ -101,15 +106,17 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     val handle = remember { MapHandle() }
     val all = remember(state.posts) { mapPosts(state.posts) }
     val shown = remember(all, vm.filter) { if (vm.filter.isEmpty()) all else all.filter { it.category() in vm.filter } }
+    // An area is a fill plus one outline of its perimeter: geohash cells are filled without edges and traced as a whole.
     val regions = remember(shown) {
         featureCollection(shown.flatMap { p ->
-            val color = (p.category()?.color ?: Mosimo.info).hex()
-            p.ext.regions.mapNotNull { r ->
-                when (r) {
-                    is Region.Circle -> circleRing(r.lat / 1e6, r.lon / 1e6, r.r / 1000.0)
-                    is Region.Geohash -> runCatching { boundsRing(geohashBounds(r.hash)) }.getOrNull()
-                }?.let { polygonFeature(it, color) }
-            }
+            val color = (p.ext.hazard?.takeIf { p.officialHazard }?.color(true) ?: p.category()?.color ?: Mosimo.info).hex()
+            val (fill, line) = if (p.alert) "alert-fill" to "alert-line" else "post-fill" to "post-line"
+            val circles = p.ext.regions.filterIsInstance<Region.Circle>().map { circleRing(it.lat / 1e6, it.lon / 1e6, it.r / 1000.0) }
+            val hashes = p.ext.regions.filterIsInstance<Region.Geohash>().map { it.hash }
+            val cells = hashes.mapNotNull { runCatching { boundsRing(geohashBounds(it)) }.getOrNull() }
+            (circles + cells).map { polygonFeature(it, color, fill) } +
+                listOfNotNull(circles.takeIf { it.isNotEmpty() }?.let { lineFeature(it, color, line) },
+                    (geohashOutline(hashes) ?: cells).takeIf { it.isNotEmpty() }?.let { lineFeature(it, color, line) })
         })
     }
     val me = remember(fix) {
@@ -128,7 +135,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         if (focus == null || focus == vm.handledFocus || map == null) return@LaunchedEffect
         val post = state.posts.firstOrNull { it.id == focus } ?: return@LaunchedEffect
         vm.handledFocus = focus
-        post.latLng()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, 15.0, 0.5) }
+        post.mapPoint()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, if (post.alert) 8.0 else 15.0, 0.5) }
         vm.stack = listOf(focus); vm.selected = focus
     }
     val selected = vm.selected?.let { id -> state.posts.firstOrNull { it.id == id } }
@@ -278,11 +285,11 @@ private fun PostPanel(selected: PostView?, stack: List<PostView>, onSelect: (Str
 private fun StackRow(post: PostView, onClick: () -> Unit) {
     val c = post.category()
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(28.dp).clip(CircleShape).background(c?.color ?: Mosimo.info), contentAlignment = Alignment.Center) {
-            Icon(icon(c), null, Modifier.size(16.dp), tint = Mosimo.bgBase)
+        Box(Modifier.size(28.dp).clip(CircleShape).background(post.pinColor()), contentAlignment = Alignment.Center) {
+            Icon(post.ext.hazard?.icon() ?: icon(c), null, Modifier.size(16.dp), tint = Mosimo.bgBase)
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(post.body().lineSequence().first().ifBlank { c?.label.orEmpty() }, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary,
+            Text(post.ext.hazard?.title() ?: post.body().lineSequence().first().ifBlank { c?.label.orEmpty() }, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("${dateTime(post.createdAt)}・${shortDid(post.did, post.pubkey)}", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
         }
@@ -329,7 +336,7 @@ private fun HereSheet(fix: Location?, address: String?, granted: Boolean, busy: 
 
 @Composable
 private fun Connectivity(state: MeshState) {
-    val mesh = "メッシュ接続中 ${state.neighbors.size}台"
+    val mesh = "近くの端末 ${state.neighbors.size}台"
     if (state.network && state.onlineActive) Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Pill("オンライン", Mosimo.safe)
         Pill(mesh, Mosimo.info)
@@ -388,17 +395,23 @@ private fun icon(c: Category?): ImageVector = when (c) {
     null -> Icons.Filled.ChatBubble
 }
 
+/** Hazard posts take the hazard colour (grey for an unconfirmed claim), others their category colour. */
+private fun PostView.pinColor(): Color = ext.hazard?.color(officialHazard) ?: category()?.color ?: Mosimo.info
+
 /** Icon circle in the category colour over a dark label pill (Figma 5:233); the icon centre (16dp) is the anchor. */
 @Composable
 fun Pin(post: PostView, modifier: Modifier, count: Int = 1, onClick: () -> Unit) {
     val c = post.category()
-    val color = c?.color ?: Mosimo.info
-    val label = post.body().lineSequence().first().trim().let { if (it.length > 10) it.take(10) + "…" else it }.ifEmpty { c?.label.orEmpty() }
+    val color = post.pinColor()
+    val hazard = post.ext.hazard
+    val max = if (hazard != null) 16 else 10
+    val label = (hazard?.let { h -> listOfNotNull(h.title(), h.scales.firstOrNull()?.let(::scaleLabel)).joinToString(" ") } ?: post.body().lineSequence().first().trim())
+        .let { if (it.length > max) it.take(max) + "…" else it }.ifEmpty { c?.label.orEmpty() }
     // Semantics only, no pointer input: touches fall through to the map (see pinAt).
     Column(modifier.semantics { onClick(c?.label ?: "投稿") { onClick(); true } }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
             Box(Modifier.size(32.dp).clip(CircleShape).background(color).border(2.dp, Mosimo.bgBase, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(icon(c), c?.label ?: "投稿", Modifier.size(18.dp), tint = Mosimo.bgBase)
+                Icon(post.ext.hazard?.icon() ?: icon(c), c?.label ?: "投稿", Modifier.size(18.dp), tint = Mosimo.bgBase)
             }
             if (count > 1) Text("$count", Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-6).dp).clip(CircleShape).background(Mosimo.textPrimary)
                 .padding(horizontal = 5.dp), style = MaterialTheme.typography.labelSmall, color = Mosimo.bgBase, fontWeight = FontWeight.Bold)

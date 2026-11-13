@@ -64,6 +64,23 @@ async function fixture({ index = 0, parent = null, key = repoKey, identity = did
     entries: [...(parent?.entries ?? []), { key: path, value: recordCid }] };
 }
 
+/** delete §1-2: the author removes target's path from parent's tree and signs a new commit carried by a kind 5. */
+async function deletionFixture(target, parent, { rev = '3jzfcijpj3zzz', author = nostrKey } = {}) {
+  const entries = parent.entries.filter(entry => entry.key !== target.path);
+  let tree = await MST.create(new MemoryBlockstore());
+  for (const entry of entries) tree = await tree.add(entry.key, entry.value);
+  const unsigned = { did, version: 3, rev, prev: null, data: await tree.getPointer() };
+  const commit = { ...unsigned, sig: await repoKey.sign(cbor.encode(unsigned)) };
+  const commitBytes = new Uint8Array(cbor.encode(commit));
+  const commitCid = await cidFor(commitBytes);
+  const event = signEvent({ kind: 5, content: '', tags: [
+    ['t', namespace], ['e', target.event.id], ['k', '1'], ['mosimo:commit', b64(commitBytes)],
+    ['mosimo:base', parent.commitCid.toString()], ['mosimo:rkey', target.path.split('/')[1]],
+    ['mosimo:exp', '2026-10-19T12:34:56Z'],
+  ] }, author);
+  return { event, commit, commitBytes, commitCid, entries };
+}
+
 async function assertRepositoryCar(bytes, source, { proof = false } = {}) {
   const car = await readCar(bytes);
   assert.deepEqual(car.roots.map(cid => cid.toString()), [source.commitCid.toString()]);
@@ -286,13 +303,66 @@ test('NIP-09 tombstones are author-scoped, including deletion before original ar
   assert.equal((await ingestion.ingest(deletion(nostrKey))).accepted, true);
   assert.equal((await rows('SELECT * FROM deletions')).length, 2);
   assert.match((await ingestion.ingest(target.event)).message, /deleted by author/);
-  const visible = await rows(`SELECT e.id FROM events e WHERE e.id=$1 AND NOT EXISTS
-    (SELECT 1 FROM deletions d WHERE d.event_id=e.id AND d.pubkey=e.pubkey)`, [target.event.id]);
-  assert.deepEqual(visible, []);
+  const visible = id => rows(`SELECT e.id FROM events e WHERE e.id=$1 AND NOT EXISTS
+    (SELECT 1 FROM deletions d WHERE d.event_id=e.id AND d.pubkey=e.pubkey)`, [id]);
+  assert.deepEqual(await visible(target.event.id), []);
+  // delete §3: a post deleted before arrival is still stored (the deletion commit builds on it) but stays hidden.
   const later = await fixture({ index: 1 });
   assert.equal((await ingestion.ingest(signEvent({ kind: 5, tags: [['e', later.event.id]] }))).accepted, true);
-  assert.match((await ingestion.ingest(later.event)).message, /deleted by author/);
-  assert.equal((await rows('SELECT * FROM events WHERE id=$1', [later.event.id])).length, 0);
+  const stored = await ingestion.ingest(later.event);
+  assert.deepEqual([stored.accepted, /deleted by author/.test(stored.message)], [true, true]);
+  assert.equal((await rows('SELECT * FROM events WHERE id=$1', [later.event.id])).length, 1);
+  assert.deepEqual(await visible(later.event.id), []);
+});
+
+test('a post deletion commit is verified and applied; later posts build on it and the firehose carries a delete', async () => {
+  const first = await fixture();
+  const second = await fixture({ index: 1, parent: first });
+  assert.equal((await process(first)).status, 'validated');
+  assert.equal((await process(second)).status, 'validated');
+  const deletion = await deletionFixture(first, second);
+  assert.equal((await process(deletion)).status, 'validated');
+  assert.equal((await head()).head, deletion.commitCid.toString());
+  const saved = (await rows('SELECT * FROM commits WHERE cid=$1', [deletion.commitCid.toString()]))[0];
+  assert.deepEqual(JSON.parse(typeof saved.entries === 'string' ? saved.entries : JSON.stringify(saved.entries)).map(entry => entry.key), [second.path]);
+  const car = await readCar(saved.car);
+  assert.equal(car.blocks.get(first.recordCid), undefined, 'the deleted record leaves the repository CAR');
+  assert.ok(car.blocks.get(second.recordCid));
+  const frames = await rows('SELECT frame FROM streams ORDER BY seq');
+  const [header, rest] = decodeFirst(Buffer.from(frames.at(-1).frame), cbor.decodeOptions);
+  assert.deepEqual(header, { op: 1, t: '#commit' });
+  const body = cbor.decode(rest);
+  assert.deepEqual(body.ops.map(op => [op.action, op.path, op.cid, op.prev?.toString()]), [['delete', first.path, null, first.recordCid.toString()]]);
+  // The next post's base is the deletion commit, whose tree no longer holds the first post.
+  const third = await fixture({ index: 2, rev: '3jzfcijpj4222', parent: { commitCid: deletion.commitCid, entries: deletion.entries } });
+  assert.equal((await process(third)).status, 'validated');
+  assert.equal((await head()).head, third.commitCid.toString());
+});
+
+test('a deletion that arrives before its target waits, then applies once the target is stored hidden', async () => {
+  const first = await fixture();
+  const deletion = await deletionFixture(first, first);
+  assert.equal((await process(deletion)).status, 'retry');
+  assert.equal((await job(deletion)).error, 'Missing verified base commit');
+  const stored = await ingestion.ingest(first.event);
+  assert.equal(stored.accepted, true);
+  for (let count = 0; count < 5 && await ingestion.processOne(); count++) {}
+  assert.equal((await job(first)).status, 'validated');
+  assert.equal((await job(deletion)).status, 'validated');
+  assert.equal((await head()).head, deletion.commitCid.toString());
+  assert.deepEqual(await rows(`SELECT e.id FROM events e WHERE e.id=$1 AND NOT EXISTS
+    (SELECT 1 FROM deletions d WHERE d.event_id=e.id AND d.pubkey=e.pubkey)`, [first.event.id]), []);
+});
+
+test('deletion commits that remove a different path or carry a bad signature are not applied', async () => {
+  const first = await fixture();
+  const second = await fixture({ index: 1, parent: first });
+  assert.equal((await process(first)).status, 'validated');
+  assert.equal((await process(second)).status, 'validated');
+  // Claims to delete `first` but the signed tree also dropped `second`.
+  const wrong = await deletionFixture(first, { ...second, entries: [] });
+  assert.equal((await process(wrong)).status, 'invalid');
+  assert.equal((await head()).head, second.commitCid.toString());
 });
 
 test('NIP-56 reports in the report §1 shape are stored and forwarded without repository jobs; malformed ones are refused', async () => {

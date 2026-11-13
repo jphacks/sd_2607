@@ -19,12 +19,19 @@ internal object PublicDownload {
     const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
     /** attest.revocation.list §2: default full response bound. */
     const val MAX_REVOCATION_LIST_BYTES = 1_048_576
+    /**
+     * Ingress window: only posts created this recently are asked for, so the relay's fixed priority candidate budget
+     * (pds §7.2 answers CLOSED rather than a newest-only prefix) is not exhausted by long-expired posts. Mesh residence
+     * is capped at 24 h too, so older posts could not be imported anyway.
+     */
+    const val INGRESS_WINDOW_SECONDS = 86_400L
     /** Display pages download on any clock; only authorized ingress gets one, and PublicIngress fails closed on null. */
     fun ingressClock(confidence: ClockConfidence, nowMillis: Long): Instant? =
         if (confidence == ClockConfidence.TRUSTED) Instant.ofEpochMilli(nowMillis) else null
     /** PDS §7: `MOSIMO-REQ` priority snapshot, or the standard `REQ` fallback with the same filter. */
-    fun request(id: String, priority: Boolean, limit: Int = LIMIT, until: Long? = null): String {
-        val filter = mapOf("kinds" to listOf(1), "#t" to listOf(AtRepository.NAMESPACE), "limit" to limit) + (until?.let { mapOf("until" to it) } ?: emptyMap())
+    fun request(id: String, priority: Boolean, limit: Int = LIMIT, until: Long? = null, since: Long? = null): String {
+        val filter = mapOf("kinds" to listOf(1), "#t" to listOf(AtRepository.NAMESPACE), "limit" to limit) +
+            (until?.let { mapOf("until" to it) } ?: emptyMap()) + (since?.let { mapOf("since" to it) } ?: emptyMap())
         return json.writeValueAsString(if (priority) listOf("MOSIMO-REQ", id, mapOf("order" to "priority-v1", "filter" to filter)) else listOf("REQ", id, filter))
     }
     /** attest.revocation.list §1: `https://D/.well-known/mosimo/attest/revocations` as canonical CBOR, no redirects. */
@@ -50,10 +57,10 @@ internal object PublicDownload {
     }
 
     /** Each attempt gets a fresh socket: old relays may disconnect on an unknown verb. */
-    suspend fun fetch(http: OkHttpClient, token: Long, relay: String = DiskState.PDS_RELAY, timeoutMillis: Long = 15000): Batch {
+    suspend fun fetch(http: OkHttpClient, token: Long, relay: String = DiskState.PDS_RELAY, timeoutMillis: Long = 15000, since: Long? = null): Batch {
         val budget = Budget()
         for (priority in listOf(true, false)) {
-            if (attempt(http, relay, "public-$token-${if (priority) "p" else "r"}", priority, timeoutMillis, budget))
+            if (attempt(http, relay, "public-$token-${if (priority) "p" else "r"}", priority, timeoutMillis, budget, since = since))
                 return Batch(budget.events.values.toList(), fallback = !priority)
         }
         error("Ordinary REQ failed/timed out; not an empty success")
@@ -92,7 +99,7 @@ internal object PublicDownload {
     }
 
     private suspend fun attempt(http: OkHttpClient, relay: String, id: String, priority: Boolean,
-        timeoutMillis: Long, budget: Budget, limit: Int = LIMIT, until: Long? = null): Boolean {
+        timeoutMillis: Long, budget: Budget, limit: Int = LIMIT, until: Long? = null, since: Long? = null): Boolean {
         val frames = Channel<Frame>(limit + 2)
         val queuedBytes = AtomicInteger()
         val ws = http.newWebSocket(Request.Builder().url(relay).build(), object : WebSocketListener() {
@@ -115,7 +122,7 @@ internal object PublicDownload {
         })
         try {
             if (withTimeoutOrNull(15000) { frames.receiveCatching().getOrNull()?.opened } != true) return false
-            if (!ws.send(request(id, priority, limit, until))) return false
+            if (!ws.send(request(id, priority, limit, until, since))) return false
             val completed = withTimeoutOrNull(timeoutMillis) {
                 while (true) {
                     val received = frames.receiveCatching()

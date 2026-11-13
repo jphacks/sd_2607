@@ -9,7 +9,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         let state = mesh.state
-        let roots = mesh.trustRoots().filter(\.enabled)
+        let roots = state.trustRoots.map(\.root).filter(\.enabled)
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("設定").font(.titleLarge).foregroundStyle(Mosimo.textPrimary).padding(.top, 16).padding(.bottom, 8)
@@ -237,19 +237,27 @@ struct TrustScreen: View {
     @EnvironmentObject private var mesh: MeshCoordinator
     var body: some View {
         let state = mesh.state
-        let roots = mesh.trustRoots(), sources = mesh.trustSources()
+        let roots = state.trustRoots, sources = mesh.trustSources()
         SubScreen(title: "公式情報とみなす発信元") {
             Text("信頼の起点はこの端末の設定だけで決まります。受信したデータから追加されることはありません。").font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
-            Header(text: "信頼する root 鍵 \(roots.filter(\.enabled).count)")
+            Header(text: "信頼する root 鍵 \(roots.filter(\.root.enabled).count)")
             if roots.isEmpty { Group_ { NoneText(text: "なし（公的情報の投入は無効）") } }
-            ForEach(roots) { root in
+            ForEach(roots, id: \.root.pubkeyHex) { entry in
+                let root = entry.root
                 Group_ {
-                    SettingRow(icon: "checkmark.shield", tint: root.enabled ? Mosimo.safe : Mosimo.textTertiary, title: root.name,
-                               subtitle: "鍵 \(root.pubkey.prefix(16))…", value: root.enabled ? "有効" : "無効")
+                    SwitchRow(icon: "checkmark.shield", tint: root.enabled ? Mosimo.safe : Mosimo.textTertiary, title: root.name,
+                              subtitle: "\(originLabel(entry.origin))・鍵 \(root.pubkeyHex.prefix(16))…",
+                              isOn: Binding(get: { root.enabled }, set: { mesh.setRootEnabled(root.pubkeyHex, $0) }), id: "trust.root.\(root.pubkeyHex.prefix(16))")
                     Line()
-                    detail("許可する役割: \(root.roles.joined(separator: "・").nilIfEmpty ?? "なし")")
+                    HStack(spacing: 8) {
+                        detail("許可する役割: \(root.roles.sorted().joined(separator: "・").nilIfEmpty ?? "なし")")
+                        if entry.origin == .user {
+                            Button("削除") { mesh.removeRoot(root.pubkeyHex) }.font(.labelLarge).foregroundStyle(Mosimo.danger).padding(.trailing, 16)
+                        }
+                    }
                 }
             }
+            AddRootSection()
             Header(text: "取り込みを選択した Bot と種別")
             if sources.isEmpty { Group_ { NoneText() } }
             ForEach(sources) { source in
@@ -272,6 +280,50 @@ struct TrustScreen: View {
 
     private func detail(_ text: String) -> some View {
         Text(text).font(.bodyMedium).foregroundStyle(Mosimo.textSecondary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func originLabel(_ o: PublicIngress.RootOrigin) -> String {
+        switch o {
+        case .builtin: return "アプリに同梱"
+        case .test: return "テスト投稿用（開発版のみ）"
+        case .user: return "自分で追加"
+        }
+    }
+}
+
+/// Adds a root by its 64-hex public key. Only what the user types here becomes a trust anchor (attest §3).
+private struct AddRootSection: View {
+    @EnvironmentObject private var mesh: MeshCoordinator
+    @State private var key = ""
+    @State private var name = ""
+    @State private var error = false
+
+    var body: some View {
+        Header(text: "root 鍵を追加")
+        Group_ {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("信頼する発行元から公式の経路で受け取った公開鍵（64桁の16進数）だけを追加してください。追加した root から署名された転載・発表は公式情報として表示されます。")
+                    .font(.bodySmall).foregroundStyle(Mosimo.textSecondary)
+                TextField("公開鍵", text: $key)
+                    .font(.system(.body, design: .monospaced))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .padding(12).overlay(RoundedRectangle(cornerRadius: 8).stroke(error ? Mosimo.danger : Mosimo.borderStrong))
+                    .onChange(of: key) { _, _ in error = false }
+                    .accessibilityIdentifier("trust.addRoot.key")
+                if error {
+                    Text("64桁の16進数の公開鍵を入力してください").font(.bodySmall).foregroundStyle(Mosimo.danger)
+                }
+                TextField("名前（例: ○○市）", text: $name)
+                    .padding(12).overlay(RoundedRectangle(cornerRadius: 8).stroke(Mosimo.borderStrong))
+                HStack {
+                    Spacer()
+                    Button("追加する") { if mesh.addRoot(key, name) { key = ""; name = "" } else { error = true } }
+                        .font(.labelLarge).disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("trust.addRoot.add")
+                }
+            }
+            .padding(16)
+        }
     }
 }
 

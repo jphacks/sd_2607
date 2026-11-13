@@ -47,6 +47,9 @@ public final class MeshEngine {
     public var admit: (NostrEvent) -> Bool = { _ in true }
     /// Held but no longer offered or forwarded: author-deleted (core §11) or revoked (attest.chain §4.2) events.
     public var suppressed: (NostrEvent) -> Bool = { _ in false }
+    /// priority §2: the effective priority (0...3) of an event, the same whichever link or relay it came from. It orders
+    /// sending and decides eviction and whether a full store takes a new event at all (priority §2.1, mesh §11).
+    public var priority: (NostrEvent) -> Int = { _ in 1 }
     private var rates = [String: [Int64]]()
     private var sendRates = [String: [Int64]]()
 
@@ -66,7 +69,8 @@ public final class MeshEngine {
         bundle.add(type: Bundle.hopCount, data: hop.out)
         bundle.add(type: Bundle.bundleAge, data: [0])
         bundle.add(type: Bundle.payload, data: try EventCodec.encode(event))
-        guard let entry = try accept(bundle.marshal(), nowMillis: nowMillis, elapsedMillis: elapsedMillis) else { throw CoreError("already stored") }
+        // Local and relay-fetched events are bounded by their own fetch limits, not the per-peer flood brake.
+        guard let entry = try insert(bundle.marshal(), nowMillis, elapsedMillis, applyRateLimit: false) else { throw CoreError("already stored") }
         return entry
     }
 
@@ -111,8 +115,30 @@ public final class MeshEngine {
         return StoredBundle(event: entry.event, bytes: bytes, hop: entry.hop, receivedAtMillis: nowMillis, receivedElapsedMillis: elapsedMillis)
     }
 
+    /// Forwardable event IDs in send order (mesh §9: effective priority first).
     public func inventory(nowMillis: Int64, elapsedMillis: Int64) -> [String] {
-        entries().filter { eligible($0, nowMillis, elapsedMillis) }.map(\.event.id)
+        entries().filter { eligible($0, nowMillis, elapsedMillis) }.map(\.event).sorted(by: higherFirst).map(\.id)
+    }
+
+    /// Orders requested IDs for sending; unknown IDs go last and keep their relative order.
+    public func sendOrder<T>(_ items: [T], id: (T) -> String) -> [T] {
+        let indexed = items.enumerated().map { ($0.offset, $0.element, stored[id($0.element)]?.event) }
+        return indexed.sorted { a, b in
+            switch (a.2, b.2) {
+            case let (ea?, eb?): return higherFirst(ea, eb) || (!higherFirst(eb, ea) && a.0 < b.0)
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return a.0 < b.0
+            }
+        }.map(\.1)
+    }
+
+    /// Higher effective priority first, then newer, then by ID (mesh §9).
+    private func higherFirst(_ a: NostrEvent, _ b: NostrEvent) -> Bool {
+        let pa = priority(a), pb = priority(b)
+        if pa != pb { return pa > pb }
+        if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+        return a.id < b.id
     }
 
     /// Mesh §5.5 reconciliation set: forwardable events as `(created_at, id)` items.
@@ -176,7 +202,7 @@ public final class MeshEngine {
         if !admit(event) { throw BlockedAuthor(id: event.id) }
         var victimId: String?
         if stored.count >= MeshPolicy.maxEntries {
-            guard let v = victim(nowMillis, elapsedMillis) else { throw CoreError("storage capacity reached: all entries protected") }
+            guard let v = victim(event, nowMillis, elapsedMillis) else { throw CoreError("storage capacity reached: all entries protected or of higher priority") }
             victimId = v
         }
         if applyRateLimit {
@@ -194,11 +220,16 @@ public final class MeshEngine {
         return entry
     }
 
+    /// mesh §11: non-forwardable and relay-accepted → non-forwardable → lowest effective priority (oldest received among
+    /// equals). With only forwardable entries left, an incoming event below all of them is refused instead.
     // ponytail: no per-author fairness; the per-author accept rate is the only flood brake.
-    private func victim(_ nowMillis: Int64, _ elapsedMillis: Int64) -> String? {
+    private func victim(_ incoming: NostrEvent, _ nowMillis: Int64, _ elapsedMillis: Int64) -> String? {
         let candidates = entries().filter { canEvict($0) }
         let dead = candidates.filter { !eligible($0, nowMillis, elapsedMillis) }
-        return (dead.first { relayed($0.event.id) } ?? dead.first ?? candidates.first)?.event.id
+        if let d = dead.first(where: { relayed($0.event.id) }) ?? dead.first { return d.event.id }
+        // min(by:) keeps the first of equals, i.e. the oldest received.
+        guard let lowest = candidates.min(by: { priority($0.event) < priority($1.event) }) else { return nil }
+        return priority(lowest.event) <= priority(incoming) ? lowest.event.id : nil
     }
 
     private func eligible(_ entry: StoredBundle, _ nowMillis: Int64, _ elapsedMillis: Int64) -> Bool {

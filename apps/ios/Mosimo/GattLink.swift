@@ -58,6 +58,8 @@ final class GattLink: NSObject, Link {
         let central: CBCentral?
         var node: String?
         var connected = false
+        /// The exchange reconciled over this link; a drop before that counts as a failed attempt.
+        var synced = false
         var chunk = 20
         var reader = CborSequenceReader(limit: Exchange.messageLimit)
         var out = [[UInt8]]()
@@ -93,6 +95,10 @@ final class GattLink: NSObject, Link {
     private var incompatible = [String: Date]()
     /// First time each peer was seen; lets the tie-break loser (or a node-less background peer) dial after a wait.
     private var firstSeen = [String: Date]()
+    /// Last advert per node, for the nearby count; last reconciliation per node, so a peer without an advertised
+    /// summary (iOS) is not redialed sooner than [resync].
+    private var lastSeen = [String: Date](), lastSyncedAt = [String: Date]()
+    private static let resync: TimeInterval = 60
     /// mesh.adv: our candidate summary, the last advertised summary per node, and the pair recorded at the last sync.
     private var summary = [UInt8](repeating: 0, count: 3)
     private var lastAdvertSummary = [String: [UInt8]]()
@@ -165,7 +171,11 @@ final class GattLink: NSObject, Link {
 
     func synced(_ peer: String) {
         queue.async { [self] in
-            guard let n = peers[peer]?.node, let s = lastAdvertSummary[n] else { return }
+            guard let p = peers[peer] else { return }
+            p.synced = true
+            if let id = p.peripheral?.identifier { backoff[id] = nil }
+            if let n = p.node { lastSyncedAt[n] = Date() }
+            guard let n = p.node, let s = lastAdvertSummary[n] else { return }
             lastSynced[n] = (s, summary)
         }
     }
@@ -215,8 +225,19 @@ final class GattLink: NSObject, Link {
         }
     }
 
+    func nearby(within seconds: Double) -> Set<String> {
+        queue.sync {
+            let now = Date()
+            lastSeen = lastSeen.filter { now.timeIntervalSince($0.value) <= max(seconds, Self.resync) }
+            return Set(lastSeen.filter { now.timeIntervalSince($0.value) <= seconds }.keys)
+        }
+    }
+
     private func connect(_ peripheral: CBPeripheral, _ ad: GattAdvert) {
+        if let n = ad.node, n != node { lastSeen[n] = Date() }
         guard running, ad.node != node, peers.count < Self.maxLinks else { return }
+        // Without a summary we cannot tell whether anything changed (mesh.adv §4), so a synced peer rests a while.
+        if ad.summary == nil, let n = ad.node, let t = lastSyncedAt[n], Date().timeIntervalSince(t) < Self.resync { return }
         // Node-less (backgrounded iOS) peers are dialed too; Exchange enforces the lab peer at HELLO.
         if let allowed = allowedPeerNode, let n = ad.node, n != allowed { return }
         if let n = ad.node, let s = ad.summary { lastAdvertSummary[n] = s }
@@ -246,7 +267,6 @@ final class GattLink: NSObject, Link {
         if p.connected { return }
         p.connected = true
         trace("connected \(p.handle) chunk \(p.chunk)")
-        if let id = p.peripheral?.identifier { backoff[id] = nil }
         let node = p.node
         emit { [weak self] in if let self { $0.onConnected(self, p.handle, node: node) } }
     }
@@ -301,7 +321,9 @@ final class GattLink: NSObject, Link {
         // ponytail: CoreBluetooth cannot cut an inbound central; it is only forgotten (writes are then refused).
         if let n = p.node { firstSeen[n] = nil }
         if p.connected { emit { [weak self] in if let self { $0.onDisconnected(self, p.handle) } } }
-        else if let id = p.peripheral?.identifier {
+        // A link dropped before reconciling (refused HELLO, incompatible peer, full peer) backs off like a failed
+        // dial; otherwise duplicate-advert scanning redials it within seconds and starves other peers.
+        if !p.synced, let id = p.peripheral?.identifier {
             let n = (backoff[id]?.0 ?? 0) + 1
             backoff[id] = (n, Date().addingTimeInterval(Self.backoffSeconds[min(n, Self.backoffSeconds.count) - 1]))
         }

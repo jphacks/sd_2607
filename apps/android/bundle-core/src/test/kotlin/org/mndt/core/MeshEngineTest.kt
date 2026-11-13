@@ -96,10 +96,37 @@ class MeshEngineTest {
         assertThrows(Exception::class.java) { MeshEngine().accept(extended(0x14), now, 0) }
     }
 
-    @Test fun enforcesPerAuthorRate() {
-        val a = MeshEngine()
-        repeat(12) { index -> a.originate(post("message $index"), now, 0) }
-        assertThrows(Exception::class.java) { a.originate(post("rate limited"), now, 0) }
+    @Test fun enforcesPerAuthorRateOnLinksOnly() {
+        // Local and relay-fetched events (originate) are bounded by their own fetch limits; the brake is per link peer.
+        val source = MeshEngine()
+        val bundles = List(MeshPolicy.PER_AUTHOR_PER_MINUTE + 1) { index -> source.originate(post("message $index"), now, 0).bytes }
+        val b = MeshEngine()
+        bundles.dropLast(1).forEach { b.accept(it, now, 0) }
+        val error = assertThrows(IllegalArgumentException::class.java) { b.accept(bundles.last(), now, 0) }
+        assertTrue(error.message.orEmpty().contains("rate"))
+    }
+
+    @Test fun effectivePriorityOrdersSendingAndEviction() {
+        val engine = MeshEngine()
+        val urgent = mutableSetOf<String>()
+        engine.priority = { if (it.id in urgent) 3 else if (it.content.startsWith("bulk")) 0 else 1 }
+        val older = engine.originate(post("normal old"), now, 0)
+        val high = post("urgent").also { urgent += it.id }.let { engine.originate(it, now, 0) }
+        val newer = engine.originate(author.createPost("normal new", now + 1000).event, now + 1000, 0)
+        assertEquals(listOf(high.event.id, newer.event.id, older.event.id), engine.inventory(now + 1000, 0))
+        // A peer's WANT queue: higher priority first, IDs no longer held last.
+        assertEquals(listOf(high.event.id, older.event.id, "gone"), engine.sendOrder(listOf(older.event.id, "gone", high.event.id)) { it })
+
+        // Full of forwardable entries: the lowest priority (oldest among equals) goes; a lower newcomer is refused.
+        repeat(MeshPolicy.MAX_ENTRIES - 3) { engine.originate(post("normal $it"), now, 0) }
+        val bulk = post("bulk late")
+        val refused = assertThrows(IllegalArgumentException::class.java) { engine.originate(bulk, now, 0) }
+        assertTrue(refused.message.orEmpty().contains("capacity"))
+        val later = post("urgent late").also { urgent += it.id }
+        engine.originate(later, now, 0)
+        assertEquals(MeshPolicy.MAX_ENTRIES, engine.entries().size)
+        assertFalse(engine.entries().any { it.event.id == older.event.id })
+        assertTrue(engine.entries().any { it.event.id == high.event.id })
     }
 
     @Test fun fullStoreSkipsProtectedPostsEvenWhenDeadAndAcceptedByAnotherRelay() {

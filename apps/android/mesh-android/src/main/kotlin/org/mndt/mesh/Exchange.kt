@@ -136,7 +136,8 @@ internal class Exchange(
 
     /** Offers newly held candidates to every peer; side 0 also re-reconciles when its set changed since the last pass. */
     fun broadcastInventory() = sessions.values.filter { it.peer != null }.forEach { s ->
-        inventory(s)
+        // mesh §5.6: INVENTORY only offers what became a candidate after reconciliation, never the whole store.
+        if (s.sawReconcile) inventory(s)
         if (s.side == 0 && s.reconcile == null && s.reconciledSummary?.contentEquals(engine.summary(now(), elapsed())) != true) startReconcile(s)
     }
 
@@ -151,7 +152,13 @@ internal class Exchange(
                 s.requests[it.requestId]?.remove(it.eventId)
             }
             s.outgoing.values.filter { it.complete && t - it.startedAt > TRANSFER_TIMEOUT_MS }.forEach { s.outgoing.remove(it.id) }
-            if (s.reconcile != null && t - s.reconcileStarted > RECONCILE_TIMEOUT_MS) { s.reconcile = null; log("reconciliation timed out with ${s.label}") }
+            // mesh §3.4: a BLE link is released once reconciliation ran and nothing moved for a while; the summary
+            // in the next advert decides whether it is worth reconnecting (mesh.adv §4).
+            if (s.link.name == "ble" && s.sawReconcile && s.reconcile == null && s.queue.isEmpty() && s.sending == null &&
+                s.outgoing.isEmpty() && s.incoming.isEmpty() && s.requests.values.all { it.isEmpty() } &&
+                t - s.lastActivity >= SETTLED_MS) { log("exchange with ${s.label} settled; releasing link"); drop(s); continue }
+            // A peer that never answers is gone (killed app, stale link); free the slot so a fresh link can form.
+            if (s.reconcile != null && t - s.reconcileStarted > RECONCILE_TIMEOUT_MS) { log("reconciliation timed out with ${s.label}; dropping"); drop(s); continue }
             s.requests.entries.removeAll { it.value.isEmpty() }
             if (s.peer != null) pump(s)
         }
@@ -163,7 +170,17 @@ internal class Exchange(
     fun forgetRefused() = refused.clear()
 
     private fun hello(s: Session, m: Msg.Hello) {
-        require(s.peer == null) { "Duplicate HELLO" }
+        val previous = s.peer
+        if (previous != null) {
+            // The same HELLO again is a duplicate; a new nonce on the same link means the peer restarted its
+            // session (e.g. a relay node reset after a subscription change). Start over instead of dropping the link.
+            if (previous.nonce.contentEquals(m.nonce)) return
+            log("peer ${s.label} restarted its session on ${s.link.name}:${s.handle}")
+            sessions.remove(s.link to s.handle); messages.remove(s)
+            connected(s.link, s.handle, s.node)
+            sessions[s.link to s.handle]?.let { hello(it, m) }
+            return
+        }
         if (m.nonce.contentEquals(s.nonce)) { drop(s); return }
         s.peer = m
         s.link.hello(s.handle)
@@ -207,8 +224,11 @@ internal class Exchange(
             s.link.synced(s.handle)
             return
         }
-        // Peer-initiated: answer from our current candidate set.
-        val responder = Negentropy(candidates(), frameLimit(s) - Messages.RECONCILE_OVERHEAD)
+        // Peer-initiated: answer from our current candidate set. The initiator wants what it lacks of these, so
+        // they count as offered and a later INVENTORY lists only newer candidates (mesh §5.6).
+        val items = candidates()
+        items.mapTo(s.offered) { hex(it.id) }
+        val responder = Negentropy(items, frameLimit(s) - Messages.RECONCILE_OVERHEAD)
         send(s, Messages.encode(Msg.Reconcile(m.id, responder.reconcile(m.message) ?: return)))
     }
 
@@ -241,6 +261,8 @@ internal class Exchange(
             if (h in eligible && h in allowed) s.queue += h to m.requestId
             else send(s, Messages.encode(Msg.Result(Msg.Target.Event(s.peerSide, m.requestId, id), Messages.RESULT_UNAVAILABLE, Messages.REASON_MISSING)))
         }
+        // mesh §9: higher effective priority first across everything this peer is waiting for.
+        engine.sendOrder(s.queue.toList()) { it.first }.let { s.queue.clear(); s.queue.addAll(it) }
         log("want ${m.ids.size} from ${s.label}, queued ${s.queue.size}")
         pump(s)
     }
@@ -356,9 +378,9 @@ internal class Exchange(
         } catch (e: IllegalArgumentException) {
             val why = e.message.orEmpty()
             val reason = when {
+                "capacity" in why || "rate" in why -> Messages.REASON_RESOURCES
                 "size" in why || "limit" in why -> Messages.REASON_SIZE
                 "expired" in why || "deadline" in why -> Messages.REASON_EXPIRED
-                "capacity" in why || "rate" in why -> Messages.REASON_RESOURCES
                 else -> Messages.REASON_INVALID
             }
             log("rejected bundle from ${s.label}: $why")
@@ -401,6 +423,8 @@ internal class Exchange(
         const val MAX_QUEUED_FRAGMENTS = 2
         const val MESSAGES_PER_MINUTE = 4096
         const val HELLO_TIMEOUT_MS = 60_000L
+        /** mesh §3.4: quiet time after reconciliation before a BLE link is released (as the ESP32 relay does). */
+        const val SETTLED_MS = 5_000L
         const val TRANSFER_TIMEOUT_MS = 90_000L
         const val RECONCILE_TIMEOUT_MS = 60_000L
     }

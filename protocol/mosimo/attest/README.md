@@ -41,7 +41,7 @@ flowchart TD
 | [attest.revocation.subkey](revocation/subkey/README.md) | revocation | 主鍵を失った所有者による事前発行形の活性化 |
 | [attest.signing](signing/README.md) | attest | 認証局の署名要求エンドポイントと自動発行 |
 | [attest.external](external/README.md) | attest | NIP-39 に基づく外部アカウントの証明 |
-| [attest.importer](importer/README.md) | attest.chain、public.bsaf | 転載サーバーの認証と受信者の自動投入の認可 |
+| [attest.importer](importer/README.md) | attest.chain、public.bsaf | 転載サーバーの認証と受信者による転載の認可 |
 
 ## 前提
 
@@ -92,7 +92,7 @@ type KeyAttestation = Signed<KeyAttestationBody>;
 | `attest` | 他の鍵に鍵署名を発行できる。§2.2 の `delegation` と併用する | 本書 |
 | `identity` | 組織または所有者の発信として表示してよい | [attest.chain §4.1](chain/README.md#41-役割と投稿の扱い) |
 | `public-information` | 組織が自らの名で公的情報を発信し、同じ組織の過去の投稿の訂正・取消により旧版の拡散停止を認可できる | attest.chain §4.1 |
-| `import` | 外部情報を転載し、受信者の自動投入の対象になれる | [attest.importer](importer/README.md) |
+| `import` | 外部情報を転載し、受信者に認可済みの転載として扱われ得る | [attest.importer](importer/README.md) |
 
 受信者は自分が解釈できる役割だけを扱い、未知の役割は保持する。
 

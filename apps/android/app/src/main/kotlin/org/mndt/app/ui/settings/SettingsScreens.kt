@@ -34,26 +34,18 @@ import org.mndt.app.ui.post.dateTime
 import org.mndt.app.ui.startRelay
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.core.ClockConfidence
+import org.mndt.core.PublicIngress
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 
 /** One selected (Bot DID, BSAF type) pair from the local trust config. */
 internal class TrustSource(val botDid: String, val types: List<String>)
-/** A locally configured root key: the only place trust can start (attest §3). */
-internal class TrustRoot(val name: String, val pubkey: String, val roles: List<String>, val enabled: Boolean)
-
 private fun JSONArray?.objects() = if (this == null) emptyList() else (0 until length()).map(::getJSONObject)
-private fun JSONArray?.strings() = if (this == null) emptyList() else (0 until length()).map(::getString)
 
 private fun trustConfig(context: Context): JSONObject? =
     runCatching { JSONObject(context.assets.open("mosimo-public-trust.json").bufferedReader().use { it.readText() }) }.getOrNull()
 
-internal fun trustRoots(context: Context): List<TrustRoot> = runCatching {
-    trustConfig(context)!!.getJSONArray("roots").objects().map {
-        TrustRoot(it.getString("name"), it.getString("pubkey"), it.optJSONArray("roles").strings(), it.optBoolean("enabled"))
-    }
-}.getOrDefault(emptyList())
 
 internal fun trustSources(context: Context): List<TrustSource> = runCatching {
     trustConfig(context)!!.optJSONArray("selected").objects()
@@ -66,21 +58,25 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
     val context = LocalContext.current
     val mesh = koinInject<MeshCoordinator>()
     val state by mesh.state.collectAsStateWithLifecycle()
-    val roots = remember { trustRoots(context) }
+    val roots = state.trustRoots
     val sources = remember { trustSources(context) }
     Text("信頼の起点はこの端末の設定だけで決まります。受信したデータから追加されることはありません。",
         style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
-    Header("信頼する root 鍵 ${roots.count { it.enabled }}")
+    Header("信頼する root 鍵 ${roots.count { it.root.enabled }}")
     if (roots.isEmpty()) Group { Text("なし（公的情報の投入は無効）", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
-    roots.forEach { root ->
+    roots.forEach { (root, origin) ->
         Group {
-            SettingRow(Icons.Outlined.VerifiedUser, if (root.enabled) Mosimo.safe else Mosimo.textTertiary, root.name,
-                "鍵 ${root.pubkey.take(16)}…", value = if (root.enabled) "有効" else "無効")
+            SwitchRow(Icons.Outlined.VerifiedUser, if (root.enabled) Mosimo.safe else Mosimo.textTertiary, root.name,
+                "${originLabel(origin)}・鍵 ${root.pubkeyHex.take(16)}…", root.enabled) { mesh.setRootEnabled(root.pubkeyHex, it) }
             Line()
-            Text("許可する役割: ${root.roles.joinToString("・").ifEmpty { "なし" }}", Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("許可する役割: ${root.roles.sorted().joinToString("・").ifEmpty { "なし" }}", Modifier.weight(1f).padding(vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
+                if (origin == PublicIngress.RootOrigin.USER) TextButton({ mesh.removeRoot(root.pubkeyHex) }) { Text("削除", color = Mosimo.danger) }
+            }
         }
     }
+    AddRoot(mesh)
     Header("取り込みを選択した Bot と種別")
     if (sources.isEmpty()) Group { Text("なし", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
     sources.forEach { source ->
@@ -98,6 +94,33 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
             Line()
             Text(state.revocationChecked.entries.joinToString("\n") { (domain, at) -> "$domain: ${dateTime(at)} に確認" },
                 Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+        }
+    }
+}
+
+private fun originLabel(o: PublicIngress.RootOrigin) = when (o) {
+    PublicIngress.RootOrigin.BUILTIN -> "アプリに同梱"
+    PublicIngress.RootOrigin.TEST -> "テスト投稿用（開発版のみ）"
+    PublicIngress.RootOrigin.USER -> "自分で追加"
+}
+
+/** Adds a root by its 64-hex public key. Only what the user types here becomes a trust anchor (attest §3). */
+@Composable
+private fun AddRoot(mesh: MeshCoordinator) {
+    var key by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+    Header("root 鍵を追加")
+    Group {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("信頼する発行元から公式の経路で受け取った公開鍵（64桁の16進数）だけを追加してください。追加した root から署名された転載・発表は公式情報として表示されます。",
+                style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
+            OutlinedTextField(key, { key = it; error = false }, Modifier.fillMaxWidth(), label = { Text("公開鍵") }, singleLine = true,
+                isError = error, supportingText = if (error) {{ Text("64桁の16進数の公開鍵を入力してください") }} else null,
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace))
+            OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("名前（例: ○○市）") }, singleLine = true)
+            Button({ if (mesh.addRoot(key, name)) { key = ""; name = "" } else error = true }, Modifier.align(Alignment.End), enabled = key.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Mosimo.primary, contentColor = Mosimo.onPrimary)) { Text("追加する") }
         }
     }
 }

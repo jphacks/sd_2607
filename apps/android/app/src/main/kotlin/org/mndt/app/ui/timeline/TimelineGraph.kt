@@ -160,6 +160,7 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
             Spacer(Modifier.weight(1f))
             post.category()?.let { CategoryBadge(it) }
         }
+        HazardLines(post)
         Text(title, style = MaterialTheme.typography.titleMedium, color = Mosimo.textPrimary)
         if (rest.isNotEmpty()) Text(rest, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary, maxLines = 3)
         Row(verticalAlignment = Alignment.CenterVertically) {

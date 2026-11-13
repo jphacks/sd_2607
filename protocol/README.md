@@ -13,6 +13,8 @@ flowchart TD
   pri[.priority 配送優先度ヒント]
   del[.delete 削除要求]
   rep[.report 通報]
+  hz[.hazard 災害情報]
+  hzt[.hazard.earthquake・tsunami・<br/>volcano・weather・cyclone]
   mesh[.mesh BPv7 メッシュ配送]
   madv[.mesh.adv 広告要約]
   ml2[.mesh.l2cap L2CAP CoC]
@@ -37,7 +39,10 @@ flowchart TD
   eq[.public.jma.earthquake]
   wx[.public.jma.weather]
   bsaf[.public.bsaf]
-  core --> geo & val & ann & pri & del & rep & mesh & pds & pub & dm
+  hzm[.public.cap・jma・bsaf.hazard<br/>災害情報への対応]
+  core --> geo & val & ann & pri & del & rep & hz & mesh & pds & pub & dm
+  hz --> hzt
+  cap & jma & bsaf --> hzm --> hz
   mesh --> madv & ml2 & mz & mt
   core --> chain
   att --> chain & rev & sign & ext
@@ -58,6 +63,12 @@ flowchart TD
 | `dev.jisaku.mosimo.priority` | [mosimo/priority/](mosimo/priority/README.md) | 著者の配送優先度ヒントと実効優先度 |
 | `dev.jisaku.mosimo.delete` | [mosimo/delete/](mosimo/delete/README.md) | 著者による投稿の削除要求（NIP-09）と削除後の commit、ノードでの扱い |
 | `dev.jisaku.mosimo.report` | [mosimo/report/](mosimo/report/README.md) | 不適切な投稿の通報（NIP-56）と、通報の集計による配送の停止 |
+| `dev.jisaku.mosimo.hazard` | [mosimo/hazard/](mosimo/hazard/README.md) | 国・形式に依存しない災害情報の共通の意味。CAP の分類・深刻度・切迫度・確実性・行動、地域スケール、発生時刻 |
+| `dev.jisaku.mosimo.hazard.earthquake` | [mosimo/hazard/earthquake/](mosimo/hazard/earthquake/README.md) | 地震の種類別拡張。発生・緊急地震速報・評価の区別、震源、マグニチュード |
+| `dev.jisaku.mosimo.hazard.tsunami` | [mosimo/hazard/tsunami/](mosimo/hazard/tsunami/README.md) | 津波の種類別拡張。最大の高さ、到達時刻 |
+| `dev.jisaku.mosimo.hazard.volcano` | [mosimo/hazard/volcano/](mosimo/hazard/volcano/README.md) | 火山の種類別拡張。現象、GVP 番号による火山の識別 |
+| `dev.jisaku.mosimo.hazard.weather` | [mosimo/hazard/weather/](mosimo/hazard/weather/README.md) | 気象・水文の種類別拡張。現象の語彙 |
+| `dev.jisaku.mosimo.hazard.cyclone` | [mosimo/hazard/cyclone/](mosimo/hazard/cyclone/README.md) | 熱帯低気圧の種類別拡張。名前、中心、気圧、風速 |
 | `dev.jisaku.mosimo.mesh` | [mosimo/mesh/](mosimo/mesh/README.md) | BPv7 による保存・中継、BLE/LAN/Nearby、接触時交換、Negentropy による差分照合、メッシュ用 CBOR |
 | `dev.jisaku.mosimo.mesh.adv` | [mosimo/mesh/adv/](mosimo/mesh/adv/README.md) | 広告に載せる所持要約。接続前に接続の要否を判断する |
 | `dev.jisaku.mosimo.mesh.l2cap` | [mosimo/mesh/l2cap/](mosimo/mesh/l2cap/README.md) | L2CAP CoC への経路切替 |
@@ -72,25 +83,29 @@ flowchart TD
 | `dev.jisaku.mosimo.attest.revocation.subkey` | [mosimo/attest/revocation/subkey/](mosimo/attest/revocation/subkey/README.md) | 主鍵を失ったときの失効 |
 | `dev.jisaku.mosimo.attest.signing` | [mosimo/attest/signing/](mosimo/attest/signing/README.md) | 署名要求と自動発行、NIP-05 |
 | `dev.jisaku.mosimo.attest.external` | [mosimo/attest/external/](mosimo/attest/external/README.md) | NIP-39 外部アカウント証明 |
-| `dev.jisaku.mosimo.attest.importer` | [mosimo/attest/importer/](mosimo/attest/importer/README.md) | 転載サーバーの認証と自動投入の認可 |
+| `dev.jisaku.mosimo.attest.importer` | [mosimo/attest/importer/](mosimo/attest/importer/README.md) | 転載サーバーの認証と受信者による転載の認可 |
 | `dev.jisaku.mosimo.public` | [mosimo/public/](mosimo/public/README.md) | 公的情報の取り込み、出典、配送同値、更新による置換 |
 | `dev.jisaku.mosimo.public.cap` | [mosimo/public/cap/](mosimo/public/cap/README.md) | CAP 1.2 |
+| `dev.jisaku.mosimo.public.cap.hazard` | [mosimo/public/cap/hazard/](mosimo/public/cap/hazard/README.md) | CAP から災害情報への対応（変換規則） |
 | `dev.jisaku.mosimo.public.edxl` | [mosimo/public/edxl/](mosimo/public/edxl/README.md) | EDXL-DE 1.0 |
 | `dev.jisaku.mosimo.public.jma` | [mosimo/public/jma/](mosimo/public/jma/README.md) | 気象庁 XML 共通 |
+| `dev.jisaku.mosimo.public.jma.hazard` | [mosimo/public/jma/hazard/](mosimo/public/jma/hazard/README.md) | 気象庁 XML から災害情報への対応（変換規則） |
 | `dev.jisaku.mosimo.public.jma.eew` | [mosimo/public/jma/eew/](mosimo/public/jma/eew/README.md) | 緊急地震速報 |
 | `dev.jisaku.mosimo.public.jma.earthquake` | [mosimo/public/jma/earthquake/](mosimo/public/jma/earthquake/README.md) | 地震観測情報 |
 | `dev.jisaku.mosimo.public.jma.weather` | [mosimo/public/jma/weather/](mosimo/public/jma/weather/README.md) | 気象防災情報 |
 | `dev.jisaku.mosimo.public.bsaf` | [mosimo/public/bsaf/](mosimo/public/bsaf/README.md) | BSAF v1 互換 |
+| `dev.jisaku.mosimo.public.bsaf.hazard` | [mosimo/public/bsaf/hazard/](mosimo/public/bsaf/hazard/README.md) | BSAF から災害情報への対応（変換規則）と都道府県の範囲表 |
 | `dev.jisaku.mosimo.dm` | [mosimo/dm/](mosimo/dm/README.md) | 暗号化した 1 対 1 メッセージ（NIP-04）、構造化オブジェクトの運搬、配達通知、表示名 |
 
 ## 実装の入口
 
 | 実装 | 読む順序 |
 |---|---|
-| 発信アプリ | コア → geo・validity・annotation → mesh。身元を示す場合は attest.chain |
+| 発信アプリ | コア → geo・validity・annotation → mesh。身元を示す場合は attest.chain、災害の種類・深刻度を示す場合は hazard |
+| 災害情報の表示 | コア → hazard と種類別拡張 → geo → attest.chain（公的な発表と申告の区別） |
 | 表示・中継だけのアプリ | コア → mesh。未知の拡張は書き換えず保持する |
 | PDS・Nostr リレー | コア → pds → attest.revocation.list §5 |
-| 公的情報の取り込み | public → cap・edxl・jma → attest.importer |
+| 公的情報の取り込み | public → cap・edxl・jma → attest.importer。共通の災害情報拡張は hazard と各形式の hazard 対応 |
 | 認証局 | attest → attest.revocation → attest.revocation.list → attest.revocation.request。自動発行は attest.signing、個人向けは attest.external、転載サーバーへの発行は attest.importer |
 | ゲートウェイ（Android・ESP32） | mesh → attest.chain → attest.importer |
 

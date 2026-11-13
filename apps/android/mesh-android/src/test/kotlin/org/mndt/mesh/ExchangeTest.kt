@@ -68,6 +68,19 @@ class ExchangeTest {
         assertFalse("ab" in la.ends)
     }
 
+    @Test fun aPeerRestartingItsSessionOnTheSameLinkIsFollowedNotDropped() {
+        val a = node(); val b = node()
+        val (la, lb) = connect(a, b)
+        // A relay node resets its session (new nonce) on the still-open link, e.g. after a subscription change.
+        val event = author().createPost("再開後の投稿", now).event
+        b.engine.originate(event, now, clock)
+        b.exchange.disconnected(lb, "ba"); b.exchange.connected(lb, "ba", null)
+        pump()
+        assertTrue(la.rejected.isEmpty())
+        assertTrue("ab" in la.ends)
+        assertEquals(setOf(event.id), a.ids())
+    }
+
     @Test fun storeCarryForwardReachesANodeThatNeverMetTheAuthor() {
         val a = node(); val b = node(); val c = node()
         val event = author().createPost("避難所A 開設", now).event
