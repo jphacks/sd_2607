@@ -27,6 +27,12 @@ const mac = [
   { entry: byKind["dmg-x64"], label: ".dmg（Intel）" },
 ].filter((d) => d.entry);
 
+const linux = [
+  { entry: byKind["appimage"], label: ".AppImage" },
+  { entry: byKind["deb"], label: ".deb" },
+  { entry: byKind["rpm"], label: ".rpm" },
+].filter((d) => d.entry);
+
 const version = files[0]?.version;
 ---
 
@@ -82,6 +88,22 @@ const version = files[0]?.version;
           {mac.length > 0 ? (
             <ul class="sim-files">
               {mac.map((d) => (
+                <li>
+                  <a class="sim-button sim-button-light" href={href(d.entry!)} download>
+                    <span>{d.label}</span>
+                    <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="sim-soon">準備中です。</p>
+          )}
+
+          <h2 class="sim-platform">Linux <small>x86_64</small></h2>
+          {linux.length > 0 ? (
+            <ul class="sim-files">
+              {linux.map((d) => (
                 <li>
                   <a class="sim-button sim-button-light" href={href(d.entry!)} download>
                     <span>{d.label}</span>
@@ -177,6 +199,9 @@ const version = files[0]?.version;
         </p>
         <p>
           Mac でも Apple の公証を受けていないため、初めて開くときに「“もしもシミュレーター”は開いていません」と表示されることがあります。「完了」を押してから「システム設定」の「プライバシーとセキュリティ」を開き、下のほうにある「このまま開く」を押すと起動できます。
+        </p>
+        <p>
+          Linux では、.AppImage に実行権限を付けて（<code>chmod +x</code>）そのまま起動できます。Ubuntu・Debian では .deb を、Fedora などでは .rpm を入れると、必要なライブラリ（WebKitGTK）も一緒に入ります。Ubuntu 22.04 以降と同じ世代のディストリビューションで動きます。
         </p>
         <p>
           地図には国土地理院の地図タイルを使うため、インターネット接続が必要です。画面の表示に使う Microsoft Edge WebView2 が入っていない PC では、インストール時に自動で取得します。
