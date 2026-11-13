@@ -1,0 +1,16 @@
+[workspace]
+members = ["core", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+# The simulation is heavy even in dev builds of the app.
+[profile.dev.package.mosimo-sim-core]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"

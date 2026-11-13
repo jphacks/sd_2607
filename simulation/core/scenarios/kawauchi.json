@@ -1,0 +1,809 @@
+{
+ "id": "kawauchi",
+ "name": "川内キャンパス全体（東日本大震災）",
+ "description": "2011-03-11 14:46、春休み中の東北大学川内キャンパス。全学教育の講義棟・図書館・部活動の学生と教職員が、停電と発信規制の中で安否を伝える。とんペディア（学生の約9割が利用）にもしもプロトコルが入っていた場合を比べる。大学の安否確認が完了したのは3/30。",
+ "start": "2011-03-11T14:46:00+09:00",
+ "duration_h": 168,
+ "dt_schedule": [
+  [
+   0,
+   0.5
+  ],
+  [
+   6,
+   1
+  ],
+  [
+   48,
+   2
+  ]
+ ],
+ "origin": [
+  38.2595,
+  140.853
+ ],
+ "view": {
+  "center": [
+   38.259,
+   140.856
+  ],
+  "zoom": 16,
+  "max_zoom": 20
+ },
+ "defaults": {
+  "population_scale": 1.0,
+  "adoption": 0.2,
+  "adoption_students": 0.9,
+  "mesh_range_m": 25
+ },
+ "carriers": [
+  {
+   "id": "docomo",
+   "name": "ドコモ",
+   "share": 0.5,
+   "outage_factor": 1.0
+  },
+  {
+   "id": "au",
+   "name": "au",
+   "share": 0.25,
+   "outage_factor": 1.0,
+   "direct_to_cell": true
+  },
+  {
+   "id": "softbank",
+   "name": "ソフトバンク",
+   "share": 0.25,
+   "outage_factor": 1.1
+  }
+ ],
+ "zones": [
+  {
+   "id": "sendai",
+   "name": "仙台市青葉区",
+   "power_out": [
+    [
+     0,
+     0.98
+    ],
+    [
+     24,
+     0.95
+    ],
+    [
+     48,
+     0.7
+    ],
+    [
+     72,
+     0.4
+    ],
+    [
+     96,
+     0.2
+    ],
+    [
+     120,
+     0.1
+    ],
+    [
+     168,
+     0.03
+    ]
+   ],
+   "cell_out": [
+    [
+     0,
+     0.1
+    ],
+    [
+     3,
+     0.3
+    ],
+    [
+     6,
+     0.5
+    ],
+    [
+     12,
+     0.65
+    ],
+    [
+     26,
+     0.7
+    ],
+    [
+     48,
+     0.5
+    ],
+    [
+     72,
+     0.3
+    ],
+    [
+     96,
+     0.15
+    ],
+    [
+     144,
+     0.05
+    ],
+    [
+     240,
+     0.02
+    ]
+   ],
+   "fixed_out": [
+    [
+     0,
+     0.3
+    ],
+    [
+     3,
+     0.9
+    ],
+    [
+     48,
+     0.8
+    ],
+    [
+     96,
+     0.4
+    ],
+    [
+     168,
+     0.2
+    ]
+   ],
+   "water_out": [
+    [
+     0,
+     0.8
+    ],
+    [
+     168,
+     0.4
+    ]
+   ],
+   "musen_ok": 0.3
+  }
+ ],
+ "settlements": [],
+ "sites": [
+  {
+   "id": "LA",
+   "name": "講義棟A棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2598,
+    140.8513
+   ],
+   "radius_m": 35,
+   "occupancy": 60,
+   "student_share": 0.85,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "LB",
+   "name": "講義棟B棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2602,
+    140.8513
+   ],
+   "radius_m": 35,
+   "occupancy": 80,
+   "student_share": 0.85,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "LC",
+   "name": "講義棟C棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2605,
+    140.8513
+   ],
+   "radius_m": 35,
+   "occupancy": 60,
+   "student_share": 0.85,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "LIB",
+   "name": "附属図書館本館",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2584,
+    140.8519
+   ],
+   "radius_m": 45,
+   "occupancy": 260,
+   "student_share": 0.85,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "HAGI",
+   "name": "川内萩ホール",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2588,
+    140.8541
+   ],
+   "radius_m": 40,
+   "occupancy": 60,
+   "student_share": 0.4,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "KOSEI",
+   "name": "川内厚生会館（生協食堂）",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.26,
+    140.8529
+   ],
+   "radius_m": 30,
+   "occupancy": 120,
+   "student_share": 0.8,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "GYM",
+   "name": "川内体育館・サブアリーナ（部活動）",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2612,
+    140.8527
+   ],
+   "radius_m": 40,
+   "occupancy": 150,
+   "student_share": 0.95,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "BUN",
+   "name": "文学研究科棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2576,
+    140.8516
+   ],
+   "radius_m": 40,
+   "occupancy": 160,
+   "student_share": 0.55,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "HO",
+   "name": "法学研究科棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2579,
+    140.8525
+   ],
+   "radius_m": 35,
+   "occupancy": 110,
+   "student_share": 0.5,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "KEI",
+   "name": "経済学研究科棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.257,
+    140.8518
+   ],
+   "radius_m": 35,
+   "occupancy": 120,
+   "student_share": 0.5,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "KYO",
+   "name": "教育学研究科棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2567,
+    140.8532
+   ],
+   "radius_m": 35,
+   "occupancy": 90,
+   "student_share": 0.5,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "RESEARCH",
+   "name": "東北アジア研究センター・研究棟",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2595,
+    140.85
+   ],
+   "radius_m": 35,
+   "occupancy": 90,
+   "student_share": 0.3,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "CLUB",
+   "name": "課外活動共用施設（サークル棟）",
+   "kind": "building",
+   "zone": "sendai",
+   "pos": [
+    38.2617,
+    140.851
+   ],
+   "radius_m": 30,
+   "occupancy": 110,
+   "student_share": 1.0,
+   "fixed_from_h": 47.4
+  },
+  {
+   "id": "PLAZA_N",
+   "name": "川内北キャンパス 中央広場（一時集合場所）",
+   "kind": "open",
+   "zone": "sendai",
+   "pos": [
+    38.2601,
+    140.8522
+   ],
+   "radius_m": 50
+  },
+  {
+   "id": "PLAZA_S",
+   "name": "萩ホール前広場（一時集合場所）",
+   "kind": "open",
+   "zone": "sendai",
+   "pos": [
+    38.2586,
+    140.853
+   ],
+   "radius_m": 45
+  },
+  {
+   "id": "GYM_SHELTER",
+   "name": "川内体育館（学生・帰宅困難者の一時滞在、推定）",
+   "kind": "shelter",
+   "zone": "sendai",
+   "pos": [
+    38.2613,
+    140.853
+   ],
+   "radius_m": 35,
+   "floor": [
+    45,
+    35
+   ],
+   "capacity": 400,
+   "designated": false,
+   "known_to_hq": false,
+   "stock_water_l": 200,
+   "stock_food": 200,
+   "power_from_h": 50,
+   "fixed_from_h": 47.4,
+   "note": "市の指定避難所としての記録は確認できていない"
+  },
+  {
+   "id": "KATAHIRA_ES",
+   "name": "仙台市立片平丁小学校（指定避難所）",
+   "kind": "shelter",
+   "zone": "sendai",
+   "pos": [
+    38.2552,
+    140.8655
+   ],
+   "radius_m": 40,
+   "floor": [
+    40,
+    30
+   ],
+   "capacity": 600,
+   "designated": true,
+   "stock_water_l": 1500,
+   "stock_food": 1500,
+   "power_from_h": 60
+  },
+  {
+   "id": "HQ_UNIV",
+   "name": "東北大学 災害対策本部（片平）",
+   "kind": "hq",
+   "zone": "sendai",
+   "pos": [
+    38.2541,
+    140.869
+   ],
+   "radius_m": 50,
+   "satphone_from_h": 1,
+   "fixed_from_h": 47.4,
+   "power_from_h": 0
+  }
+ ],
+ "road_nodes": [
+  {
+   "id": "campus",
+   "pos": [
+    38.2595,
+    140.852
+   ]
+  },
+  {
+   "id": "ohashi",
+   "pos": [
+    38.2588,
+    140.86
+   ]
+  },
+  {
+   "id": "yodo",
+   "pos": [
+    38.264,
+    140.858
+   ]
+  },
+  {
+   "id": "city",
+   "pos": [
+    38.26,
+    140.876
+   ]
+  },
+  {
+   "id": "katahira",
+   "pos": [
+    38.2545,
+    140.867
+   ]
+  },
+  {
+   "id": "west",
+   "pos": [
+    38.257,
+    140.842
+   ]
+  }
+ ],
+ "roads": [
+  {
+   "a": "campus",
+   "b": "ohashi",
+   "name": "大橋",
+   "speed_kmh": 20
+  },
+  {
+   "a": "ohashi",
+   "b": "city",
+   "name": "青葉通・広瀬通",
+   "speed_kmh": 20
+  },
+  {
+   "a": "ohashi",
+   "b": "katahira",
+   "name": "市道",
+   "speed_kmh": 20
+  },
+  {
+   "a": "campus",
+   "b": "yodo",
+   "name": "澱橋",
+   "speed_kmh": 20
+  },
+  {
+   "a": "yodo",
+   "b": "city",
+   "name": "市道",
+   "speed_kmh": 20
+  },
+  {
+   "a": "campus",
+   "b": "west",
+   "name": "川内・亀岡方面",
+   "speed_kmh": 20
+  }
+ ],
+ "exits": [
+  {
+   "id": "home_city",
+   "name": "市内の自宅・下宿",
+   "node": "city",
+   "travel_h": [
+    [
+     0,
+     0.5
+    ]
+   ],
+   "internet": false
+  },
+  {
+   "id": "home_west",
+   "name": "八幡・亀岡方面の下宿",
+   "node": "west",
+   "travel_h": [
+    [
+     0,
+     0.4
+    ]
+   ],
+   "internet": false
+  }
+ ],
+ "towers": {
+  "radius_m": 800,
+  "people_per_tower": 300,
+  "extra": [
+   [
+    38.262,
+    140.86
+   ],
+   [
+    38.256,
+    140.848
+   ],
+   [
+    38.256,
+    140.865
+   ]
+  ]
+ },
+ "congestion": {
+  "voice_success": [
+   [
+    0,
+    0.08
+   ],
+   [
+    3,
+    0.12
+   ],
+   [
+    12,
+    0.25
+   ],
+   [
+    24,
+    0.4
+   ],
+   [
+    48,
+    0.7
+   ],
+   [
+    72,
+    0.9
+   ],
+   [
+    96,
+    1.0
+   ]
+  ],
+  "data_success": [
+   [
+    0,
+    0.2
+   ],
+   [
+    6,
+    0.25
+   ],
+   [
+    24,
+    0.45
+   ],
+   [
+    48,
+    0.8
+   ],
+   [
+    72,
+    1.0
+   ]
+  ],
+  "fire_lines_per_h": 20
+ },
+ "broadcasts": [
+  {
+   "t_h": 0.05,
+   "kind": "tsunami_warning",
+   "text": "大津波警報（宮城県）",
+   "channels": [
+    "tv",
+    "radio",
+    "musen",
+    "cell_broadcast",
+    "internet"
+   ],
+   "expires_h": 48
+  },
+  {
+   "t_h": 1.0,
+   "kind": "official",
+   "text": "地下鉄・JR運転見合わせ、帰宅困難者は一時滞在を",
+   "channels": [
+    "tv",
+    "radio",
+    "internet"
+   ],
+   "expires_h": 72
+  },
+  {
+   "t_h": 6,
+   "kind": "official",
+   "text": "仙台市: 指定避難所を開設",
+   "channels": [
+    "radio",
+    "internet"
+   ],
+   "expires_h": 168
+  }
+ ],
+ "mobile_bs": [
+  {
+   "name": "移動基地局車(ドコモ 片平)",
+   "pos": [
+    38.2545,
+    140.867
+   ],
+   "from_h": 60,
+   "radius_m": 1200,
+   "carriers": [
+    "docomo"
+   ]
+  },
+  {
+   "name": "移動基地局車(au 市中心部)",
+   "pos": [
+    38.26,
+    140.876
+   ],
+   "from_h": 54,
+   "radius_m": 1500,
+   "carriers": [
+    "au"
+   ]
+  }
+ ],
+ "starlink": {
+  "terminal_mbps": 100,
+  "cell_capacity_mbps": 1500,
+  "user_kbps": 400,
+  "wifi_radius_m": 70
+ },
+ "starlink_direct": {
+  "beam_msgs_per_min": 300,
+  "visibility": 0.85,
+  "indoor_factor": 0.1,
+  "device_share": 0.6,
+  "attempts_per_h": 2
+ },
+ "rescue": {
+  "teams": [
+   [
+    0,
+    2
+   ]
+  ],
+  "local_teams": 0,
+  "duration_h": [
+   1,
+   3
+  ],
+  "search_find_per_h": 0.1,
+  "search_from_h": 6,
+  "survival": [
+   [
+    0,
+    1.0
+   ],
+   [
+    24,
+    0.74
+   ],
+   [
+    72,
+    0.25
+   ]
+  ],
+  "light_share": 0.8,
+  "neighbor_rescue_h": 1,
+  "trapped_per_person_collapsed": 0
+ },
+ "supply": {
+  "water_l_per_h": [
+   [
+    0,
+    0
+   ]
+  ],
+  "food_per_h": [
+   [
+    0,
+    0
+   ]
+  ],
+  "trucks": [
+   [
+    0,
+    0
+   ]
+  ],
+  "truck_water_l": 1000,
+  "truck_food": 1000,
+  "water_l_per_person_day": 3,
+  "food_per_person_day": 3,
+  "surplus_days": 4,
+  "plan_every_h": 6,
+  "liaisons_per_zone": 3,
+  "liaison_from_h": 1
+ },
+ "behavior": {
+  "evac_delay_h": 0.1,
+  "self_evac_tsunami": 0,
+  "warned_evac_tsunami": 0,
+  "talk_per_h": 4.0,
+  "talk_items": 2,
+  "trips_per_day": 0.5,
+  "signal_trip_share": 0.1,
+  "leave_per_day": 0.15,
+  "phone_by_age": [
+   0.9,
+   0.98,
+   0.9
+  ],
+  "family_outside": 0.9,
+  "phone_tries_per_h": 1.0,
+  "drain_per_h": 0.03,
+  "mesh_drain_per_h": 0.01,
+  "charge_per_h": 0.4,
+  "car_charge": 0.1,
+  "sns_post": 0.15,
+  "broadcast_per_h": 0.4,
+  "radio_without_power": 0.3,
+  "board_read_h": 3,
+  "report_in_person": 0.5,
+  "household_size": 1.0,
+  "staff_ratio": 0.02,
+  "report_safety_to_hq": 0.02
+ },
+ "hazards": {
+  "fake_sns_rate": 0.0
+ },
+ "sources": [
+  {
+   "label": "東北大学 東日本大震災 東北大学の記録（安否確認 3/30完了ほか）",
+   "url": "https://www.tohoku.ac.jp/japanese/disaster/"
+  },
+  {
+   "label": "総務省 東日本大震災における通信の被災・規制状況（音声規制 ドコモ90%・au95%・SB70%）",
+   "url": "https://www.soumu.go.jp/menu_seisaku/ictseisaku/net_anzen/hijyo/"
+  },
+  {
+   "label": "仙台市民アンケート（停電平均4.3日、当日キャリアメール52%）",
+   "url": "https://www.city.sendai.jp/"
+  },
+  {
+   "label": "Darmstadt field test of smartphone ad hoc networks (125 phones, median link 30 m)",
+   "url": "https://www.informatik.tu-darmstadt.de/"
+  }
+ ],
+ "notes": [
+  "春休み中のため在校者は約1,400人と推定（学期中の平日は全学教育の学生だけで約4,900人。人口倍率で再現できる）。",
+  "SINET は発災28分後、学内基幹網は2時間50分後に停止し、3/13 14:10に復旧。",
+  "大学の安否確認は約20日かかり3/30に完了（文学研究科は3/22時点で93%）。",
+  "音声の発信規制は最大でドコモ90%・au95%・ソフトバンク70%、パケットはドコモ30%。",
+  "2015年の訓練では「スマホdeリレー」で川内→片平に1時間以内に675件のテキストを中継した。",
+  "川内体育館が避難所として使われたかは確認できておらず、推定として置いている。"
+ ]
+}

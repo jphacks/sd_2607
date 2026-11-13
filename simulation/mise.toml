@@ -1,0 +1,42 @@
+[tools]
+rust = "1.97.1"
+node = "24"
+uv = "0.9"
+
+[tasks.setup]
+description = "Install the frontend and Tauri CLI dependencies"
+run = "npm ci"
+
+[tasks.dev]
+description = "Run the app with hot reload"
+depends = ["setup"]
+run = "npm run tauri dev"
+
+[tasks.build]
+description = "Build the release app bundle (src-tauri/../target/release/bundle)"
+depends = ["setup"]
+run = "npm run tauri build"
+
+[tasks.test]
+description = "Run the simulation tests and type-check the frontend"
+depends = ["setup"]
+run = ["cargo test -p mosimo-sim-core --release", "npx tsc --noEmit"]
+
+[tasks.sim]
+description = "Run headless: mise run sim -- noto 0 0.5 0.9 --seeds 3 [--trace] [--hours H] [--rescue F]"
+run = "cargo run -q --release -p mosimo-sim-core --bin mosimo-sim --"
+
+[tasks.experiments]
+description = "Run the experiment suite and write experiments/results.json and experiments/report.md"
+run = "cargo run -q --release -p mosimo-sim-core --bin experiments -- experiments"
+
+[tasks.scenarios]
+description = "Regenerate core/scenarios/*.json from generate.py and the geography files"
+run = "uv run --with numpy python3 core/scenarios/generate.py"
+
+[tasks.geo]
+description = "Rebuild households, districts and roads from e-Stat, OpenStreetMap and 地理院 DEM (downloads into ~/.cache/mosimo-sim)"
+run = [
+  "uv run --with numpy --with scipy python3 core/scenarios/data/build_geo.py shelter",
+  "uv run --with numpy --with scipy python3 core/scenarios/data/build_geo.py noto",
+]
