@@ -15,6 +15,14 @@
       "file": "mosimo-simulator_0.1.0_x64.msi",
       "bytes": 4874240,
       "sha256": "a20ff0babed83b40da2bb7afd19758c8bbe4aac44ea64e9f9a4fc2dcb73b2c83"
+    },
+    {
+      "kind": "dmg-aarch64",
+      "platform": "macos",
+      "version": "0.1.0",
+      "file": "mosimo-simulator_0.1.0_aarch64.dmg",
+      "bytes": 5040023,
+      "sha256": "51c414baf157d632c0ecbeedce0f0b06af491f99fe36c48c5e56434b5d009bca"
     }
   ]
 }
