@@ -55,6 +55,8 @@
 ## Live Demo
 **被災地からの投稿を閲覧できるWeb Client**: https://mosimo.oriom.dev
 
+**官公庁向けWeb Client**: https://gov.mosimo.oriom.dev/
+
 以下は内部的に使っているサーバー
 + **AT Protocol PDS 兼 nostr Relay**: https://pds.oriom.dev
 + **AT Protocol AppView**: https://appview.oriom.dev
