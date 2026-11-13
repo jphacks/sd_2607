@@ -29,6 +29,11 @@ const char* DIRECTORY = "/mesh";
 const char* TEMP = "/mesh/.incoming";
 const char* SEEN = "/mesh-seen"; // Outside /mesh's bundle slot/file budget.
 constexpr size_t SEEN_LIMIT = 1024, SEEN_RECORD = 36;
+const char* SEEN_TEMP = "/mesh-seen.tmp";
+// mesh §11 local limit for entries restored after a reboot (power-off residence unknown).
+constexpr uint64_t RESTORED_RESIDENCE_MS = 2ULL * 60 * 60 * 1000;
+// priority §2: no sender is authorized without a trusted clock (importer §3), so the hint is capped at 1.
+uint8_t effectivePriority(const BundleInfo& info) { return std::min<uint8_t>(info.priorityHint, 1); }
 constexpr size_t MAX_DELETIONS = 64, MAX_REPORTS = 128;
 const uint8_t SEEN_HEADER[] = {'M','S','E','E','N','1','\r','\n'};
 
@@ -123,7 +128,8 @@ bool Relay::begin(std::function<bool(const uint8_t*, size_t)> send,
     if (!LittleFS.exists(DIRECTORY) && !LittleFS.mkdir(DIRECTORY)) { note("store directory failed"); return false; }
     if (!restoreSeen() || !restore()) return false;
     ready_ = true;
-    note("store " + std::to_string(entries_.size()) + " cold; not forwarding");
+    note("store " + std::to_string(entries_.size()) + " restored; relaying for at most " +
+         std::to_string(RESTORED_RESIDENCE_MS / 60000) + " min from boot");
     return true;
 }
 
@@ -160,7 +166,27 @@ bool Relay::restoreSeen() {
     }
     errno = 0; file.close();
     if (errno) return seenFailure("close failed");
-    if (seen_.size() == SEEN_LIMIT) note("seen history full; no new requests when cache full");
+    return true;
+}
+// Keeps the newer half of a full journal: write it to a temp file, then replace the journal atomically.
+bool Relay::compactSeen() {
+    const size_t keep = SEEN_LIMIT / 2, from = seen_.size() - keep;
+    File in = LittleFS.open(SEEN, "r");
+    if (!in || in.isDirectory() || in.size() != sizeof SEEN_HEADER + seen_.size() * SEEN_RECORD ||
+        !in.seek(sizeof SEEN_HEADER + from * SEEN_RECORD)) { in.close(); return seenFailure("compact read failed"); }
+    LittleFS.remove(SEEN_TEMP);
+    File out = LittleFS.open(SEEN_TEMP, "w");
+    bool ok = out && out.write(SEEN_HEADER, sizeof SEEN_HEADER) == sizeof SEEN_HEADER;
+    uint8_t record[SEEN_RECORD];
+    for (size_t i = 0; ok && i < keep; ++i)
+        ok = in.read(record, sizeof record) == sizeof record && seenRecordValid(record) && out.write(record, sizeof record) == sizeof record;
+    in.close();
+    if (ok) out.flush();
+    ok = ok && out.size() == sizeof SEEN_HEADER + keep * SEEN_RECORD;
+    out.close();
+    if (!ok || !LittleFS.rename(SEEN_TEMP, SEEN)) { LittleFS.remove(SEEN_TEMP); return seenFailure("compact write failed"); }
+    seen_.erase(seen_.begin(), seen_.begin() + from);
+    note("seen history compacted to " + std::to_string(keep));
     return true;
 }
 bool Relay::wasSeen(const std::string& id) {
@@ -183,7 +209,7 @@ bool Relay::rememberEvicted(const std::string& id) {
     if (!seenHealthy_) return false;
     if (wasSeen(id)) return true;
     if (!seenHealthy_) return false;
-    if (seen_.size() >= SEEN_LIMIT) return seenFailure("full");
+    if (seen_.size() >= SEEN_LIMIT && !compactSeen()) return false;
     const auto bytes = idBytes(id);
     uint8_t record[SEEN_RECORD];
     std::copy(bytes.begin(), bytes.end(), record);
@@ -213,7 +239,6 @@ bool Relay::rememberEvicted(const std::string& id) {
     std::array<uint8_t, 8> prefix;
     std::copy(bytes.begin(), bytes.begin() + prefix.size(), prefix.begin());
     seen_.push_back(prefix);
-    if (seen_.size() == SEEN_LIMIT) note("seen history full; no new requests when cache full");
     return true;
 }
 bool Relay::restore() {
@@ -249,7 +274,9 @@ bool Relay::restore() {
             e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
             e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
             e.createdAt = info.createdAt; e.topic = info.topic; e.pubkey = info.pubkey;
-            entries_.push_back(std::move(e)); // cold=true; no fabricated received timestamp.
+            e.priority = effectivePriority(info);
+            e.receivedMs = clockMs(); // cold: the restored window counts from boot, not from the unknown receipt.
+            entries_.push_back(std::move(e));
             if (!info.target.empty()) requests.push_back(std::move(info));
         } else note("invalid store file retained");
         f = root.openNextFile();
@@ -268,12 +295,15 @@ void Relay::moderate(const BundleInfo& info) {
             if (deletions_.size() >= MAX_DELETIONS) deletions_.erase(deletions_.begin());
             deletions_.push_back({info.target, info.pubkey});
         }
+        // report §2 / delete §5: a reporter's own deletion request withdraws that report from the count.
+        reports_.erase(std::remove_if(reports_.begin(), reports_.end(), [&](const Report& r) {
+            return r.id == info.target && r.reporter == info.pubkey; }), reports_.end());
     } else if (info.kind == 1984 && info.reported != info.pubkey) {
         bool known = false;
         for (const Report& r : reports_) known = known || (r.target == info.target && r.reporter == info.pubkey);
-        if (!known) {
+        if (!known && !withdrawn(info.id, info.pubkey)) {
             if (reports_.size() >= MAX_REPORTS) reports_.erase(reports_.begin());
-            reports_.push_back({info.target, info.pubkey});
+            reports_.push_back({info.id, info.target, info.pubkey});
         }
     } else return;
     for (size_t i = 0; i < entries_.size(); ++i) {
@@ -283,6 +313,10 @@ void Relay::moderate(const BundleInfo& info) {
     }
     // Reported enough before arriving: journal it so it is never requested (deletions wait for the author check).
     if (reporters(info.target, "") >= REPORT_THRESHOLD && !wasSeen(info.target) && seenHealthy_) rememberEvicted(info.target);
+}
+bool Relay::withdrawn(const std::string& reportId, const std::string& reporter) const {
+    for (const Deletion& d : deletions_) if (d.target == reportId && d.author == reporter) return true;
+    return false;
 }
 size_t Relay::reporters(const std::string& id, const std::string& author) const {
     std::vector<const std::string*> distinct;
@@ -309,18 +343,30 @@ bool Relay::dropEntry(size_t index) {
     note("stopped " + e.id.substr(0, 8) + " (deletion request or reports)");
     return true;
 }
-size_t Relay::victim(uint64_t now) const {
+size_t Relay::victim(uint64_t now, uint8_t incoming) const {
     auto dead = [now](const Entry& e) {
-        return e.cold || now < e.receivedMs || e.age >= e.lifetime ||
+        return (e.cold && now - e.receivedMs >= RESTORED_RESIDENCE_MS) || now < e.receivedMs || e.age >= e.lifetime ||
             now - e.receivedMs >= std::min(MAX_RESIDENCE_MS, e.lifetime - e.age);
     };
+    // mesh §11: non-forwardable first, then the lowest effective priority, oldest received among equals.
     size_t best = entries_.size();
     for (size_t i = 0; i < entries_.size(); ++i) {
         if (gatewayProtected(entries_[i])) continue;
-        if (best == entries_.size() || (dead(entries_[i]) && !dead(entries_[best])) ||
-            (dead(entries_[i]) == dead(entries_[best]) && entries_[i].receivedMs < entries_[best].receivedMs)) best = i;
+        if (best == entries_.size()) { best = i; continue; }
+        const Entry& a = entries_[i];
+        const Entry& b = entries_[best];
+        if (dead(a) != dead(b)) { if (dead(a)) best = i; continue; }
+        if (!dead(a) && a.priority != b.priority) { if (a.priority < b.priority) best = i; continue; }
+        if (a.receivedMs < b.receivedMs) best = i;
     }
+    // A forwardable entry is never pushed out by a lower-priority newcomer.
+    if (best != entries_.size() && !dead(entries_[best]) && entries_[best].priority > incoming) return entries_.size();
     return best;
+}
+bool Relay::sendsBefore(const Entry& a, const Entry& b) const {
+    if (a.priority != b.priority) return a.priority > b.priority;
+    if (a.createdAt != b.createdAt) return a.createdAt > b.createdAt;
+    return a.id < b.id;
 }
 bool Relay::read(const Entry& e, std::vector<uint8_t>& bytes) {
     File file = LittleFS.open(e.path.c_str(), "r");
@@ -392,7 +438,7 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
         }
     }
     if (path.empty() || fileCount_ == STORE_FILES || size > STORE_BYTES - diskBytes_) {
-        selected = victim(clockMs());
+        selected = victim(clockMs(), effectivePriority(info));
         if (selected == entries_.size()) { LittleFS.remove(TEMP); return failed("no-verified-victim", ENOSPC); }
         // The only copy may be evicted only after its verified ID is durably
         // remembered. A journal failure preserves the old cache and sends no ACK.
@@ -452,6 +498,7 @@ bool Relay::save(const uint8_t* data, size_t size, const BundleInfo& info, uint6
     e.id = info.id; e.age = info.age; e.lifetime = info.lifetime;
     e.hop = info.hop; e.hopLimit = info.hopLimit; e.size = size; e.kind = info.kind;
     e.createdAt = info.createdAt; e.topic = info.topic; e.pubkey = info.pubkey;
+    e.priority = effectivePriority(info);
     e.receivedMs = receivedMs; e.cold = false;
     entries_.push_back(std::move(e));
     return true;
@@ -461,7 +508,7 @@ const Relay::Entry* Relay::find(const std::string& id) const {
     return nullptr;
 }
 bool Relay::eligible(const Entry& e, uint64_t now) const {
-    return !e.cold && now >= e.receivedMs && e.age < e.lifetime &&
+    return (!e.cold || now - e.receivedMs < RESTORED_RESIDENCE_MS) && now >= e.receivedMs && e.age < e.lifetime &&
         now - e.receivedMs < MAX_RESIDENCE_MS && now - e.receivedMs < e.lifetime - e.age &&
         e.hop < std::min(e.hopLimit, MAX_HOPS);
 }
@@ -520,7 +567,7 @@ size_t Relay::acquisitionCapacity() const {
     size_t capacity = STORE_FILES - std::min(fileCount_, STORE_FILES);
     size_t evictable = 0;
     for (const Entry& e : entries_) if (!gatewayProtected(e)) ++evictable;
-    capacity += std::min(evictable, SEEN_LIMIT - seen_.size());
+    capacity += evictable; // A full eviction journal compacts itself (compactSeen).
     return capacity;
 }
 
@@ -637,6 +684,8 @@ void Relay::reconcile(const msg::Message& m) {
         reconcile_.reset();
         reconciled_ = true;
         note("reconciled: peer lacks " + std::to_string(have.size()) + ", we lack " + std::to_string(need.size()));
+        // Negentropy walks ranges in ascending time; ask for the newest first (mesh §9 freshness).
+        std::reverse(need.begin(), need.end());
         want(need);
         offer(have);
         return;
@@ -691,6 +740,7 @@ void Relay::offer(const std::vector<std::string>& ids) {
         const Entry* e = find(id);
         if (e && eligible(*e, now) && !contains(peerHas_, id) && !contains(offered_, id)) fresh.push_back(id);
     }
+    std::stable_sort(fresh.begin(), fresh.end(), [this](const std::string& a, const std::string& b) { return sendsBefore(*find(a), *find(b)); });
     const size_t per = msg::idsPerMessage(frameLimit());
     for (size_t at = 0; at < fresh.size(); at += per) {
         std::vector<msg::Id> list;
@@ -711,6 +761,13 @@ void Relay::served(const msg::Message& m) {
             push(msg::result(msg::TARGET_EVENT, 1 - side_, m.first, &id, msg::UNAVAILABLE, msg::RESOURCES));
         } else queue_.push_back({h, m.first});
     }
+    // mesh §9: everything this peer waits for goes higher priority, then newer, first.
+    std::stable_sort(queue_.begin(), queue_.end(), [this](const Pending& a, const Pending& b) {
+        const Entry* x = find(a.id);
+        const Entry* y = find(b.id);
+        if (!x || !y) return x && !y;
+        return sendsBefore(*x, *y);
+    });
 }
 
 void Relay::closeRequestItem(uint64_t request, const std::string& id) {
@@ -801,7 +858,9 @@ void Relay::finish() {
         reply(msg::REJECTED, msg::POLICY);
         return;
     }
-    if (!seenHealthy_ || (fileCount_ >= STORE_FILES && victim(clockMs()) == entries_.size())) {
+    if (!seenHealthy_ || (fileCount_ >= STORE_FILES && victim(clockMs(), effectivePriority(info)) == entries_.size())) {
+        // Full of protected or higher-priority entries: not worth requesting again from this peer.
+        remember(refused_, info.id);
         reply(msg::REJECTED, msg::RESOURCES);
         return;
     }

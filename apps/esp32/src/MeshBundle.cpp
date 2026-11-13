@@ -22,6 +22,23 @@ const char* DESTINATION = "//mosimo.jisaku.dev/~post";
 bool equal(Slice s, const char* text) {
     return s.n == std::strlen(text) && std::memcmp(s.p, text, s.n) == 0;
 }
+// priority §1: C({level}) with level 0..3 (the extension's $type is the tag name). Anything else is invalid.
+bool priorityLevel(Slice value, uint8_t& level) {
+    Reader r(value);
+    uint64_t count;
+    if (!r.head(5, count) || count == UINT64_MAX || count > 8) return false;
+    bool found = false;
+    for (uint64_t i = 0; i < count; ++i) {
+        Slice key;
+        if (!r.bytes(3, key)) return false;
+        if (equal(key, "level")) {
+            uint64_t v;
+            if (found || !r.uint(v) || v > 3) return false;
+            level = static_cast<uint8_t>(v); found = true;
+        } else if (!r.skip()) return false;
+    }
+    return found && r.done();
+}
 bool startsWith(Slice s, const char* prefix) {
     const size_t n = std::strlen(prefix);
     return s.n >= n && std::memcmp(s.p, prefix, n) == 0;
@@ -237,6 +254,10 @@ bool event(Slice payload, BundleInfo& info, std::string& error, std::string* jso
     const bool omitted = kind == 1 || kind == 8173;
     bool hasDeadline = false;
     uint64_t deadline = 0;
+    // priority §2: more than one or an invalid extension falls back to 1, never repaired upward.
+    unsigned priorityTags = 0;
+    bool priorityValid = false;
+    uint8_t priorityHint = 1;
     for (uint64_t i = 0; tagCount == UINT64_MAX ? !p.atBreak() : i < tagCount; ++i) {
         if (i >= 256) { error = "too many tags"; return false; }
         uint64_t length;
@@ -264,8 +285,10 @@ bool event(Slice payload, BundleInfo& info, std::string& error, std::string* jso
                 error = "typed value outside position 1 of a two-element tag"; return false;
             } else if (major == 2) {
                 if (!p.bytes(2, value)) { error = "invalid typed byte tag"; return false; }
-                if (equal(name, "mosimo:commit") || (startsWith(name, "mosimo:ext:") && name.n > 11)) quote(tags, base64(value));
-                else if (equal(name, "mosimo:base")) quote(tags, value.n ? base32(value) : std::string());
+                if (equal(name, "mosimo:commit") || (startsWith(name, "mosimo:ext:") && name.n > 11)) {
+                    quote(tags, base64(value));
+                    if (equal(name, "mosimo:ext:dev.jisaku.mosimo.priority")) { ++priorityTags; priorityValid = priorityLevel(value, priorityHint); }
+                } else if (equal(name, "mosimo:base")) quote(tags, value.n ? base32(value) : std::string());
                 else { error = "unexpected typed byte tag"; return false; }
             } else if (major == 0) {
                 uint64_t number;
@@ -316,6 +339,7 @@ bool event(Slice payload, BundleInfo& info, std::string& error, std::string* jso
     if (!h.finish(digest) || !verifySchnorr(pub.p, sig.p, digest)) { error = "invalid event signature"; return false; }
     info.id = hex(digest, 32); info.text = string(content); info.pubkey = pubHex;
     info.kind = static_cast<uint16_t>(kind); info.createdAt = created; info.expiresAt = deadline;
+    info.priorityHint = priorityTags == 1 && priorityValid ? priorityHint : 1;
     if (json) {
         if (tags.size() + quoted.size() > MAX_JSON_BYTES) { error = "export JSON size limit"; return false; }
         *json = "{\"id\":\"" + info.id + "\",\"pubkey\":\"" + pubHex + "\",\"created_at\":" + std::to_string(created) +

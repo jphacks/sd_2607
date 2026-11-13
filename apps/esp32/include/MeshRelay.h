@@ -62,15 +62,23 @@ public:
 
     // Storage: /mesh/00../mesh/15 hold original wire bundles. Restore verifies
     // contents and indexes the FULL event ID from the bundle. Entries restored on
-    // begin() are cold: retained (and exported by a gateway) but never offered or
-    // forwarded in this boot, because residence during power-off is unknown.
-    // Verified entries may be replaced (cold/expired first, then oldest live);
-    // evicted IDs are journaled in /mesh-seen (<=1024) BEFORE eviction so they are
-    // not requested again. RESULT "stored" is sent only after save + readback.
+    // begin() are cold: residence during power-off is unknown, so (mesh §11, unknown
+    // clock) they are relayed only within a local window counted from boot
+    // (RESTORED_RESIDENCE_MS), still bounded by their own lifetime and hop limit.
+    // Verified entries may be replaced (cold/expired first, then the lowest effective
+    // priority, oldest received among equals; mesh §11). A full store of forwardable
+    // entries refuses an event below all of them (reason 1) instead of evicting.
+    // Effective priority is min(hint, 1): without a trusted clock no sender can be
+    // authorized here (importer §3, priority §2), so only bulk (0) vs normal (1) differ.
+    // Offers and served WANTs go higher priority, then newer, first (mesh §9);
+    // evicted IDs are journaled in /mesh-seen BEFORE eviction so they are not
+    // requested again; a full journal drops its older half (a forgotten ID may be
+    // fetched once more, which is harmless). RESULT "stored" is sent only after save + readback.
     //
     // delete §3 / report §2 (local policy): a stored target is erased and journaled as
     // soon as its author's kind 5 deletion request arrives, or once REPORT_THRESHOLD
-    // distinct reporters sent kind 1984 reports. Later copies are refused (reason 5).
+    // distinct reporters sent kind 1984 reports; a report its reporter withdrew with
+    // a kind 5 (report §2, delete §5) is not counted. Later copies are refused (reason 5).
     // The deletion requests and reports themselves keep being stored and forwarded.
     static constexpr size_t REPORT_THRESHOLD = 2;
 
@@ -81,13 +89,14 @@ private:
         uint32_t hop = 0, hopLimit = 0;
         size_t size = 0;
         bool cold = true;
+        uint8_t priority = 1; // effective priority (priority §2)
         uint16_t kind = 0;
         std::string topic, pubkey;
         bool delivered = false;
     };
     // RAM-only moderation records, rebuilt from the stored requests on begin().
     struct Deletion { std::string target, author; };
-    struct Report { std::string target, reporter; };
+    struct Report { std::string id, target, reporter; };
     std::vector<Deletion> deletions_;
     std::vector<Report> reports_;
     struct Request { uint64_t id; std::vector<std::string> open; uint64_t sentMs; };
@@ -146,7 +155,10 @@ private:
     const Entry* find(const std::string& id) const;
     bool eligible(const Entry& entry, uint64_t now) const;
     bool gatewayProtected(const Entry& entry) const;
-    size_t victim(uint64_t now) const;
+    // Index of the entry to replace for an incoming event of [incoming] priority, or size() if none.
+    size_t victim(uint64_t now, uint8_t incoming) const;
+    // mesh §9 send order: higher effective priority, then newer.
+    bool sendsBefore(const Entry& a, const Entry& b) const;
     size_t acquisitionCapacity() const;
     std::vector<const Entry*> candidates(uint64_t now) const;
     bool restore();
@@ -154,6 +166,8 @@ private:
     bool wasSeen(const std::string& id);
     bool rememberEvicted(const std::string& id);
     bool seenFailure(const char* stage);
+    bool compactSeen();
+    bool withdrawn(const std::string& reportId, const std::string& reporter) const;
     bool save(const uint8_t* data, size_t size, const BundleInfo& info, uint64_t receivedMs);
     bool read(const Entry& entry, std::vector<uint8_t>& bytes);
     void moderate(const BundleInfo& info);
