@@ -1,0 +1,104 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Format-neutral meaning of a hazard notice: CAP 1.2 category, severity, urgency, certainty and response types, plus onset time and regional scales. The affected area is geo#area and the valid period is validity; neither is repeated here. Anyone can sign this extension, so receivers distinguish verified public information from user claims before alert-style display.",
+      "required": ["status", "category", "severity", "urgency", "certainty"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "CAP status: Actual, Exercise or Test. Required so that an omission is never read as a real event.",
+          "knownValues": ["Actual", "Exercise", "Test"]
+        },
+        "category": {
+          "type": "array",
+          "description": "CAP 1.2 category values. The coarse fallback classification; the kind of hazard is given by a dev.jisaku.mosimo.hazard.* extension.",
+          "minLength": 1,
+          "maxLength": 4,
+          "items": {
+            "type": "string",
+            "knownValues": ["Geo", "Met", "Safety", "Security", "Rescue", "Fire", "Health", "Env", "Transport", "Infra", "CBRNE", "Other"]
+          }
+        },
+        "severity": {
+          "type": "string",
+          "description": "CAP 1.2 severity. Unknown values are treated as Unknown.",
+          "knownValues": ["Extreme", "Severe", "Moderate", "Minor", "Unknown"]
+        },
+        "urgency": {
+          "type": "string",
+          "description": "CAP 1.2 urgency. An all-clear uses Past.",
+          "knownValues": ["Immediate", "Expected", "Future", "Past", "Unknown"]
+        },
+        "certainty": {
+          "type": "string",
+          "description": "CAP 1.2 certainty.",
+          "knownValues": ["Observed", "Likely", "Possible", "Unlikely", "Unknown"]
+        },
+        "responseTypes": {
+          "type": "array",
+          "description": "CAP 1.2 responseType values. Omit when the source gives no action. AllClear marks the end of the threat, not the retraction of an erroneous notice.",
+          "maxLength": 4,
+          "items": {
+            "type": "string",
+            "knownValues": ["Shelter", "Evacuate", "Prepare", "Execute", "Avoid", "Monitor", "Assess", "AllClear", "None"]
+          }
+        },
+        "onset": {
+          "type": "string",
+          "format": "datetime",
+          "description": "When the phenomenon began or is expected to begin (CAP onset; earthquake origin time). UTC with an uppercase Z suffix. Omit when unknown; never fill from the issue, receipt or creation time."
+        },
+        "event": {
+          "type": "ref",
+          "ref": "#localizedText",
+          "description": "The notice's own name in the source, for display only."
+        },
+        "scales": {
+          "type": "array",
+          "description": "Regional scales kept verbatim (seismic intensity, warning level, ...). At most one entry per scheme.",
+          "maxLength": 8,
+          "items": { "type": "ref", "ref": "#scale" }
+        },
+        "glide": {
+          "type": "string",
+          "description": "An issued GLIDE number, e.g. EQ-2011-000028-JPN.",
+          "maxLength": 64
+        }
+      }
+    },
+    "localizedText": {
+      "description": "Text in its original language (BCP 47).",
+      "type": "object",
+      "required": ["text", "lang"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 256, "maxGraphemes": 64 },
+        "lang": { "type": "string", "format": "language" }
+      }
+    },
+    "scale": {
+      "type": "object",
+      "description": "A value on a regional or international scale, kept in its original notation.",
+      "required": ["scheme", "value"],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "description": "Registered scale name, e.g. jp.jma.shindo, jp.jma.warning-level, intl.mmi, or a reversed domain owned by its definer.",
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "description": "The value in the scale's own notation, e.g. 5+ for JMA seismic intensity 5 upper.",
+          "maxLength": 64
+        },
+        "basis": {
+          "type": "string",
+          "description": "Whether the value is observed or forecast. Omit when unknown.",
+          "knownValues": ["observed", "forecast"]
+        }
+      }
+    }
+  }
+}

@@ -35,7 +35,7 @@ flowchart TD
   G -. 条件付き .-> E
 ```
 
-図は論理的な情報の流れである。インターネットからメッシュへの投入は、信頼する取り込みサーバーの投稿等に限る条件付きの経路として[公的情報](public/README.md)が定める。
+図は論理的な情報の流れである。インターネットから取得した投稿も、近接リンクで受け取った投稿と同じくメッシュで運ぶ。どれを先に運び何を残すかは取得経路ではなく[実効優先度](priority/README.md)と資源上限で決める（[メッシュ](mesh/README.md#12-ゲートウェイ)）。
 
 ### 1.1 参加者と責務
 
@@ -43,7 +43,7 @@ flowchart TD
 |---|---|---|
 | 発信アプリ | 鍵・DID・リポジトリの保持、投稿作成、atproto と Nostr の両形式への署名 | 他の発信者として投稿・削除してはならない。発信者の境界はインストール単位の鍵で定義されるためである |
 | 中継アプリ | 署名済みイベントの保存・配送、解釈できる本文の表示 | 著者の本文・拡張を編集してはならない。署名対象の改変になるためである |
-| ゲートウェイ | 同じイベントの Nostr リレーへの投稿、条件付きのメッシュ投入 | 搬出時に著者署名を付け直してはならない。元の event ID と署名を維持するためである |
+| ゲートウェイ | 同じイベントの Nostr リレーへの投稿、リレーから取得したイベントのメッシュへの保持 | 搬出時に著者署名を付け直してはならない。元の event ID と署名を維持するためである |
 | 物理 PDS | Nostr リレーの提供、レコードと変更操作からの MST 再構築、複製 | 著者の commit を新規に署名してはならない。正本は著者の署名で定義されるためである |
 | 論理 PDS | DID が指す正規公開 endpoint、標準 atproto 同期の提供 | 無調整な複数ホストを同時に正規公開元としてはならない。firehose の順序とカーソルの継続性が崩れるためである |
 | 対応 AppView | 独自 Lexicon と既存 BSAF 投稿の収集、索引・一覧・地図 | 書き換えたレコードを原投稿として扱ってはならない。元の著者・署名・識別子を保持するためである |
@@ -252,6 +252,7 @@ type UnknownExtension = { $type: string; [field: string]: DataValue };
 | `dev.jisaku.mosimo.priority` | [配送優先度](priority/README.md) | 著者の配送優先度ヒントと実効優先度 | level 1 として扱う |
 | `dev.jisaku.mosimo.delete` | [削除要求](delete/README.md) | 著者による投稿の削除要求（NIP-09）と削除後の commit | 削除要求を通常のイベントとして中継する |
 | `dev.jisaku.mosimo.report` | [通報](report/README.md) | 不適切な投稿の通報（NIP-56）と、通報の集計による配送の停止 | 通報を通常のイベントとして中継する |
+| `dev.jisaku.mosimo.hazard` 以下 | [災害情報](hazard/README.md) と種類別の[地震](hazard/earthquake/README.md)・[津波](hazard/tsunami/README.md)・[火山](hazard/volcano/README.md)・[気象・水文](hazard/weather/README.md)・[熱帯低気圧](hazard/cyclone/README.md) | 国・形式に依存しない災害の分類・深刻度・行動・発生時刻、種類ごとの物理量 | 本文と大分類だけで表示する |
 | `dev.jisaku.mosimo.mesh` | [メッシュ配送](mesh/README.md) | BPv7 による保存・中継、接触時交換、メッシュ用 CBOR | 配送層の仕様であり拡張型を持たない |
 | `dev.jisaku.mosimo.pds` | [PDS](pds/README.md) | 論理 PDS と物理 PDS、Nostr リレープロファイル | サービス側の仕様であり拡張型を持たない |
 | `dev.jisaku.mosimo.attest` 以下 | [鍵署名](attest/README.md)、[署名チェーン](attest/chain/README.md)、[失効通知](attest/revocation/README.md)、[転載サーバー](attest/importer/README.md) 等 | 発信者証明、投稿への同梱、失効 | 発信者未確認 |
@@ -454,7 +455,7 @@ NIP-01 の標準的なタグ検索は英字一文字のタグ名とその最初�
 
 本文を扱う端末は Nostr 公開鍵に対するイベント署名を検証し、DID 認証のための PLC 情報取得を待たずに表示する。解釈できる拡張だけを表示・配送のヒントに使い、未知の著者拡張は元の表現を保持する。
 
-オンラインに戻った端末は、元の署名済みイベントを対応物理 PDS のリレー等へ投稿する。リレー候補はアプリ同梱・保存済みキャッシュ・既知 AppView の一覧・Nostr 経由の発見を併用する（[PDS](pds/README.md)）。インターネットから取得した情報のメッシュへの再投入は、[公的情報](public/README.md)が定める条件を満たす場合に限る。
+オンラインに戻った端末は、元の署名済みイベントを対応物理 PDS のリレー等へ投稿する。リレー候補はアプリ同梱・保存済みキャッシュ・既知 AppView の一覧・Nostr 経由の発見を併用する（[PDS](pds/README.md)）。インターネットから取得した投稿は、近接リンクで受け取った投稿と同じ規則でメッシュの保持・配送の候補にする（[メッシュ §12](mesh/README.md#12-ゲートウェイ)）。
 
 ### 9.3 PDS と AppView
 

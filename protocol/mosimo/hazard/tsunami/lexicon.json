@@ -1,0 +1,27 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard.tsunami",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Tsunami-specific facts of a hazard notice. Used together with dev.jisaku.mosimo.hazard.",
+      "properties": {
+        "maxHeight": { "type": "ref", "ref": "#height" },
+        "arrival": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Earliest (expected) arrival in the post's area. UTC with an uppercase Z suffix. Omit when only qualitative."
+        }
+      }
+    },
+    "height": {
+      "type": "object",
+      "description": "Largest wave height for the post's area. Qualitative or open-ended notations stay in text; never put a range bound in value.",
+      "properties": {
+        "value": { "type": "integer", "description": "Height in millimeters.", "minimum": 0 },
+        "text": { "type": "ref", "ref": "dev.jisaku.mosimo.hazard#localizedText", "description": "Original notation such as 巨大 or 10m超." },
+        "basis": { "type": "string", "knownValues": ["observed", "forecast"] }
+      }
+    }
+  }
+}

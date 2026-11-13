@@ -1,0 +1,38 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard.earthquake",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Earthquake-specific facts of a hazard notice. Used together with dev.jisaku.mosimo.hazard; the origin time is its onset and shaking intensity is one of its scales.",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "event: an earthquake that occurred. early-warning: a forecast issued before shaking arrives; the hypocenter and magnitude are estimates. assessment: an evaluation of heightened likelihood, not a specific earthquake.",
+          "knownValues": ["event", "early-warning", "assessment"]
+        },
+        "hypocenter": { "type": "ref", "ref": "#hypocenter" },
+        "magnitude": { "type": "ref", "ref": "#magnitude" }
+      }
+    },
+    "hypocenter": {
+      "type": "object",
+      "description": "Epicenter coordinates, depth and name. Not an affected area. Omit coordinates that are unknown; never derive them from the name.",
+      "properties": {
+        "lat": { "type": "integer", "description": "WGS 84 latitude in millionths of a degree.", "minimum": -90000000, "maximum": 90000000 },
+        "lon": { "type": "integer", "description": "WGS 84 longitude in millionths of a degree.", "minimum": -180000000, "maximum": 180000000 },
+        "depth": { "type": "integer", "description": "Depth below the surface in millimeters. Omit when unknown or only qualitative; never 0 for unknown.", "minimum": 0 },
+        "name": { "type": "ref", "ref": "dev.jisaku.mosimo.hazard#localizedText", "description": "Epicenter region name." }
+      }
+    },
+    "magnitude": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "integer", "description": "Magnitude times ten (M6.5 is 65). Omit the whole object when unknown; never 0 for unknown." },
+        "type": { "type": "string", "description": "Magnitude type such as Mj, Mw, ML, mb or Ms. Omit when unknown.", "maxLength": 16 }
+      }
+    }
+  }
+}

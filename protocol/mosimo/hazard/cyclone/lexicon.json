@@ -1,0 +1,26 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard.cyclone",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Tropical cyclone (typhoon, hurricane, cyclone) facts of a hazard notice. Used together with dev.jisaku.mosimo.hazard.",
+      "properties": {
+        "name": { "type": "ref", "ref": "dev.jisaku.mosimo.hazard#localizedText", "description": "Proper name of the cyclone." },
+        "designation": { "type": "string", "description": "Issuing agency's number, e.g. JMA 2019-19.", "maxLength": 64 },
+        "center": { "type": "ref", "ref": "#point" },
+        "pressure": { "type": "integer", "description": "Central pressure in pascals.", "minimum": 0 },
+        "maxWind": { "type": "integer", "description": "Maximum sustained wind in millimeters per second; the averaging period follows the source agency.", "minimum": 0 },
+        "stormRadius": { "type": "integer", "description": "Storm-force wind radius in millimeters.", "minimum": 0 }
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "integer", "minimum": -90000000, "maximum": 90000000 },
+        "lon": { "type": "integer", "minimum": -180000000, "maximum": 180000000 }
+      }
+    }
+  }
+}

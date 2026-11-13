@@ -1,0 +1,28 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.mosimo.hazard.volcano",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Volcano-specific facts of a hazard notice. Used together with dev.jisaku.mosimo.hazard.",
+      "required": ["phenomenon"],
+      "properties": {
+        "phenomenon": {
+          "type": "string",
+          "knownValues": ["eruption", "ashfall", "activity", "pyroclastic-flow", "lahar", "gas"]
+        },
+        "volcano": { "type": "ref", "ref": "#volcano" }
+      }
+    },
+    "volcano": {
+      "type": "object",
+      "description": "The volcano concerned. Its position is not an affected area.",
+      "properties": {
+        "name": { "type": "ref", "ref": "dev.jisaku.mosimo.hazard#localizedText" },
+        "gvp": { "type": "string", "description": "Smithsonian Global Volcanism Program volcano number (6 digits).", "maxLength": 6, "minLength": 6 },
+        "lat": { "type": "integer", "minimum": -90000000, "maximum": 90000000 },
+        "lon": { "type": "integer", "minimum": -180000000, "maximum": 180000000 }
+      }
+    }
+  }
+}
