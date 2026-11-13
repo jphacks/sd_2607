@@ -609,6 +609,7 @@ impl Sim {
                 }
             }
         }
+        sim.rank_towers_by_isolation();
         sim.assign_navs();
         sim.place_victims();
         sim.dt = sim.dt_at(0.0);
@@ -1203,6 +1204,57 @@ impl Sim {
         nodes.reverse();
         edges.reverse();
         Some((nodes, edges, dist[to as usize]))
+    }
+
+    /// Road nodes a vehicle can reach at `t` from outside help: any HQ, the depot or a road off the map.
+    pub fn reachable_from_outside(&self, t: f32) -> Vec<bool> {
+        let mut seen = vec![false; self.nodes.len()];
+        let mut stack: Vec<u32> = Vec::new();
+        let hqs = self.zones.iter().filter(|z| z.hq != NONE).map(|z| self.sites[z.hq as usize].node);
+        let depot = (self.depot != NONE).then(|| self.sites[self.depot as usize].node);
+        for n in hqs.chain(depot).chain(self.exits.iter().map(|x| x.node)) {
+            if n != NONE && !seen[n as usize] {
+                seen[n as usize] = true;
+                stack.push(n);
+            }
+        }
+        while let Some(u) = stack.pop() {
+            for &(e, v) in &self.adj[u as usize] {
+                if !seen[v as usize] && !self.edges[e as usize].cut_at(t) {
+                    seen[v as usize] = true;
+                    stack.push(v);
+                }
+            }
+        }
+        seen
+    }
+
+    /// Fixed towers in areas cut off by road go down first and come back last: their fibre and power
+    /// follow the roads, and crews could not reach them. The zone's outage ratio still sets how many are down.
+    fn rank_towers_by_isolation(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let reach = self.reachable_from_outside(6.0 * 60.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.params.seed ^ 0x746f_7765);
+        let mut by_zone: HashMap<u16, Vec<(bool, f32, usize)>> = HashMap::new();
+        for (i, tw) in self.towers.iter().enumerate() {
+            if tw.temporary {
+                continue;
+            }
+            let n = self.nearest_node(tw.pos);
+            let cut_off = n != NONE && !reach[n as usize];
+            by_zone.entry(tw.zone).or_default().push((!cut_off, rng.gen(), i));
+        }
+        let mut zones: Vec<_> = by_zone.into_iter().collect();
+        zones.sort_by_key(|z| z.0);
+        for (_, mut list) in zones {
+            list.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal)));
+            let n = list.len() as f32;
+            for (k, &(_, _, i)) in list.iter().enumerate() {
+                self.towers[i].rank = (k as f32 + rng.gen::<f32>()) / n;
+            }
+        }
     }
 
     pub fn nearest_node(&self, p: Vec2) -> u32 {
