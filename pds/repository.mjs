@@ -167,6 +167,14 @@ export async function decodePost(event) {
   }
   const record = { $type: COLLECTION, text: event.content, exp, ...(created ? { created } : {}), ext };
   const recordBytes = new Uint8Array(cbor.encode(record));
+  return {
+    ...(await decodeCommit(commitBytes)), base, path: `${COLLECTION}/${rkey}`, rkey,
+    record, recordCid: await cidFor(recordBytes), recordBytes, op: 'create',
+  };
+}
+
+/** Shared v3 commit shape check (core §3, delete §2). */
+async function decodeCommit(commitBytes) {
   const commit = decodeCbor(commitBytes);
   requireValue(object(commit)
     && Object.keys(commit).sort().join(',') === 'data,did,prev,rev,sig,version'
@@ -175,10 +183,37 @@ export async function decodePost(event) {
     && commit.sig instanceof Uint8Array && commit.sig.length === 64, 'Invalid signed v3 commit');
   repositoryCid(commit.data);
   if (commit.prev !== null) repositoryCid(commit.prev);
-  return {
-    commit, commitCid: await cidFor(commitBytes), commitBytes, base, path: `${COLLECTION}/${rkey}`, rkey,
-    record, recordCid: await cidFor(recordBytes), recordBytes,
+  return { commit, commitCid: await cidFor(commitBytes), commitBytes };
+}
+
+/** delete §1: a kind 5 for a post carries the post-deletion commit. Tags t, e, k, commit, base, rkey, exp in this order. */
+export const isDeletionCommit = event => event?.kind === 5 && Array.isArray(event.tags)
+  && event.tags.some(tag => Array.isArray(tag) && tag[0] === 'mosimo:commit');
+
+/** Recover the signed post-deletion commit of a kind 5 deletion request (delete §1-2). */
+export async function decodeDeletion(event) {
+  requireValue(event && event.kind === 5 && Array.isArray(event.tags)
+    && event.tags.every(tag => Array.isArray(tag) && tag.every(value => typeof value === 'string')), 'Invalid deletion event');
+  const envelope = { kind: event.kind, content: event.content, created_at: event.created_at,
+    tags: event.tags, id: event.id, pubkey: event.pubkey, sig: event.sig };
+  requireValue(verifyEvent(envelope), 'Invalid Nostr signature');
+  const tags = event.tags;
+  const basic = (index, name) => {
+    requireValue(tags[index]?.length === 2 && tags[index][0] === name, `Expected ${name} at tag position ${index}`);
+    return tags[index][1];
   };
+  requireValue(basic(0, 't') === TAG, 'Expected protocol discovery tag first');
+  const target = basic(1, 'e');
+  requireValue(/^[0-9a-f]{64}$/.test(target), 'Invalid deletion target');
+  requireValue(basic(2, 'k') === '1', 'Only post deletions carry a commit');
+  const commitBytes = decodeBytes(basic(3, 'mosimo:commit'));
+  const baseText = basic(4, 'mosimo:base');
+  requireValue(baseText !== '', 'A deletion needs the commit it applies to');
+  const base = repositoryCid(CID.parse(baseText));
+  const rkey = basic(5, 'mosimo:rkey');
+  requireValue(tid.test(rkey), 'Invalid record key TID');
+  timestampSeconds(basic(6, 'mosimo:exp'));
+  return { ...(await decodeCommit(commitBytes)), base, path: `${COLLECTION}/${rkey}`, rkey, target, op: 'delete' };
 }
 
 /** Throws on an invalid commit signature; signingKeyDid is the resolved did:key. */
@@ -188,7 +223,8 @@ export async function verifyCommit(decoded, signingKeyDid) {
   return true;
 }
 
-/** Rebuild the complete MST, returning its blocks plus the unchanged commit and new record. */
+/** Rebuild the complete MST after the commit's one operation (a post's create or a deletion's delete),
+ * returning its blocks plus the unchanged commit and, for a create, the new record. */
 export async function reconstruct(decoded, baseEntries = []) {
   requireValue(Array.isArray(baseEntries), 'baseEntries must be an array');
   requireValue(decoded.base !== null || baseEntries.length === 0, 'Initial commit cannot have base entries');
@@ -201,13 +237,22 @@ export async function reconstruct(decoded, baseEntries = []) {
     seen.add(entry.key);
     tree = await tree.add(entry.key, repositoryCid(entry.value));
   }
-  requireValue(!seen.has(decoded.path), 'Post path already exists');
-  tree = await tree.add(decoded.path, decoded.recordCid);
+  let removed;
+  if (decoded.op === 'delete') {
+    // delete §2: exactly the target's path leaves the tree; nothing else changes.
+    removed = baseEntries.find(entry => entry.key === decoded.path);
+    requireValue(removed, 'Deleted path is not in the base commit');
+    tree = await tree.delete(decoded.path);
+  } else {
+    requireValue(!seen.has(decoded.path), 'Post path already exists');
+    tree = await tree.add(decoded.path, decoded.recordCid);
+  }
   requireValue((await tree.getPointer()).equals(decoded.commit.data), 'Reconstructed MST root does not match commit');
   const { blocks } = await tree.getUnstoredBlocks();
-  blocks.set(decoded.recordCid, decoded.recordBytes);
+  if (decoded.op !== 'delete') blocks.set(decoded.recordCid, decoded.recordBytes);
   blocks.set(decoded.commitCid, decoded.commitBytes);
   return {
+    removed: removed ? repositoryCid(removed.value) : undefined,
     entries: (await tree.list()).map(({ key, value }) => ({ key, value })),
     blocks: [...blocks.entries()],
     car: await blocksToCarFile(decoded.commitCid, blocks),

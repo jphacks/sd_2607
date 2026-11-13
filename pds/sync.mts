@@ -15,12 +15,13 @@ export function futureRevisionDelay(rev: string, now: number): number {
 export const encodeFrame = (type: string, body: Parameters<typeof cbor.encode>[0]): Buffer =>
   Buffer.concat([cbor.encode({ op: 1, t: type }), cbor.encode(body)]);
 
-type CreateOp = { action: 'create'; path: string; cid: CID };
+// A delete names the removed record in `prev` (sync v1.1) and carries no record block.
+type RepoOp = { action: 'create'; path: string; cid: CID } | { action: 'delete'; path: string; cid: null; prev: CID };
 
 /** Build the same covering proofs as Repo.formatCommit, without changing signed bytes. */
 export async function commitFrame({ commitCid, commitBytes, data, blocks, ops, repo, rev,
   since, prevData, time, seq, maxBufferedBytes }: {
-  commitCid: CID; commitBytes: Uint8Array; data: CID; blocks: BlockMap; ops: CreateOp[];
+  commitCid: CID; commitBytes: Uint8Array; data: CID; blocks: BlockMap; ops: RepoOp[];
   repo: string; rev: string; since: string | null; prevData?: CID;
   time: string; seq: number; maxBufferedBytes: number;
 }): Promise<Buffer> {
@@ -30,6 +31,7 @@ export async function commitFrame({ commitCid, commitBytes, data, blocks, ops, r
   if (ops.length <= MAX_COMMIT_OPS) {
     for (const op of ops) {
       proof.addMap(await tree.getCoveringProof(op.path));
+      if (op.cid === null) continue; // Proof of absence only.
       const record = blocks.get(op.cid);
       if (!record) throw new Error('Missing stream record block');
       proof.set(op.cid, record);
