@@ -19,7 +19,14 @@ buildNpmPackage {
   inherit src;
 
   # Fetch each package by its lockfile integrity, so lockfile updates need no hash.
-  npmDeps = importNpmLock { npmRoot = src; };
+  # Read the manifests from the source tree, not from the filtered store path:
+  # `nix flake check --no-build` evaluates without writing to the store, so the
+  # filtered path does not exist yet and reading it fails as "is not valid".
+  npmDeps = importNpmLock {
+    npmRoot = src;
+    package = lib.importJSON ./package.json;
+    packageLock = lib.importJSON ./package-lock.json;
+  };
   npmConfigHook = importNpmLock.npmConfigHook;
   # Vite needs only the prebuilt native bindings; skip install scripts such as
   # wrangler's workerd and sharp, which are not used by the build.
