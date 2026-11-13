@@ -40,3 +40,11 @@ run = [
   "uv run --with numpy --with scipy python3 core/scenarios/data/build_geo.py shelter",
   "uv run --with numpy --with scipy python3 core/scenarios/data/build_geo.py noto",
 ]
+
+[tasks.installer-images]
+description = "Regenerate the WiX/NSIS installer bitmaps in src-tauri/icons/installer (Windows fonts required)"
+run = "uv run --with pillow python src-tauri/icons/installer/generate.py ../hp/public/images/mosimo-bosai-icon.png src-tauri/icons/installer"
+
+[tasks.publish-hp]
+description = "Copy the built installers into ../hp/public/downloads/simulator and update the download manifest (run after build)"
+run = "uv run python scripts/publish_hp.py"

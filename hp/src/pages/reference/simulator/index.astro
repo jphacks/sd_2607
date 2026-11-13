@@ -1,0 +1,522 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import downloads from "../../../data/simulator-downloads.json";
+
+// simulator-downloads.json is written by `mise run publish-hp` in ../simulation.
+type Entry = {
+  kind: string;
+  platform: string;
+  version: string;
+  file: string;
+  bytes: number;
+  sha256: string;
+};
+const files = downloads.files as Entry[];
+const byKind = Object.fromEntries(files.map((f) => [f.kind, f]));
+const mib = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
+const href = (f: Entry) => `/downloads/simulator/${f.file}`;
+
+const windows = [
+  {
+    entry: byKind["exe"],
+    label: "インストーラー（.exe）",
+    note: "おすすめ。全員にインストールするか、自分だけにインストールするかを選べます。",
+    primary: true,
+  },
+  {
+    entry: byKind["msi"],
+    label: "Windows Installer（.msi）",
+    note: "管理者権限で、このPCの全員にインストールします。組織での一括配布向けです。",
+    primary: false,
+  },
+].filter((d) => d.entry);
+
+const mac = [
+  { entry: byKind["dmg-aarch64"], label: "Apple シリコン（.dmg）" },
+  { entry: byKind["dmg-x64"], label: "Intel（.dmg）" },
+].filter((d) => d.entry);
+
+const version = files[0]?.version;
+---
+
+<Layout
+  title="もしもシミュレーター"
+  image="/images/mosimo-bosai-feature.png"
+  imageAlt="もしもシミュレーター"
+  description="災害直後からインターネットが戻るまでの情報の伝わり方を一人ひとりの単位で再現し、Mosimo Protocol 対応アプリの導入率で何が変わるかを調べるシミュレーターです。"
+>
+  <main class="sim-page">
+    <section class="sim-hero" aria-labelledby="sim-title">
+      <div class="sim-hero-inner">
+        <div class="sim-hero-copy">
+          <p class="sim-eyebrow"><span class="sim-dot"></span>MOSIMO PROTOCOL / SIMULATOR</p>
+          <div class="sim-title">
+            <img src="/images/mosimo-bosai-icon.png" width="512" height="512" alt="" />
+            <h1 id="sim-title">もしも<br />シミュレーター</h1>
+          </div>
+          <p class="sim-lead">
+            災害の直後からインターネットが戻るまでの間に、情報がどう伝わるかを一人ひとりの単位で再現します。
+            <span>もしもプロトコルに対応したアプリが広まると、何が変わるのか。</span>
+            導入率だけを変えて比べられます。
+          </p>
+        </div>
+
+        <div class="sim-download" id="download" aria-labelledby="sim-download-title">
+          <div class="sim-download-top">
+            <span id="sim-download-title">DOWNLOAD</span>
+            {version && <span>v{version}</span>}
+          </div>
+
+          <h2 class="sim-platform">Windows <small>10 / 11（64 ビット）</small></h2>
+          {windows.length > 0 ? (
+            <ul class="sim-files">
+              {windows.map((d) => (
+                <li>
+                  <a
+                    class:list={["sim-button", d.primary ? "sim-button-primary" : "sim-button-light"]}
+                    href={href(d.entry!)}
+                    download
+                  >
+                    <span>{d.label}</span>
+                    <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
+                  </a>
+                  <p>{d.note}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="sim-soon">準備中です。</p>
+          )}
+
+          <h2 class="sim-platform">macOS</h2>
+          {mac.length > 0 ? (
+            <ul class="sim-files">
+              {mac.map((d) => (
+                <li>
+                  <a class="sim-button sim-button-light" href={href(d.entry!)} download>
+                    <span>{d.label}</span>
+                    <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="sim-soon">準備中です。</p>
+          )}
+
+          <a class="sim-install-link" href="#install">インストールの注意 <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="sim-section" aria-labelledby="sim-scenarios-title">
+      <div class="sim-section-heading">
+        <p class="sim-eyebrow">01 / SCENARIOS</p>
+        <h2 id="sim-scenarios-title">
+          実際の災害と地域で、
+          <br />
+          条件だけを変える。
+        </h2>
+        <p>
+          住民は国勢調査のメッシュ人口と実在の建物に置き、津波は家ごとの標高と海岸からの距離で判定します。同じシードなら人の配置と被害が同じになるので、結果の違いは導入率だけから生じます。
+        </p>
+      </div>
+      <div class="sim-cards">
+        <article class="sim-card sim-card-yellow">
+          <span class="sim-number">01 / 10 DAYS</span>
+          <h3>避難所一つ</h3>
+          <p class="sim-card-meta">珠洲市 宝立小中学校／約2,200人</p>
+          <p>収容287人に800〜900人が避難し、Starlink が届いたのは1月7日以降。小さな範囲を細かく再現します。</p>
+        </article>
+        <article class="sim-card sim-card-light">
+          <span class="sim-number">02 / 7 DAYS</span>
+          <h3>川内キャンパス全体</h3>
+          <p class="sim-card-meta">東日本大震災／約1,400人</p>
+          <p>学生の約9割が使う「とんペディア」にプロトコルを入れた場合を想定します。2011年3月11日14時46分、春休み中。</p>
+        </article>
+        <article class="sim-card sim-card-yellow">
+          <span class="sim-number">03 / 21 DAYS</span>
+          <h3>能登半島全体</h3>
+          <p class="sim-card-meta">奥能登6市町／約13.1万人</p>
+          <p>発災から携帯電話がおおむね復旧するまでを再現し、公表された記録で調整します。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="sim-section sim-split" aria-labelledby="sim-model-title">
+      <div class="sim-section-heading">
+        <p class="sim-eyebrow">02 / WHAT IT MODELS</p>
+        <h2 id="sim-model-title">
+          人、通信、
+          <br />
+          そして救助まで。
+        </h2>
+      </div>
+      <ul class="sim-model-list">
+        <li>
+          <strong>人</strong>
+          <span>年齢、携帯の有無と電池残量、アプリの有無を持ち、避難所・車中泊・在宅を選んで動きます。</span>
+        </li>
+        <li>
+          <strong>通信</strong>
+          <span>基地局の停波と復旧、輻輳、船上基地局や Starlink、衛星電話、防災行政無線などを扱います。</span>
+        </li>
+        <li>
+          <strong>もしもプロトコル</strong>
+          <span>アプリ同士がすれ違うたびに投稿を交換し、インターネットにつながった端末が送受信します。カーナビの対応も試せます。</span>
+        </li>
+        <li>
+          <strong>人による伝達</strong>
+          <span>対面の会話、避難所の掲示板、区長・民生委員の見回り、職員やトラックの運転手も情報を運びます。</span>
+        </li>
+        <li>
+          <strong>対応</strong>
+          <span>本部に届いた情報をもとに救助隊が出動し、物資が配られます。救助が間に合わなかった原因も記録します。</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="sim-section sim-note" id="install" aria-labelledby="sim-install-title">
+      <div>
+        <p class="sim-eyebrow">03 / INSTALL</p>
+        <h2 id="sim-install-title">インストールの注意</h2>
+      </div>
+      <div>
+        <p>
+          インストーラーには電子署名をしていないため、Windows で「Windows によって PC が保護されました」と表示されることがあります。「詳細情報」を押し、「実行」を選ぶとインストールを続けられます。
+        </p>
+        <p>
+          地図には国土地理院の地図タイルを使うため、インターネット接続が必要です。画面の表示に使う Microsoft Edge WebView2 が入っていない PC では、インストール時に自動で取得します。
+        </p>
+        <p>
+          ダウンロードしたファイルが壊れていないかは、SHA-256 で確かめられます。
+        </p>
+        <dl class="sim-hashes">
+          {files.map((f) => (
+            <div>
+              <dt>{f.file}</dt>
+              <dd><code>{f.sha256}</code></dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </section>
+
+    <section class="sim-section sim-note" aria-labelledby="sim-limits-title">
+      <div>
+        <p class="sim-eyebrow">04 / PLEASE NOTE</p>
+        <h2 id="sim-limits-title">結果の読み方</h2>
+      </div>
+      <div>
+        <p>
+          このシミュレーターは、条件の違いによる差を比べるためのものです。被害や死者数を予測するものではありません。
+        </p>
+        <p>
+          通話の成功率、道路の寸断区間、地区ごとの全壊率、Starlink の容量、カーナビの普及率など、公表されていない値は推定しています。数値の出典と推定箇所はアプリの「出典」タブにあります。値に強く依存する結論は、比較実験で感度を確かめてください。
+        </p>
+        <p>
+          ソースコードとモデルの詳細は
+          <a href="https://github.com/jphacks/sd_2607/tree/main/simulation">GitHub</a>
+          で公開しています。
+        </p>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<style lang="scss">
+  .sim-page {
+    --ink: #191b18;
+    --paper: #f2f0e7;
+    --yellow: #ffd600;
+    color: var(--ink);
+    background: #f8f6ed;
+    font-family: system-ui, sans-serif;
+    line-height: 1.75;
+  }
+
+  .sim-hero {
+    background: var(--ink);
+    color: var(--paper);
+    border-bottom: 3px solid var(--ink);
+  }
+  .sim-hero-inner,
+  .sim-section {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 6rem 1.5rem;
+  }
+  .sim-hero-inner {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 4rem;
+    align-items: center;
+  }
+
+  .sim-eyebrow {
+    margin: 0 0 1.5rem;
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+  }
+  .sim-hero .sim-eyebrow {
+    color: var(--yellow);
+  }
+  .sim-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 9px;
+    border-radius: 50%;
+    background: var(--yellow);
+  }
+
+  .sim-page h1,
+  .sim-page h2,
+  .sim-page h3 {
+    line-height: 1.25;
+  }
+  .sim-page h1 {
+    margin: 0;
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    letter-spacing: -0.04em;
+  }
+  .sim-page h2 {
+    margin: 0;
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    letter-spacing: -0.03em;
+  }
+  .sim-page h3 {
+    margin: 1.5rem 0 0.25rem;
+    font-size: 1.4rem;
+  }
+  .sim-title {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+  }
+  .sim-title img {
+    width: clamp(4.5rem, 9vw, 6.5rem);
+    height: auto;
+    flex: none;
+    border-radius: 50%;
+  }
+  .sim-lead {
+    max-width: 34rem;
+    margin: 2rem 0 0;
+    color: #d0d0c7;
+    font-size: 1.05rem;
+  }
+  .sim-lead span {
+    display: block;
+    margin: 0.75rem 0;
+    color: var(--paper);
+    font-size: 1.2rem;
+    font-weight: 800;
+  }
+
+  /* download panel */
+  .sim-download {
+    padding: 1.75rem;
+    background: var(--paper);
+    color: var(--ink);
+    border: 3px solid var(--paper);
+    box-shadow: 10px 10px 0 var(--yellow);
+  }
+  .sim-download-top {
+    display: flex;
+    justify-content: space-between;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--ink);
+    font-size: 0.8rem;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+  }
+  .sim-download .sim-platform {
+    margin: 1.5rem 0 0.75rem;
+    font-size: 1.3rem;
+    letter-spacing: -0.01em;
+  }
+  .sim-platform small {
+    margin-left: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #5c5d57;
+  }
+  .sim-files {
+    display: grid;
+    gap: 1rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .sim-files p {
+    margin: 0.4rem 0 0;
+    font-size: 0.85rem;
+    color: #4a4b45;
+  }
+  .sim-button {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.85rem 1.1rem;
+    border: 3px solid var(--ink);
+    font-weight: 800;
+    text-decoration: none;
+    box-shadow: 5px 5px 0 var(--ink);
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  .sim-button:hover {
+    transform: translate(2px, 2px);
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+  .sim-button:focus-visible {
+    outline: 3px solid #dc542f;
+    outline-offset: 4px;
+  }
+  .sim-button-primary {
+    background: var(--yellow);
+  }
+  .sim-button-light {
+    background: #fff;
+  }
+  .sim-size {
+    flex: none;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+  .sim-soon {
+    margin: 0;
+    padding: 0.85rem 1.1rem;
+    border: 2px dashed #8a8b83;
+    color: #5c5d57;
+    font-weight: 700;
+  }
+  .sim-install-link {
+    display: inline-block;
+    margin-top: 1.5rem;
+    font-size: 0.85rem;
+    font-weight: 800;
+  }
+
+  /* sections */
+  .sim-section-heading {
+    max-width: 43rem;
+    margin-bottom: 3rem;
+  }
+  .sim-section-heading > p:last-child {
+    margin: 1.5rem 0 0;
+  }
+  .sim-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .sim-card {
+    padding: 1.75rem;
+    border: 3px solid var(--ink);
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+  .sim-card p {
+    margin: 0;
+  }
+  .sim-card .sim-card-meta {
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #4a4b45;
+  }
+  .sim-card-yellow {
+    background: var(--yellow);
+  }
+  .sim-card-light {
+    background: #fff;
+  }
+  .sim-number {
+    color: #b50020;
+    font-size: 0.85rem;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+  }
+
+  .sim-split,
+  .sim-note {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    border-top: 3px solid var(--ink);
+  }
+  .sim-split .sim-section-heading {
+    margin-bottom: 0;
+  }
+  .sim-model-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 2px solid var(--ink);
+  }
+  .sim-model-list li {
+    display: grid;
+    grid-template-columns: 9rem 1fr;
+    gap: 1rem;
+    padding: 1.1rem 0;
+    border-bottom: 2px solid var(--ink);
+  }
+  .sim-model-list strong {
+    font-weight: 900;
+  }
+  .sim-note {
+    background: #fff;
+  }
+  .sim-note h2 {
+    font-size: clamp(1.8rem, 3vw, 2.5rem);
+  }
+  .sim-note > div:last-child p:first-child {
+    margin-top: 0;
+  }
+  .sim-hashes {
+    margin: 0;
+    font-size: 0.8rem;
+  }
+  .sim-hashes div + div {
+    margin-top: 0.75rem;
+  }
+  .sim-hashes dt {
+    font-weight: 800;
+  }
+  .sim-hashes dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .sim-hashes code {
+    font-size: 0.75rem;
+    color: #4a4b45;
+  }
+
+  @media (max-width: 860px) {
+    .sim-hero-inner,
+    .sim-split,
+    .sim-note {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .sim-cards {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+  }
+  @media (max-width: 720px) {
+    .sim-hero-inner,
+    .sim-section {
+      padding: 4rem 1.25rem;
+    }
+    .sim-section-heading {
+      margin-bottom: 2rem;
+    }
+    .sim-model-list li {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+  }
+</style>
