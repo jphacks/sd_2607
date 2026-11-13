@@ -23,6 +23,30 @@
       "file": "mosimo-simulator_0.1.0_aarch64.dmg",
       "bytes": 5040023,
       "sha256": "51c414baf157d632c0ecbeedce0f0b06af491f99fe36c48c5e56434b5d009bca"
+    },
+    {
+      "kind": "appimage",
+      "platform": "linux",
+      "version": "0.1.0",
+      "file": "mosimo-simulator_0.1.0_amd64.AppImage",
+      "bytes": 82487800,
+      "sha256": "6fd822f3b6ce5de5cb9a083d6f2863b14e179e54899f66701498da29583bdee4"
+    },
+    {
+      "kind": "deb",
+      "platform": "linux",
+      "version": "0.1.0",
+      "file": "mosimo-simulator_0.1.0_amd64.deb",
+      "bytes": 4370246,
+      "sha256": "826a8e6daa386c1dd99c1967cce4dcba31bdb1a643d337844fe9fbff91343a99"
+    },
+    {
+      "kind": "rpm",
+      "platform": "linux",
+      "version": "0.1.0",
+      "file": "mosimo-simulator-0.1.0-1.x86_64.rpm",
+      "bytes": 4375863,
+      "sha256": "475c3512be008570efe6d0b4403f062d2ccc654bae7fb8b794dafd87448f258d"
     }
   ]
 }
