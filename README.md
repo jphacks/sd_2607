@@ -50,6 +50,7 @@
 | [`appview/bsaf/`](./appview/bsaf/README.md) | 既存のBSAF投稿をAppView（HappyView）へ収集する機能 |
 | [`protocol/`](./protocol/README.md) | プロトコル仕様。各プロトコルの文書とLexicon定義を識別子ごとのディレクトリに置く |
 | [`lexicons/`](./lexicons/README.md) | Lexicon定義の検証ツール |
+| [`simulation/`](./simulation/README.md) | 災害時の情報伝達を再現し、プロトコルの導入率による違いを比べるシミュレーター（Tauri、計算はRust） |
 | [`third_party/`](./third_party/README.md) | Androidアプリで使う外部ライブラリの固定スナップショット |
 
 ## Live Demo

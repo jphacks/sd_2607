@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>もしもシミュレーター</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <div>
+          <div class="brand-name">もしもシミュレーター</div>
+          <div class="brand-sub">災害時の情報伝達とプロトコルの効果</div>
+        </div>
+      </div>
+      <nav id="scenario-chips" class="chip-row"></nav>
+      <div class="clock">
+        <div id="clock-wall" class="clock-wall">—</div>
+        <div id="clock-elapsed" class="clock-elapsed">発災から 0日 00:00</div>
+      </div>
+      <div class="transport">
+        <button id="play" class="primary-btn">再生</button>
+        <div id="speed-chips" class="chip-row"></div>
+        <button id="step" class="ghost-btn" title="1時間進める">+1時間</button>
+      </div>
+      <div class="progress top"><div id="progress-bar" class="progress-fill"></div></div>
+    </header>
+    <main class="layout">
+      <aside class="panel left">
+        <div id="params"></div>
+        <div class="apply-bar">
+          <button id="apply" class="primary-btn wide">最初から</button>
+          <button id="reset" class="ghost-btn" title="同じ条件で最初から">↺</button>
+        </div>
+      </aside>
+      <section class="mapwrap">
+        <div id="map"></div>
+        <canvas id="agents"></canvas>
+        <div class="map-overlay top-left">
+          <div id="map-modes" class="chip-row"></div>
+        </div>
+        <div class="map-overlay bottom-left">
+          <div id="legend" class="legend"></div>
+        </div>
+      </section>
+      <aside class="panel right">
+        <nav id="tabs" class="tabs"></nav>
+        <div id="tab-body" class="tab-body"></div>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
