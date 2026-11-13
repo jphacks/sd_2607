@@ -25,6 +25,8 @@ buildNpmPackage {
     mkdir -p $out/lib/appview/bsaf
     cp *.mts *.mjs feed.lua package.json $out/lib/appview/bsaf/
     cp -r node_modules $out/lib/appview/bsaf/
+    # hazard.mts reads the public.bsaf.hazard range table at the repository-relative path.
+    install -Dm644 ${../../protocol/mosimo/public/bsaf/hazard/prefectures.json} $out/lib/protocol/mosimo/public/bsaf/hazard/prefectures.json
     ln -s ${pdsRuntime}/lib/mosimo-pds $out/lib/pds
     ln -s appview/bsaf $out/lib/mosimo-bsaf
     runHook postInstall

@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { cidForLex } from '@atproto/lex-cbor';
 import { parseCid } from '@atproto/lex-data';
 import { object } from './store.mts';
+import { hazardExtensions } from './hazard.mts';
 import { createImportPost, authorizeImport, verifyBsaf, decodeCanonical, decodeRevocationList, unb64, rootConfig,
   validateAttestation, issuerDomains, BSAF, JMA_SELECTION, timestamp, hex, nostrPublicKey, atprotoPublicKey, unhex, encodeBytes, canonical } from '../../pds/attest.mjs';
 
@@ -26,13 +27,15 @@ export interface PublisherConfig {
 export interface Credentials { importer: { did: string; atprotoSecret: string; nostrSecret: string }; attestations: any[] }
 
 // Local delivery hints only, never an interpretation of source:jma or original agency authority.
+// Values follow the Bot vocabulary (public.bsaf.hazard §3): special-warning is its most severe class.
 const jmaPriorityRules: ReadonlyArray<{ type: string; value: string; level: 2 | 3 }> = [
-  { type: 'tsunami', value: 'severe-warning', level: 3 },
   { type: 'tsunami', value: 'special-warning', level: 3 },
   { type: 'tsunami', value: 'warning', level: 2 },
   { type: 'tsunami', value: 'advisory', level: 2 },
+  { type: 'nankai-trough', value: 'special-warning', level: 3 },
   { type: 'nankai-trough', value: 'warning', level: 3 },
   { type: 'nankai-trough', value: 'advisory', level: 2 },
+  { type: 'eruption', value: 'special-warning', level: 3 },
   { type: 'eruption', value: 'warning', level: 3 },
   { type: 'eruption', value: 'advisory', level: 2 },
   { type: 'earthquake', value: '5-', level: 2 },
@@ -172,6 +175,19 @@ function safePlainRecord(record: any) {
     }
   }
 }
+/** Tolerated fast clock of the source Bot: a record at most this far ahead waits instead of being held. */
+const SOURCE_CLOCK_SKEW_SECONDS = 300;
+/**
+ * A failure of the importer's own chain (unknown root, expiry, revocation) stops publication until the operator acts,
+ * without consuming rows. Anything specific to one record (size, deadline, scope, semantics) only holds that row,
+ * so one unsendable record never blocks the ones behind it.
+ */
+function rowSpecific(error: unknown) {
+  const message = (error as Error)?.message ?? '';
+  if (/Repository identity changed/.test(message)) return false;
+  if (!message.startsWith('No authorized chain')) return true;
+  return /outside the importer scope/.test(message) && !/revoked|unverifiable|expired|Revocation state/i.test(message);
+}
 /** Self-check with the same rules a receiving relay applies, using the publisher's own roots and known revocations. */
 function selfAuthorize(store: PublicationStore, event: any, config: PublisherConfig, roots: any[], nowSeconds: number) {
   return authorizeImport(event, { roots, selection: config.selection, revocations: store.revocations(), now: nowSeconds });
@@ -215,6 +231,8 @@ export async function stageNext(store: PublicationStore, config: PublisherConfig
         const selected = verifyBsaf(extension);
         if (!config.selection.some(e => e.botDid === selected.botDid && e.types.includes(selected.type))) continue;
         const originalSeconds = Math.floor(Date.parse(record.createdAt) / 1000);
+        // A slightly fast Bot clock is not a reason to drop a warning: leave the row for a later pass.
+        if (originalSeconds > nowSeconds && originalSeconds <= nowSeconds + SOURCE_CLOCK_SKEW_SECONDS) continue;
         if (originalSeconds > nowSeconds || originalSeconds + config.maxOriginalAgeSeconds <= nowSeconds) throw new Error('Source age');
         deadline = timestamp(originalSeconds + config.maxOriginalAgeSeconds);
       } catch {
@@ -226,10 +244,22 @@ export async function stageNext(store: PublicationStore, config: PublisherConfig
       const identity = `${importer.did}:${hex(atprotoPublicKey(unhex(importer.atprotoSecret)))}:${hex(nostrPublicKey(unhex(importer.nostrSecret)))}`;
       const previous = db.prepare('SELECT * FROM mosimo_bsaf_repository WHERE id=1').get();
       if (previous && previous.identity !== identity) throw new Error('Repository identity changed; explicit migration required');
-      const result = await createImportPost({ importer, attestations: credentials.attestations, text: record.text, ext: [extension],
-        createdAt: nowSeconds, exp: deadline, state: previous ? JSON.parse(String(previous.state_json)) : undefined,
-        priority: publicationPriority(config, String(row.did), record.tags) });
-      await selfAuthorize(store, result.event, config, roots, nowSeconds);
+      // Common hazard meaning (public.bsaf.hazard); empty for Bots/types/values outside the rule's tables.
+      let result: Awaited<ReturnType<typeof createImportPost>>;
+      try {
+        const hazard = hazardExtensions(String(row.did), record, { uri: String(row.uri), createdAt: record.createdAt,
+          retrievedFrom: String(row.source_url), retrievedAt: String(row.fetched_at), converter: importer.did });
+        result = await createImportPost({ importer, attestations: credentials.attestations, text: record.text, ext: [extension, ...hazard],
+          createdAt: nowSeconds, exp: deadline, state: previous ? JSON.parse(String(previous.state_json)) : undefined,
+          priority: publicationPriority(config, String(row.did), record.tags) });
+        await selfAuthorize(store, result.event, config, roots, nowSeconds);
+      } catch (error) {
+        if (!rowSpecific(error)) throw error;
+        // The repository state is not advanced, so the held row leaves no gap in the commit chain.
+        db.prepare(`INSERT INTO mosimo_bsaf_publications(uri,cid,original_json,provenance_json,status,hold_reason) VALUES(?,?,?,?,'held',?)`)
+          .run(row.uri, row.cid, row.record, JSON.stringify(provenance), `Staging: ${(error as Error).message}`.slice(0, 500));
+        continue;
+      }
       db.prepare(`INSERT INTO mosimo_bsaf_publications(uri,cid,original_json,provenance_json,event_json,deadline,status) VALUES(?,?,?,?,?,?,'pending')`)
         .run(row.uri, row.cid, row.record, JSON.stringify(provenance), JSON.stringify(result.event), deadline);
       db.prepare(`INSERT INTO mosimo_bsaf_repository VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json`)
@@ -264,17 +294,21 @@ export async function pushOnce(store: PublicationStore, config: PublisherConfig,
   const row = await stageNext(store, config, credentials, roots, nowSeconds);
   if (!row || Number(row.next_attempt) > nowSeconds) return false;
   const event = JSON.parse(String(row.event_json));
-  if (event.content !== JSON.parse(String(row.original_json)).text) {
+  const hold = async (reason: string) => {
+    // The signed EVENT stays for review; later rows build on its state, but it is never sent or re-signed.
     await store.transaction(async () => {
-      store.db.prepare('UPDATE mosimo_bsaf_publications SET hold_reason=? WHERE seq=?')
-        .run('Original text mismatch; operator review required; signed EVENT retained', row.seq);
+      store.db.prepare(`UPDATE mosimo_bsaf_publications SET status='held',hold_reason=? WHERE seq=? AND status='pending'`).run(reason, row.seq);
     });
-    // Keep this base pending: neither re-sign the original nor skip its evidence chain.
-    if (!row.hold_reason) console.error('{"status":"publisher-held","reason":"original-text-mismatch"}');
+    console.error(JSON.stringify({ status: 'publisher-held', seq: Number(row.seq), reason }));
     return false;
-  }
+  };
+  if (event.content !== JSON.parse(String(row.original_json)).text) return hold('Original text mismatch; operator review required; signed EVENT retained');
   // Recheck validity, revocation, selection and deadline at the actual send, including retries.
-  await selfAuthorize(store, event, config, roots, nowSeconds);
+  try { await selfAuthorize(store, event, config, roots, nowSeconds); }
+  catch (error) {
+    if (!rowSpecific(error)) throw error;
+    return hold(`Send: ${(error as Error).message}`.slice(0, 500));
+  }
   const accepted = await send(config.relayUrl, event, signal);
   await store.transaction(async () => {
     const attempts = Number(row.attempts) + 1;

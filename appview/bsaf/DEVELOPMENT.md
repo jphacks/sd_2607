@@ -35,7 +35,9 @@ services.mosimo-bsaf.authors = [
 - `publisher.enable = true` と、再配信先の `relayUrl`、importerの `credentialsFile`、公開root設定の `trustFile` を指定します。配信先や信頼の起点は自動選択されません。
 - 再配信対象はBot DIDと情報種別の組で選びます。`publisher.selectJmaDefaults` は地震・津波・火山の固定5種、`publisher.selectKikikuruDefaults` は気象の固定23種を選択します。両方を明示選択すると28組になり、いずれも新種別を自動追加しません。
 - 独自の `publisher.selection` は固定プリセットと排他です。再配信対象のBot DIDは `authors` にも登録します。受信側でも信頼するrootとBot・情報種別を個別に選択する必要があります。
-- 気象の優先度ヒントは既定1です。JMA XMLの復元、地域・警戒レベルの推測は行いません。優先度の上昇には受信側での独立した認可が必要です。
+- 気象の優先度ヒントは既定1です。JMA XMLの復元は行いません。優先度の上昇には受信側での独立した認可が必要です。
+- JMA BotとKikikuru Botの投稿には、[BSAFから災害情報への対応](../../protocol/mosimo/public/bsaf/hazard/README.md)（版1）の対応表に従って、災害情報の共通拡張・種類別拡張・出典を追加します。Kikikuru Botの都道府県単位の投稿には、都道府県を覆うGeohashの影響範囲も付けます。対応表にないBot・種別・値の投稿は、従来どおりBSAF拡張だけで転載します。
+- 都道府県の範囲表 `prefectures.json` は `tools/prefecture_cover.py` で生成します。Natural Earth 1:10m Admin 1（5.1.1）のシェープファイルを入力とし、shapelyとpyshpが必要です。表を変えた場合は対応規則の版も改めます。
 
 collectorには独立したDB・HTTPサーバー・著者秘密鍵・管理APIキーは不要です。publisherは独立したimporter署名鍵を使い、`LoadCredential` でimporter用の資格情報だけを読み込みます。root秘密鍵とPLC管理用の秘密鍵はオンラインサービスへ置きません。
 
