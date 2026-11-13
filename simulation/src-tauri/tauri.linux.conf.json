@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "mosimo-simulator",
+  "bundle": {
+    "category": "Education",
+    "linux": {
+      "deb": { "desktopTemplate": "linux/mosimo-simulator.desktop" },
+      "rpm": { "desktopTemplate": "linux/mosimo-simulator.desktop" }
+    }
+  }
+}

@@ -77,6 +77,7 @@
 mise install                 # ツールを入れる
 mise run dev                 # アプリを起動（初回は npm ci も行う）
 mise run build               # 配布用にビルド
+mise run build-linux         # Linux 向け（.deb・.rpm・.AppImage）を Ubuntu 22.04 のコンテナでビルド（podman が必要）
 mise run publish-hp          # ビルドしたインストーラーを ../hp のダウンロードページに置く
 mise run installer-images    # インストーラーの画像を作り直す（Windows のみ）
 mise run installer-images-macos # DMG の背景と mac 用アイコンを作り直す（mac のみ）

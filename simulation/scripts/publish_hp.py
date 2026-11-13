@@ -2,7 +2,8 @@
 
 Run after `mise run build`. Only the installers found on this machine are replaced, so
 running it on Windows updates the .msi/.exe entries and running it on macOS adds the .dmg
-without touching the others.
+without touching the others. The Linux bundles come from `mise run build-linux`, which
+builds in a container and writes to target/linux.
 
   hp/public/downloads/simulator/<file>   the installers (ASCII names for stable URLs)
   hp/src/data/simulator-downloads.json   what the download page lists
@@ -15,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BUNDLE = ROOT / "target" / "release" / "bundle"
+BUNDLES = [ROOT / "target" / "release" / "bundle", ROOT / "target" / "linux" / "release" / "bundle"]
 HP = ROOT.parent / "hp"
 OUT_DIR = HP / "public" / "downloads" / "simulator"
 MANIFEST = HP / "src" / "data" / "simulator-downloads.json"
@@ -28,6 +29,9 @@ KINDS = {
     "msi": ("msi/*_x64_*.msi", "windows", f"mosimo-simulator_{version}_x64.msi"),
     "dmg-aarch64": ("dmg/*_aarch64.dmg", "macos", f"mosimo-simulator_{version}_aarch64.dmg"),
     "dmg-x64": ("dmg/*_x64.dmg", "macos", f"mosimo-simulator_{version}_x64.dmg"),
+    "appimage": ("appimage/*_amd64.AppImage", "linux", f"mosimo-simulator_{version}_amd64.AppImage"),
+    "deb": ("deb/*_amd64.deb", "linux", f"mosimo-simulator_{version}_amd64.deb"),
+    "rpm": ("rpm/*.x86_64.rpm", "linux", f"mosimo-simulator-{version}-1.x86_64.rpm"),
 }
 
 
@@ -45,7 +49,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 found = 0
 for kind, (pattern, platform, name) in KINDS.items():
-    matches = [p for p in BUNDLE.glob(pattern) if version in p.name]
+    matches = [p for b in BUNDLES for p in b.glob(pattern) if version in p.name]
     if not matches:
         continue
     src = max(matches, key=lambda p: p.stat().st_mtime)
@@ -65,7 +69,7 @@ for kind, (pattern, platform, name) in KINDS.items():
     print(f"{kind:12} {name}  ({src.stat().st_size / 2**20:.2f} MiB)")
 
 if not found:
-    sys.exit(f"no installers for {version} under {BUNDLE}; run `mise run build` first")
+    sys.exit(f"no installers for {version} under {', '.join(map(str, BUNDLES))}; run `mise run build` first")
 
 order = list(KINDS)
 manifest["files"] = sorted(entries.values(), key=lambda e: order.index(e["kind"]) if e["kind"] in order else len(order))

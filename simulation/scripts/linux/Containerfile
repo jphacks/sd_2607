@@ -1,0 +1,23 @@
+# Build environment for the Linux bundles (.deb / .rpm / .AppImage).
+# Ubuntu 22.04 keeps the glibc and WebKitGTK requirements low enough for most current distros.
+FROM docker.io/library/ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl wget file xz-utils pkg-config \
+      libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG RUST_VERSION=1.97.1
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/opt/node/bin:$PATH
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION}
+
+ARG NODE_VERSION=24
+RUN mkdir -p /opt/node && curl -sSfL "https://nodejs.org/dist/latest-v${NODE_VERSION}.x/" \
+      | grep -o 'node-v[0-9.]*-linux-x64.tar.xz' | head -1 \
+      | xargs -I{} curl -sSfL "https://nodejs.org/dist/latest-v${NODE_VERSION}.x/{}" \
+      | tar -xJ -C /opt/node --strip-components=1
+
+# linuxdeploy (used for the AppImage) is itself an AppImage; there is no FUSE in the container.
+ENV APPIMAGE_EXTRACT_AND_RUN=1
+WORKDIR /src

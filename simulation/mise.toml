@@ -17,6 +17,10 @@ description = "Build the release app bundle (src-tauri/../target/release/bundle)
 depends = ["setup"]
 run = "npm run tauri build"
 
+[tasks.build-linux]
+description = "Build the .deb/.rpm/.AppImage in an Ubuntu 22.04 container (target/linux/release/bundle; needs podman)"
+run = "scripts/build_linux.sh"
+
 [tasks.test]
 description = "Run the simulation tests and type-check the frontend"
 depends = ["setup"]
@@ -50,5 +54,5 @@ description = "Regenerate the DMG background and icon.icns (macOS required)"
 run = "uv run --with pillow python src-tauri/icons/installer/generate_macos.py ../hp/public/images/mosimo-bosai-icon.png src-tauri/icons/installer src-tauri/icons/icon.icns"
 
 [tasks.publish-hp]
-description = "Copy the built installers into ../hp/public/downloads/simulator and update the download manifest (run after build)"
+description = "Copy the built installers into ../hp/public/downloads/simulator and update the download manifest (run after build or build-linux)"
 run = "uv run python scripts/publish_hp.py"
