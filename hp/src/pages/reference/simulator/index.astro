@@ -72,6 +72,7 @@ const version = files[0]?.version;
                   <a
                     class:list={["sim-button", d.primary ? "sim-button-primary" : "sim-button-light"]}
                     href={href(d.entry!)}
+                    data-kind={d.entry!.kind}
                     download
                   >
                     <span>{d.label}</span>
@@ -89,7 +90,7 @@ const version = files[0]?.version;
             <ul class="sim-files">
               {mac.map((d) => (
                 <li>
-                  <a class="sim-button sim-button-light" href={href(d.entry!)} download>
+                  <a class="sim-button sim-button-light" href={href(d.entry!)} data-kind={d.entry!.kind} download>
                     <span>{d.label}</span>
                     <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
                   </a>
@@ -105,7 +106,7 @@ const version = files[0]?.version;
             <ul class="sim-files">
               {linux.map((d) => (
                 <li>
-                  <a class="sim-button sim-button-light" href={href(d.entry!)} download>
+                  <a class="sim-button sim-button-light" href={href(d.entry!)} data-kind={d.entry!.kind} download>
                     <span>{d.label}</span>
                     <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
                   </a>
@@ -241,6 +242,37 @@ const version = files[0]?.version;
     </section>
   </main>
 </Layout>
+
+<script>
+  // The .exe is highlighted when JavaScript is off; otherwise highlight the file for this OS.
+  async function preferredKinds(): Promise<string[] | null> {
+    const ua = navigator.userAgent;
+    // iPadOS reports itself as a Mac, so tell it apart by touch.
+    if (/Android|iPhone|iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return [];
+    if (/Windows/.test(ua)) return ["exe", "msi"];
+    if (/Macintosh|Mac OS X/.test(ua)) {
+      // Only Chromium tells the CPU; Safari and Firefox fall back to Apple Silicon.
+      const data = (navigator as { userAgentData?: { getHighEntropyValues(h: string[]): Promise<{ architecture?: string }> } }).userAgentData;
+      const arch = await data?.getHighEntropyValues(["architecture"]).then((v) => v.architecture, () => undefined);
+      return arch === "x86" ? ["dmg-x64"] : ["dmg-aarch64", "dmg-x64"];
+    }
+    if (/CrOS|Ubuntu|Debian/.test(ua)) return ["deb", "appimage"];
+    if (/Fedora|Red Hat|openSUSE/.test(ua)) return ["rpm", "appimage"];
+    if (/Linux|X11/.test(ua)) return ["appimage", "deb"];
+    return null;
+  }
+
+  preferredKinds().then((kinds) => {
+    if (!kinds) return;
+    const buttons = [...document.querySelectorAll<HTMLAnchorElement>(".sim-download a[data-kind]")];
+    const target = kinds.map((k) => buttons.find((b) => b.dataset.kind === k)).find(Boolean);
+    for (const b of buttons) {
+      const on = b === target;
+      b.classList.toggle("sim-button-primary", on);
+      b.classList.toggle("sim-button-light", !on);
+    }
+  });
+</script>
 
 <style lang="scss">
   .sim-page {
