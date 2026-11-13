@@ -34,3 +34,5 @@ npm run check
 ## 配信
 
 `npm run build`で`dist/`に静的ファイルを出力します。Cloudflare Workersへは`npx wrangler deploy`で配信できます（`wrangler.jsonc`参照）。
+
+NixOSでは`default.nix`のモジュール（`services.mosimo-gov-web`）が、Nixのビルド時に`dist/`を作り、Caddyで配信します。接続先は`appviewUrl`と`clientKey`の設定値をビルド時に埋め込むため、`.env.local`は使いません。依存パッケージは`package-lock.json`の`integrity`から取得するので、ロックファイルを更新してもハッシュの更新は不要です。
