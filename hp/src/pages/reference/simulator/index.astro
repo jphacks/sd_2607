@@ -17,23 +17,14 @@ const mib = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 const href = (f: Entry) => `/downloads/simulator/${f.file}`;
 
 const windows = [
-  {
-    entry: byKind["exe"],
-    label: "インストーラー（.exe）",
-    note: "おすすめ。全員にインストールするか、自分だけにインストールするかを選べます。",
-    primary: true,
-  },
-  {
-    entry: byKind["msi"],
-    label: "Windows Installer（.msi）",
-    note: "管理者権限で、このPCの全員にインストールします。組織での一括配布向けです。",
-    primary: false,
-  },
+  { entry: byKind["exe"], label: ".exe", primary: true },
+  { entry: byKind["msi"], label: ".msi", primary: false },
 ].filter((d) => d.entry);
 
+// Two .dmg builds need the CPU to tell them apart.
 const mac = [
-  { entry: byKind["dmg-aarch64"], label: "Apple シリコン（.dmg）" },
-  { entry: byKind["dmg-x64"], label: "Intel（.dmg）" },
+  { entry: byKind["dmg-aarch64"], label: ".dmg（Apple シリコン）" },
+  { entry: byKind["dmg-x64"], label: ".dmg（Intel）" },
 ].filter((d) => d.entry);
 
 const version = files[0]?.version;
@@ -80,7 +71,6 @@ const version = files[0]?.version;
                     <span>{d.label}</span>
                     <span class="sim-size">{mib(d.entry!.bytes)} <span aria-hidden="true">↓</span></span>
                   </a>
-                  <p>{d.note}</p>
                 </li>
               ))}
             </ul>
@@ -345,15 +335,11 @@ const version = files[0]?.version;
   }
   .sim-files {
     display: grid;
+    grid-template-columns: repeat(2, 1fr);
     gap: 1rem;
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-  .sim-files p {
-    margin: 0.4rem 0 0;
-    font-size: 0.85rem;
-    color: #4a4b45;
   }
   .sim-button {
     display: flex;
