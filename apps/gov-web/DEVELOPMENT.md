@@ -9,11 +9,11 @@ React、Vite、TypeScriptで実装しています。UIには[デジタル庁デ�
 | 変数 | 用途 |
 |---|---|
 | `VITE_APPVIEW_URL` | 接続するAppViewのオリジン（省略時は`https://appview.oriom.dev`） |
-| `VITE_CLIENT_KEY` | HappyViewの公開クライアントキー（省略時はキーを付けずに問い合わせます） |
+| `VITE_CLIENT_KEY` | HappyViewの公開クライアントキー。任意で、省略時はキーを付けずに問い合わせます。HappyViewのレート制限はクライアントキー単位で全閲覧者が共有するため、キーなしの問い合わせは制限を受けません |
 | `VITE_MAP_BOUNDS` | 地図の初期表示範囲。`南端緯度,西端経度,北端緯度,東端経度`の順に度で指定します（例：`38.18,140.78,38.33,141.02`）。省略時や、形式または範囲が正しくない（南端＜北端で緯度±90以内、西端＜東端で経度±180以内でない）ときは日本全体を表示します |
 | `VITE_RELAY_URL` | 注釈の対象をNostrのevent IDから投稿へ対応付けるために問い合わせるMosimoのNostrリレー（省略時は`wss://pds.oriom.dev`） |
 
-クライアントキーは、HappyViewの管理画面の **Settings → API Clients** で、Client typeを`public`として発行します。配信先のドメインと開発用の`http://localhost:5173`を、Allowed originsに登録してください。オリジンが一致しない場合に拒否するか警告だけにするかは、HappyViewのバージョンによって異なります（[API Clients](https://happyview.dev/guides/api-clients)参照）。
+クライアントキーを使う場合は、HappyViewの管理画面の **Settings → API Clients** で、Client typeを`public`として発行します。配信先のドメインと開発用の`http://localhost:5173`を、Allowed originsに登録してください。オリジンが一致しない場合に拒否するか警告だけにするかは、HappyViewのバージョンによって異なります（[API Clients](https://happyview.dev/guides/api-clients)参照）。
 
 ## 開発
 

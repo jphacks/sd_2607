@@ -1,7 +1,18 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import protocolCovers from '../../../protocol/mosimo/public/bsaf/hazard/prefectures.json';
-import { APPVIEW, buildThreads, CLIENT_KEY, decodeGeohash, delayText, geohashOutline, parsePost, resolveHandle, validityState, type Post } from './mosimo';
+import { APPVIEW, buildThreads, CLIENT_KEY, decodeGeohash, delayText, fetchFeed, geohashOutline, parsePost, resolveHandle, validityState, type Post } from './mosimo';
 import covers from './prefectures.json';
+
+test('the client key is optional: fetchFeed sends client_key only when one is configured', async () => {
+  const keys: string[][] = [];
+  vi.stubGlobal('fetch', vi.fn(async (u: string | URL) => {
+    keys.push(new URL(String(u)).searchParams.getAll('client_key'));
+    return new Response(JSON.stringify({ records: [] }));
+  }));
+  await fetchFeed('https://appview.example', '', {});
+  await fetchFeed('https://appview.example', 'hvc_x', {});
+  expect(keys).toEqual([[], ['hvc_x']]);
+});
 
 test('arrival delay uses firstSeenAt only, never the backfill-rewritten indexedAt', () => {
   const rec = { uri: 'at://did:plc:a/app.bsky.feed.post/1', $type: 'app.bsky.feed.post', text: 't', createdAt: '2026-11-01T00:00:00Z' };
