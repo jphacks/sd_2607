@@ -139,6 +139,10 @@ func accuracyLabel(_ meters: Double) -> String { meters < 1000 ? "±\(Int(meters
 func coordsLabel(_ lat: Double, _ lng: Double) -> String { String(format: "%.5f, %.5f", lat, lng) }
 func micro(_ degrees: Double) -> Int64 { Int64((degrees * 1e6).rounded()) }
 
+/// Our own post extension, not an official dev.jisaku.mosimo type (core §10.3; apps/lexicons/dev/jisaku/bosai/connectivity.json):
+/// whether the OS has a network now. Every post this app publishes passes it explicitly.
+func connectivity(online: Bool) -> [String: Cbor] { ["$type": .text("dev.jisaku.bosai.connectivity"), "online": .bool(online)] }
+
 /// Annotation posts keyed by target event id.
 func annotationsByTarget(_ posts: [PostView]) -> [String: [PostView]] {
     Dictionary(grouping: posts.filter { $0.ext.annotation?.targetEventId != nil }) { $0.ext.annotation!.targetEventId! }

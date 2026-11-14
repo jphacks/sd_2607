@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.koinInject
@@ -56,8 +57,9 @@ fun AnnotationActions(target: PostView, annotations: List<PostView>, modifier: M
     var sent by remember(target.id) { mutableStateOf(false) }
     var writing by remember { mutableStateOf<Relation?>(null) }
     val agreed = rememberTermsGate()
+    val context = LocalContext.current
     fun send(relation: Relation, text: String) =
-        mesh.publish(text, listOfNotNull(Extensions.annotation(relation, target.id), here?.origin()))
+        mesh.publish(text, listOfNotNull(Extensions.annotation(relation, target.id), here?.origin(), connectivity(context)))
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val mine = sent || state.did in endorsed || state.publicKey in endorsed
         Action("確認した ${endorsed.size}", Icons.Outlined.Check, Mosimo.safe, enabled = !mine) {

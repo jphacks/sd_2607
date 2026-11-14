@@ -1,5 +1,6 @@
 package org.mndt.app.ui.map
 
+import android.content.Context
 import android.location.Location
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,6 +11,7 @@ import kotlinx.coroutines.launch
 import org.maplibre.android.camera.CameraPosition
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.post.Category
+import org.mndt.app.ui.post.connectivity
 import org.mndt.mesh.Extensions
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.Origin
@@ -47,7 +49,7 @@ fun mapPosts(posts: List<PostView>): List<PostView> {
     return posts.filter { it.mapPoint() != null && it.ext.annotation?.targetEventId !in ids }
 }
 
-class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepository) : ViewModel() {
+class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepository, private val context: Context) : ViewModel() {
     val state = mesh.state
     var filter by mutableStateOf(emptySet<Category>())
     var selected by mutableStateOf<String?>(null)
@@ -99,6 +101,7 @@ class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepo
             if (picked == null && fix != null) Extensions.origin(Origin(lat.micro(), lng.micro(), accuracy)) else null,
             areaMeters.takeIf { it > 0 }?.let { Extensions.circle(Region.Circle(lat.micro(), lng.micro(), it * 1000L)) },
             Extensions.validity(until = ends.toString()),
+            connectivity(context),
         )
         sentAttempt = state.value.publishAttempt
         sentId = state.value.lastPublishedId

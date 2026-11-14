@@ -169,6 +169,7 @@ struct AnnotationActions: View {
             ext.append(Extensions.origin(Origin(lat: micro(fix.coordinate.latitude), lon: micro(fix.coordinate.longitude),
                                                 acc: fix.horizontalAccuracy >= 0 ? Int64((fix.horizontalAccuracy * 1000).rounded()) : nil)))
         }
+        ext.append(connectivity(online: mesh.state.network))
         mesh.publish(body, extensions: ext)
     }
 

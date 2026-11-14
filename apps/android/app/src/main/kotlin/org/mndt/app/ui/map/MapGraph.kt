@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
+import org.koin.android.ext.koin.androidContext
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -75,7 +76,7 @@ import org.mndt.mesh.MeshState
 import org.mndt.mesh.PostView
 import org.mndt.mesh.Region
 
-val mapModule = module { viewModel { MapViewModel(get(), get()) } }
+val mapModule = module { viewModel { MapViewModel(get(), get(), androidContext()) } }
 
 fun EntryProviderScope<NavKey>.mapEntries() {
     entry<MapKey> { MapScreen(it.focus) }
