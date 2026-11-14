@@ -20,7 +20,7 @@ in
     clientKey = lib.mkOption {
       type = lib.types.nullOr lib.types.nonEmptyStr;
       default = null;
-      description = "Public HappyView client key embedded at build time; null queries without a key.";
+      description = "Public HappyView client key embedded at build time; null queries without a key. HappyView rate-limits per key, shared by every viewer, and not keyless queries.";
       example = "hvc_0123456789abcdef";
     };
     relayUrl = lib.mkOption {

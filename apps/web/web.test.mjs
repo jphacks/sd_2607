@@ -62,10 +62,11 @@ test('DID/URI diagnostic filters, single record response, and BSAF is not presen
   assert.equal(client.more.hidden, true);
 });
 
-test('public client key and override survive every page and refresh without leaking to PLC', async () => {
-  for (const [key, search, apiOrigin] of [
+test('optional public client key and override survive every page and refresh without leaking to PLC', async () => {
+  for (const [key, search, apiOrigin, clientKey = 'hvc_test_default'] of [
     ['hvc_test_default', `?did=${did}`, 'https://appview.example.org'],
     ['hvc_regression_override', `?did=${did}&client_key=hvc_regression_override&appview=https://custom-appview.invalid`, 'https://custom-appview.invalid'],
+    [null, `?did=${did}`, 'https://appview.example.org', null],
   ]) {
     const calls = [];
     const client = await runWeb(async input => {
@@ -75,7 +76,7 @@ test('public client key and override survive every page and refresh without leak
       return json(url.searchParams.has('cursor')
         ? { records: [post('older')] }
         : { records: [post('one')], cursor: '1' });
-    }, search);
+    }, search, { appviewUrl: 'https://appview.example.org', clientKey });
     await client.morePosts();
     await client.refresh();
     assert.equal(client.articles().length, 2);
@@ -85,7 +86,7 @@ test('public client key and override survive every page and refresh without leak
     for (const url of apiCalls) {
       assert.equal(url.origin, apiOrigin);
       assert.equal(url.pathname, '/xrpc/dev.jisaku.mosimo.getFeed');
-      assert.deepEqual(url.searchParams.getAll('client_key'), [key]);
+      assert.deepEqual(url.searchParams.getAll('client_key'), key ? [key] : []);
       assert.equal(url.searchParams.get('did'), did);
       assert.equal(url.searchParams.get('limit'), '50');
     }
