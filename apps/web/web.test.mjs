@@ -117,3 +117,26 @@ test('invalid API response is an error, not a false empty-feed success; next ref
   assert.match(client.status.textContent, /最終取得/);
   assert.match(client.feed.children[0].textContent, /投稿はまだありません/);
 });
+
+test('hide-alerts toggle hides BSAF originals and hazard/official-source posts, and restores them', async () => {
+  const bsaf = { $type: 'app.bsky.feed.post', uri: `at://${did}/app.bsky.feed.post/one`, text: 'bsaf alert', createdAt: '2020-01-01T00:00:00Z' };
+  const hazard = post('hazard', { text: 'hazard', ext: [{ $type: 'dev.jisaku.mosimo.hazard', type: 'earthquake' }] });
+  const repost = post('repost', { text: 'repost', ext: [{ $type: 'dev.jisaku.mosimo.public.bsaf' }] });
+  const plain = post('plain', { text: 'plain', ext: [{ $type: 'dev.jisaku.mosimo.geo#origin', lat: 1, lon: 2 }] });
+  let records = [bsaf, hazard, repost, plain];
+  const client = await runWeb(async input => {
+    if (new URL(input).hostname === 'plc.directory') return json({});
+    return json({ records });
+  });
+  const texts = () => client.articles().map(a => a.querySelector('.text').textContent);
+  assert.deepEqual(texts(), ['bsaf alert', 'hazard', 'repost', 'plain']);
+  client.toggleAlerts(true);
+  assert.deepEqual(texts(), ['plain']);
+  await client.refresh();
+  assert.deepEqual(texts(), ['plain'], 'stays hidden across polling');
+  records = [bsaf];
+  await client.refresh();
+  assert.match(client.feed.children[0].textContent, /警報・注意報を隠しています/);
+  client.toggleAlerts(false);
+  assert.deepEqual(texts(), ['bsaf alert']);
+});

@@ -12,7 +12,9 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
   main { max-width: 600px; margin: 0 auto; min-height: 100vh; border-inline: 1px solid var(--line); }
-  header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); padding: 14px 16px; font-weight: 700; font-size: 18px; }
+  header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); padding: 14px 16px; font-weight: 700; font-size: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+  .filter { font-weight: 400; font-size: 14px; color: var(--sub); display: flex; align-items: center; gap: 6px; margin-left: auto; cursor: pointer; }
+  .filter input { width: 18px; height: 18px; margin: 0; }
   article { display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .avatar { flex: none; width: 42px; height: 42px; border-radius: 50%; color: #fff; display: grid; place-items: center; font-weight: 700; }
   .body { min-width: 0; flex: 1; }
@@ -25,7 +27,7 @@
 </head>
 <body>
 <main>
-  <header>Mosimo タイムライン</header>
+  <header>Mosimo タイムライン<label class="filter"><input id="hideAlerts" type="checkbox">警報・注意報を隠す</label></header>
   <div id="feed"></div>
   <p id="status" class="status" role="status" aria-live="polite">読み込み中…</p>
   <button id="more" type="button" hidden>以前の投稿を読み込む</button>
@@ -47,6 +49,7 @@ for (const key of ['did', 'uri']) {
 const status = document.getElementById('status');
 const more = document.getElementById('more');
 const feed = document.getElementById('feed');
+const hideAlerts = document.getElementById('hideAlerts');
 const handles = new Map(); // did -> handle (resolved)
 const lookups = new Map(); // did -> Promise
 
@@ -109,8 +112,22 @@ function el(tag, cls, text) {
   return e;
 }
 
-function render(records) {
-  if (!records.length) return feed.replaceChildren(el('div', 'status', '投稿はまだありません'));
+// 警報・注意報系: BSAF originals, and Mosimo posts carrying hazard / official-source extensions (JMA, CAP, BSAF reposts).
+const ALERT_EXT = /^dev\.jisaku\.mosimo\.(hazard|public)([.#]|$)/;
+function isAlert(r) {
+  return r.$type === 'app.bsky.feed.post' || (Array.isArray(r.ext) && r.ext.some(e => e && typeof e.$type === 'string' && ALERT_EXT.test(e.$type)));
+}
+// Remembered per browser; storage may be unavailable (private mode), so failures are ignored.
+try { hideAlerts.checked = localStorage.getItem('mosimo-hide-alerts') === '1'; } catch {}
+hideAlerts.addEventListener('change', () => {
+  try { localStorage.setItem('mosimo-hide-alerts', hideAlerts.checked ? '1' : '0'); } catch {}
+  if (render.last) render(render.last);
+});
+
+function render(all) {
+  render.last = all;
+  const records = hideAlerts.checked ? all.filter(r => !isAlert(r)) : all;
+  if (!records.length) return feed.replaceChildren(el('div', 'status', all.length ? '表示する投稿はありません（警報・注意報を隠しています）' : '投稿はまだありません'));
   feed.replaceChildren(...records.map(r => {
     const did = r.uri.split('/')[2] || '';
     resolve(did);
