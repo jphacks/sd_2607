@@ -1,4 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <!-- Mosimo Bosai, so the relay screen can open the app holding this phone's radios. -->
+    <queries>
+        <package android:name="dev.jisaku.mosimo" />
+        <package android:name="dev.jisaku.mosimo.debug" />
+    </queries>
     <application
         android:name=".HanashiApp"
         android:allowBackup="false"
@@ -16,5 +21,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Ahead of other Mosimo apps at boot: the first app to start holds the phone's radios (mesh §4.6). -->
+        <receiver android:name="org.mndt.mesh.BootReceiver" android:exported="false" tools:node="replace">
+            <intent-filter android:priority="999"><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -1,5 +1,8 @@
 package dev.jisaku.hanashi.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,12 +20,14 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,10 +59,32 @@ fun Relays(mesh: MeshState, chats: Chats) {
                 SegmentedButton(!graph, { graph = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("タイムライン") }
                 SegmentedButton(graph, { graph = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("ネットワーク図") }
             }
+            if (mesh.running && !mesh.radios && mesh.neighbors.any { "local" in it.links }) RadioHolderNotice()
         }
         if (graph) RelayGraph(mesh, Modifier.weight(1f))
         else if (items.isEmpty()) Empty("まだ中継したデータはありません\n近くで Mosimo のアプリが使われると、ここに流れます")
         else Timeline(items, chats, mesh.publicKey)
+    }
+}
+
+/**
+ * Another Mosimo app on this phone started first and runs the radios (mesh §4.6 has no handover), so we only see what
+ * passes through it. Once it stops we take over within seconds, and it follows us when reopened.
+ */
+@Composable
+private fun RadioHolderNotice() {
+    val context = LocalContext.current
+    // ponytail: assumes the holder is Mosimo Bosai; any other holder (say, a second Talk) is stopped by hand.
+    val bosai = remember { listOf("dev.jisaku.mosimo", "dev.jisaku.mosimo.debug").firstOrNull { context.packageManager.getLaunchIntentForPackage(it) != null } }
+    Row(Modifier.fillMaxWidth().padding(16.dp, 8.dp, 16.dp, 0.dp).background(Hanashi.canvas, RoundedCornerShape(8.dp)).padding(12.dp, 6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("電波は同じ端末の別のアプリが担当中", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("そのアプリを強制停止して開き直すと、トークが担当します", fontSize = 12.sp, color = Hanashi.muted)
+        }
+        if (bosai != null) TextButton({ context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", bosai, null))) }) {
+            Text("防災を停止")
+        }
     }
 }
 

@@ -50,6 +50,8 @@ internal class LocalLink(private val radios: List<Link>, private val ports: List
     private var hello: CountDownLatch? = null // released when the checked port says HELLO or hangs up
     private var radiosOn = false
     private val conns = HashMap<String, TcpConn>()
+    /** This app runs the radios for the phone now (holder, or every port taken by other apps). */
+    val holding: Boolean get() = synchronized(lock) { radiosOn }
 
     override fun start(node: String, listener: LinkListener) {
         stop()

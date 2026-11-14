@@ -83,6 +83,8 @@ data class MeshState(
     val clockSkews: List<ClockSkew> = emptyList(),
     /** Posts reported from this device in this run. */
     val reported: Set<String> = emptySet(),
+    /** This app runs BLE and LAN for the phone (mesh §4.6); false while another Mosimo app on it does, or when stopped. */
+    val radios: Boolean = false,
 )
 
 /** SDK entry point. Call get() at application initialization, not at mesh start. */
@@ -148,7 +150,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val gatt = GattLink(context, allowedPeerNode)
     // BLE and LAN run only in the app that holds this phone's LocalLink port; other Mosimo apps on the phone relay through it.
     private val lan = LanLink(context)
-    private val links: List<Link> = listOf(LocalLink(listOf(gatt, lan)))
+    private val local = LocalLink(listOf(gatt, lan))
+    private val links: List<Link> = listOf(local)
     private val blocked get() = disk?.blockedPubkeys.orEmpty()
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
@@ -463,7 +466,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                 .also { arrived.keys.retainAll(it.keys); exported.keys.retainAll(it.keys) },
             roots = publicConfig.roots, trustRoots = trustEntries, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
             clockSkews = clockSkews.values.reversed(),
-            reported = reported.toSet(),
+            reported = reported.toSet(), radios = local.holding,
         ) }
     }
     private fun persist(next: DiskState = checkNotNull(disk)) {
