@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore, validateConfig, type Config } from './store.mts';
 
-const trigger = 'xrpc.query:dev.oriom.mosimo.getFeed';
+const trigger = 'xrpc.query:dev.jisaku.mosimo.getFeed';
 const body = readFileSync(new URL('./feed.lua', import.meta.url), 'utf8');
 
 // HappyView resolves query scripts from SQLite on every request. No admin
@@ -12,10 +12,10 @@ export function prepare(config: Config): void {
   const db = new DatabaseSync(config.databasePath, { readOnly: true });
   try {
     const lexicon = db.prepare('SELECT lexicon_json,target_collection FROM happyview_lexicons WHERE id = ?')
-      .get('dev.oriom.mosimo.getFeed');
-    if (!lexicon || lexicon.target_collection !== 'dev.oriom.mosimo.post' ||
+      .get('dev.jisaku.mosimo.getFeed');
+    if (!lexicon || lexicon.target_collection !== 'dev.jisaku.mosimo.post' ||
         JSON.parse(String(lexicon.lexicon_json)).defs?.main?.type !== 'query') {
-      throw new Error('Register the Mosimo getFeed query with target dev.oriom.mosimo.post first');
+      throw new Error('Register the Mosimo getFeed query with target dev.jisaku.mosimo.post first');
     }
     const script = db.prepare('SELECT body,script_type FROM happyview_scripts WHERE id = ?').get(trigger);
     if (script) {

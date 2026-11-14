@@ -1,10 +1,17 @@
-// Mosimo feed parsing. Extension shapes follow protocol/0004, 0011 and 0020.
-const DEFS = 'dev.oriom.mosimo.defs#';
+// Mosimo feed parsing. Extension shapes follow the dev.jisaku.mosimo protocol
+// (post, geo, validity, annotation, priority).
+const NS = 'dev.jisaku.mosimo';
+const POST = `${NS}.post`;
+const ORIGIN = `${NS}.geo#origin`;
+const AREA = `${NS}.geo#area`;
+const VALIDITY = `${NS}.validity`;
+const ANNOTATION = `${NS}.annotation`;
+const PRIORITY = `${NS}.priority`;
 
 export type LatLng = [number, number];
 export type Area = { shape: 'circle'; center: LatLng; radiusMeters: number } | { shape: 'rect'; bounds: [LatLng, LatLng] };
 export type Relation = 'correction' | 'supplement' | 'endorsement';
-export type Validity = { startsAt?: string; endsAt?: string };
+export type Validity = { from?: string; until?: string };
 export type ValidityState = 'valid' | 'expired' | 'unknown';
 
 export type Post = {
@@ -51,8 +58,8 @@ export function decodeGeohash(hash: string): [LatLng, LatLng] | undefined {
 function parseArea(region: unknown): Area | undefined {
   const r = obj(region);
   if (r?.shape === 'circle') {
-    const center = micro(r.latitudeMicrodegrees, r.longitudeMicrodegrees);
-    const mm = int(r.radiusMillimeters);
+    const center = micro(r.lat, r.lon);
+    const mm = int(r.r);
     return center && mm != null && mm >= 0 ? { shape: 'circle', center, radiusMeters: mm / 1000 } : undefined;
   }
   if (r?.shape === 'geohash' && typeof r.hash === 'string') {
@@ -61,45 +68,63 @@ function parseArea(region: unknown): Area | undefined {
   }
 }
 
+// Mosimo posts carry no top-level createdAt; recover the authoritative µs timestamp from the TID rkey.
+const TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz';
+function tidTime(rkey: string | undefined): string | undefined {
+  if (!rkey || rkey.length !== 13) return undefined;
+  let v = 0n;
+  for (const c of rkey) {
+    const n = TID_CHARS.indexOf(c);
+    if (n < 0) return undefined;
+    v = (v << 5n) | BigInt(n);
+  }
+  return new Date(Number(v >> 10n) / 1000).toISOString();
+}
+
 export function parsePost(record: Record<string, unknown>, provenance?: Record<string, unknown>): Post | undefined {
-  const uri = str(record.uri), text = str(record.text), createdAt = str(record.createdAt);
-  if (!uri || text == null || !createdAt) return undefined;
+  const uri = str(record.uri), text = str(record.text);
+  if (!uri || text == null) return undefined;
+  const bsaf = record.$type === 'app.bsky.feed.post';
+  const createdAt = bsaf ? str(record.createdAt) : (str(record.created) ?? tidTime(uri.split('/').at(-1)));
+  if (!createdAt) return undefined;
   const post: Post = {
     uri,
     did: uri.split('/')[2] ?? '',
     text,
     createdAt,
     indexedAt: str(provenance?.indexedAt),
-    bsaf: record.$type === 'app.bsky.feed.post',
+    bsaf,
     areas: [],
     unknownTypes: [],
   };
-  for (const ext of Array.isArray(record.extensions) ? record.extensions : []) {
+  const extensions = bsaf ? [] : (Array.isArray(record.ext) ? record.ext : []);
+  for (const ext of extensions) {
     const e = obj(ext);
     const type = str(e?.$type);
     if (!e || !type) continue;
     switch (type) {
-      case DEFS + 'origin':
-        post.origin = micro(e.latitudeMicrodegrees, e.longitudeMicrodegrees);
+      case ORIGIN:
+        post.origin = micro(e.lat, e.lon);
         break;
-      case DEFS + 'area':
+      case AREA:
         for (const region of Array.isArray(e.regions) ? e.regions : []) {
           const area = parseArea(region);
           if (area) post.areas.push(area);
         }
         break;
-      case DEFS + 'validity':
-        post.validity = { startsAt: str(e.startsAt), endsAt: str(e.endsAt) };
+      case VALIDITY:
+        post.validity = { from: str(e.from), until: str(e.until) };
         break;
-      case DEFS + 'annotation': {
+      case ANNOTATION: {
         const relation = e.relation;
         if (relation === 'correction' || relation === 'supplement' || relation === 'endorsement') {
-          // Nostr targets have no AppView URI, so they always read as 参照先未取得.
-          post.annotation = { relation, target: str(obj(e.target)?.uri) };
+          // atproto targets carry a uri; Nostr targets carry only an eventId and read as 参照先未取得.
+          const target = obj(e.target);
+          post.annotation = { relation, target: target?.network === 'atproto' ? str(target.uri) : undefined };
         }
         break;
       }
-      case DEFS + 'priority': {
+      case PRIORITY: {
         const level = int(e.level);
         if (level != null && level >= 0 && level <= 3) post.priority = level;
         break;
@@ -111,12 +136,12 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
   return post;
 }
 
-// A missing end means 不明 (0011), and a not-yet-started period is not 有効 either.
+// A missing end means 不明, and a not-yet-started period is not 有効 either.
 export function validityState(v: Validity | undefined, now = Date.now()): ValidityState {
-  const end = Date.parse(v?.endsAt ?? '');
+  const end = Date.parse(v?.until ?? '');
   if (!(end >= 0)) return 'unknown';
   if (now > end) return 'expired';
-  const start = Date.parse(v?.startsAt ?? '');
+  const start = Date.parse(v?.from ?? '');
   return start > now ? 'unknown' : 'valid';
 }
 
@@ -173,10 +198,12 @@ export function delayText(post: Post): string | undefined {
   return `約${Math.round(min / 1440)}日遅れで到着`;
 }
 
+export const POST_COLLECTION = POST;
+
 export type FeedPage = { posts: Post[]; cursor?: string };
 
 export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }): Promise<FeedPage> {
-  const url = new URL('/xrpc/dev.oriom.mosimo.getFeed', appview);
+  const url = new URL('/xrpc/dev.jisaku.mosimo.getFeed', appview);
   url.searchParams.set('limit', '50');
   // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
   if (clientKey) url.searchParams.set('client_key', clientKey);

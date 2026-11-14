@@ -24,7 +24,7 @@ function handle()
   local sql = [[
     SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at, r.created_at,
            NULL AS fetched_at, NULL AS source_url
-    FROM happyview_records r WHERE r.collection = 'dev.oriom.mosimo.post'
+    FROM happyview_records r WHERE r.collection = 'dev.jisaku.mosimo.post'
   ]] .. filter .. [[
     UNION ALL
     SELECT r.uri, r.did, r.collection, r.cid, r.record, r.indexed_at, r.created_at,

@@ -36,7 +36,7 @@ const params = new URLSearchParams(location.search);
 const APPVIEW = params.get('appview') || globalThis.MOSIMO_CONFIG.appviewUrl;
 // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
 const CLIENT_KEY = params.get('client_key') || globalThis.MOSIMO_CONFIG.clientKey;
-const FEED = new URL('/xrpc/dev.oriom.mosimo.getFeed', APPVIEW);
+const FEED = new URL('/xrpc/dev.jisaku.mosimo.getFeed', APPVIEW);
 FEED.searchParams.set('limit', '50');
 FEED.searchParams.set('client_key', CLIENT_KEY);
 // A DID/URI filter makes a delayed mesh delivery directly inspectable.
@@ -84,6 +84,24 @@ function rel(s) {
   return new Date(s).toLocaleDateString('ja-JP');
 }
 
+// Mosimo posts carry no top-level createdAt; recover the authoritative µs timestamp from the TID rkey.
+const TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz';
+function tidTime(rkey) {
+  if (typeof rkey !== 'string' || rkey.length !== 13) return;
+  let v = 0n;
+  for (const c of rkey) {
+    const n = TID_CHARS.indexOf(c);
+    if (n < 0) return;
+    v = (v << 5n) | BigInt(n);
+  }
+  return new Date(Number(v >> 10n) / 1000).toISOString();
+}
+function createdOf(r) {
+  if (r.$type === 'app.bsky.feed.post') return r.createdAt;
+  if (typeof r.created === 'string') return r.created;
+  return tidTime(typeof r.uri === 'string' ? r.uri.split('/').at(-1) : undefined);
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -100,8 +118,9 @@ function render(records) {
     a.dataset.did = did;
     const avatar = el('div', 'avatar');
     avatar.style.background = color(did);
-    const time = el('span', 'time', rel(r.createdAt));
-    time.title = r.createdAt;
+    const createdAt = createdOf(r) ?? '';
+    const time = el('span', 'time', rel(createdAt));
+    time.title = createdAt;
     const meta = el('div', 'meta');
     meta.append(el('span', 'name'), time);
     const body = el('div', 'body');
@@ -138,7 +157,7 @@ async function load() {
       const rows = data.record ? [data.record] : data.records;
       if (!Array.isArray(rows)) throw new Error('Invalid feed response');
       for (const r of rows) {
-        if (r && typeof r.uri === 'string' && typeof r.text === 'string' && typeof r.createdAt === 'string') records.set(r.uri, r);
+        if (r && typeof r.uri === 'string' && typeof r.text === 'string' && createdOf(r)) records.set(r.uri, r);
       }
       cursor = data.cursor;
       if (cursor == null) break;
