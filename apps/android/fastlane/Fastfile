@@ -25,7 +25,7 @@ platform :android do
     gradle(project_dir: app[:dir], task: ":#{app[:module]}:bundleRelease")
   end
 
-  desc "Test, build, and publish the AAB and screenshots to the Google Play alpha track"
+  desc "Test, build, and publish the AAB and screenshots to a Google Play track (track:alpha default, track:beta for open testing)"
   # Named internal because mise's deploy task calls it.
   lane :internal do |options|
     app = android_app!(options)
@@ -34,6 +34,6 @@ platform :android do
     # ci leaves the debug APK in lane_context; upload only the AAB.
     # ponytail: metadata defaults to ./fastlane/metadata/android, which only Mosimo's CI screengrab creates; a local hanashi
     # deploy after a screengrab would upload Mosimo's screenshots. Pass a per-app metadata_path once Hanashi has a listing.
-    upload_to_play_store(package_name: app[:package], track: "alpha", skip_upload_apk: true)
+    upload_to_play_store(package_name: app[:package], track: options.fetch(:track, "alpha"), skip_upload_apk: true)
   end
 end

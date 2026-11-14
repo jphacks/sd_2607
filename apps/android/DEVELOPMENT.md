@@ -35,6 +35,7 @@ mise run fastlane-test      # Fastfileのテスト
 mise run ci                 # fastlaneで単体テスト・lint・debug APKビルド
 mise run aab
 mise run deploy             # Google Playのalphaトラック（クローズドテスト）へ配布
+mise run deploy track:beta  # betaトラック（オープンテスト）へ直接配布
 ```
 
 `aab`は署名付きrelease AABを生成する。バージョンは`app/build.gradle.kts`の`versionCode`・`versionName`を使い、署名用環境変数が必要。
@@ -64,9 +65,9 @@ GitHubのSettings → Environmentsで`play-mosimo`を作成し、以下のEnviro
 
 認証ファイルをローカルに置く場合は、Git管理対象外の`fastlane/credentials/`を使う。秘密情報をコマンド引数や追跡対象ファイルに書かない。keystoreファイルもGit管理対象外とする。
 
-GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`を指定する。`versionCode`はこのworkflowの実行番号（`github.run_number`）で自動採番し、`versionName`は`app/build.gradle.kts`の値を使う。同じ実行のRe-runは同じコードになりPlayに拒否されるため、再配布はRun workflowから新しく実行する。ローカル配布でversionCodeを指定する場合は、CIの実行番号と衝突しない値にする。
+GitHub Actionsの**Android → Run workflow**で、ref`main`・`app=mosimo`・`track`を指定する。`track`は`alpha`（クローズドテスト、既定）か`beta`（オープンテスト）で、`beta`はalphaを経由せず直接オープンテストへ配布する。Play Console側でオープンテストを利用できる状態（対象国の設定など）にしておく。`versionCode`はこのworkflowの実行番号（`github.run_number`）で自動採番し、`versionName`は`app/build.gradle.kts`の値を使う。同じ実行のRe-runは同じコードになりPlayに拒否されるため、再配布はRun workflowから新しく実行する。ローカル配布でversionCodeを指定する場合は、CIの実行番号と衝突しない値にする。
 
-手動配布はテスト成功後に署名済みAABを生成し、`alpha`トラックへ`completed`として送信する。配布前にAPKをビルドしてからエミュレータを起動し（同時に動かすとエミュレータが重くなりランチャーのANRダイアログが写り込む）、エラーダイアログを非表示にしてスクリーンショットを撮影し、ストア掲載のスクリーンショットを置き換える（掲載文のテキストファイルは置かないため変更されない）。撮影結果もArtifactsに保存する。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
+手動配布はテスト成功後に署名済みAABを生成し、指定したトラックへ`completed`として送信する。配布前にAPKをビルドしてからエミュレータを起動し（同時に動かすとエミュレータが重くなりランチャーのANRダイアログが写り込む）、エラーダイアログを非表示にしてスクリーンショットを撮影し、ストア掲載のスクリーンショットを置き換える（掲載文のテキストファイルは置かないため変更されない）。撮影結果もArtifactsに保存する。不足するSecret、ビルド失敗、バージョンコードの衝突、Play APIエラーは失敗として報告する。同一アプリの配布は直列化し、keystoreの一時ファイルは終了時に削除する。AABと検証レポートはArtifactsに保存する。
 
 ### Play Store用スクリーンショット
 

@@ -22,6 +22,12 @@ on:
         options: [mosimo, hanashi]
         default: mosimo
         required: true
+      track:
+        description: Play track (alpha = closed testing, beta = open testing)
+        type: choice
+        options: [alpha, beta]
+        default: alpha
+        required: true
 
 
 permissions:
@@ -71,7 +77,7 @@ jobs:
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
 
-  alpha:
+  release:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     environment: play-${{ inputs.app }}
@@ -118,7 +124,7 @@ jobs:
           script: |
             "$ANDROID_HOME/platform-tools/adb" shell settings put global hide_error_dialogs 1
             mise exec -- bundle exec fastlane screengrab --android_home "$ANDROID_HOME"
-      - name: Test, sign, and distribute to the Play alpha track
+      - name: Test, sign, and distribute to the Play ${{ inputs.track }} track
         env:
           SOPS_AGE_KEY: ${{ secrets.MISE_SOPS_AGE_KEY }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -126,6 +132,7 @@ jobs:
           ORG_GRADLE_PROJECT_mosimoVersionCode: ${{ github.run_number }}
           ORG_GRADLE_PROJECT_hanashiVersionCode: ${{ github.run_number }}
           APP: ${{ inputs.app }}
+          TRACK: ${{ inputs.track }}
         run: |
           set -euo pipefail
           umask 077
@@ -133,11 +140,11 @@ jobs:
           trap 'rm -f "$SOPS_AGE_KEY_FILE" "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$SOPS_AGE_KEY" > "$SOPS_AGE_KEY_FILE"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          mise run deploy "app:$APP"
+          mise run deploy "app:$APP" "track:$TRACK"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ${{ inputs.app }}-alpha-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.app }}-${{ inputs.track }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             apps/android/**/build/outputs/bundle/release/*.aab
             apps/android/**/build/outputs/apk/debug/*.apk
