@@ -49,12 +49,13 @@ class HazardNotifier(private val context: Context, private val mesh: MeshCoordin
             ?.let { it.latitude to it.longitude }
         val fresh = alertCandidates(state.posts, state.publicKey, now / 1000, here, handledIds)
         if (fresh.isEmpty()) return
-        // Handled even when switched off or not permitted: turning alerts on later must not ring for what already came in.
+        // Handled even when switched off, not permitted or silent (grouped, public §8.1): turning alerts on later must not ring
+        // for what already came in.
         handled = pruneHandled(handled + fresh.map { handledEntry(it.post) }, now / 1000)
         handledIds = handledIds(handled)
         prefs.edit { putStringSet(HANDLED, handled) }
         if (!permitted()) return
-        val next = nextBatch(batch, fresh.filter { enabled(context, it.genre) }, now) ?: return
+        val next = nextBatch(batch, fresh.filter { !it.silent && enabled(context, it.genre) }, now) ?: return
         val updating = next.notificationId == batch?.notificationId
         batch = next
         runCatching { show(next, updating) }

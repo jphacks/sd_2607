@@ -189,7 +189,7 @@ fun HazardSection(post: PostView) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val (icon, color, text) = when {
                 confirmed -> Triple(Icons.Outlined.Verified, Mosimo.safe, "公的な発表として確認済み")
-                // importer-only: hazard §8 allows 「orgName が転載した情報」 (BsafVerification), not an issuer's announcement.
+                // importer-only: hazard §8 allows 「orgName が転載した情報」 (SourceInfo), not an issuer's announcement.
                 post.importerAuthorized -> Triple(Icons.Outlined.Verified, Mosimo.safe, "認可された転載者による情報")
                 else -> Triple(Icons.Outlined.Info, Mosimo.textTertiary, "利用者の申告（未確認）")
             }

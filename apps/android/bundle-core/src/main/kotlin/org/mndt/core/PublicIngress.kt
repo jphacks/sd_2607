@@ -12,16 +12,27 @@ object PublicIngress {
     const val PRIORITY = "dev.jisaku.mosimo.priority"
     const val JMA_EARTHQUAKE = "dev.jisaku.mosimo.public.jma.earthquake"
     const val JMA_WEATHER = "dev.jisaku.mosimo.public.jma.weather"
-    /** importer §1.1: the feed of re-posted JMA disaster-information XML; its types are the original `Control/Title`. */
-    const val FEED_JMA_XML = "jma-xml"
+    const val SOURCE = "dev.jisaku.mosimo.public#source"
+    /** importer §1.1, public.jma §12: the feed of re-posted JMA disaster-information XML; no origin, its types are the original `Control/Title`. */
+    const val FEED_JMA = "dev.jisaku.mosimo.public.jma"
     const val MAX_ROOTS = 8
-    /** importer §4: (botDid, type) and (feed, type) pairs together. */
+    /** importer §4: (botDid, type) and (feed, origin, type) entries together. */
     const val MAX_SELECTED = 64
-    /** One re-post source a receiver may select (importer §3): a Bot's `(botDid, type)` or a feed's `(feed, type)`. */
+    /**
+     * A re-post source (importer §1.3, §3): a Bot's `(botDid, type)` or a feed's `(feed, origin?, type)`. As the pair of a
+     * post, [Feed.type] is always set; as a local selection, a null [Feed.origin] / [Feed.type] stands for every issuer / type.
+     */
     sealed interface Selection {
-        val type: String
+        val type: String?
         data class Bot(val botDid: String, override val type: String) : Selection { override fun toString() = "bot=$botDid type=$type" }
-        data class Feed(val feed: String, override val type: String) : Selection { override fun toString() = "feed=$feed type=$type" }
+        data class Feed(val feed: String, val origin: String? = null, override val type: String? = null) : Selection {
+            override fun toString() = "feed=$feed" + (origin?.let { " origin=$it" } ?: "") + " type=${type ?: "*"}"
+        }
+    }
+    /** importer §1.3, §3: whether a local selection holds a post's [pair]. A post without origin needs an entry without one. */
+    fun selects(selected: Set<Selection>, pair: Selection): Boolean = when (pair) {
+        is Selection.Bot -> pair in selected
+        is Selection.Feed -> selected.any { it is Selection.Feed && Attest.FeedScope(it.feed, it.origin, it.type?.let(::setOf)).includes(pair.feed, pair.origin, pair.type) }
     }
     data class Config(val roots: List<Attest.Root> = emptyList(), val selected: Set<Selection> = emptySet())
 
@@ -46,7 +57,7 @@ object PublicIngress {
     data class ChainView(val state: Attest.ChainState, val expiredNow: Boolean?, val revocation: Attest.RevocationState?, val name: String?,
         val orgId: String?, val roles: List<String>, val trustLevel: Long?, val reason: String,
         /** importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
-         *  (Bot DID, type) or (feed, type), and that pair locally selected. Decided from the post alone, however it arrived. */
+         *  (Bot DID, type) or (feed, origin, type), and that pair locally selected. Decided from the post alone, however it arrived. */
         val importAuthorized: Boolean = false) {
         val identity: Boolean get() = Attest.ROLE_IDENTITY in roles
         val publicInformation: Boolean get() = Attest.ROLE_PUBLIC_INFORMATION in roles
@@ -73,13 +84,15 @@ object PublicIngress {
         require(roots.map { it.pubkeyHex }.distinct().size == roots.size) { "Duplicate root" }
         require(node["selected"].isArray && node["selected"].size() <= MAX_SELECTED)
         val selected = node["selected"].map { s ->
-            val type = s["type"]?.string()?.also { require(utf8(it).size in 1..128) } ?: error("Expected type")
+            val type = s["type"]?.string()?.also { require(utf8(it).size in 1..128) }
             if (s.has("feed")) {
-                s.exactFields(setOf("feed", "type"))
-                Selection.Feed(s["feed"].string().also { require(utf8(it).size in 1..128) }, type)
+                // {feed, origin?, type?}: an absent origin or type selects every issuer or type of the feed (importer §1.3).
+                s.exactFields(setOf("feed") + listOfNotNull("origin".takeIf { s.has(it) }, "type".takeIf { s.has(it) }))
+                Selection.Feed(s["feed"].string().also { require(Attest.isFeedId(it)) { "Invalid feed ID" } },
+                    s["origin"]?.string()?.also { require(Attest.isOrigin(it)) { "Invalid feed origin" } }, type)
             } else {
                 s.exactFields(setOf("botDid", "type"))
-                Selection.Bot(s["botDid"].string().also { require(AtRepository.didPattern.matches(it)) }, type)
+                Selection.Bot(s["botDid"].string().also { require(AtRepository.didPattern.matches(it)) }, type ?: error("Expected type"))
             }
         }
         require(selected.distinct().size == selected.size) { "Duplicate selection" }
@@ -107,7 +120,7 @@ object PublicIngress {
     }
     /** Roles and depth given to a user-added root: it may certify importers and public-information issuers below it. */
     val USER_ROOT_ROLES = setOf(Attest.ROLE_IMPORT, Attest.ROLE_PUBLIC_INFORMATION, "attest")
-    const val USER_ROOT_DEPTH = 2
+    const val USER_ROOT_DEPTH = 16
 
     /** A root key typed by the user: 64 hex digits (x-only, as in Nostr and the attest chain). */
     fun rootKey(text: String): String? = text.trim().lowercase().takeIf { it.matches(Regex("[0-9a-f]{64}")) && runCatching { Attest.publicKey(unhex(it, 32)) }.isSuccess }
@@ -172,23 +185,35 @@ object PublicIngress {
     }
 
     /**
-     * The pair a re-post claims to carry (importer §1.1, §2): `public.bsaf` with `original` gives (botDid, type); otherwise
-     * exactly one `public.jma.earthquake` / `public.jma.weather` gives (`jma-xml`, its `message.control.title`).
+     * The pair a re-post claims to carry (importer §1.2, §2): `public.bsaf` with `original` gives (botDid, type); a post without
+     * `public.bsaf` and exactly one `public#source` declaring `feed: {id, origin?, type}` gives that declaration. For the feed
+     * this receiver knows ([FEED_JMA]) the declaration must match the content; unknown feeds are taken as declared.
      * Throws when the post is neither.
      */
     fun importSelection(event: NostrEvent): Selection {
         val ext = AtRepository.extensions(event)
-        if (ext.any { it["\$type"] == BSAF }) return bsafOriginal(event).let { Selection.Bot(it.botDid, it.type) }
-        val jma = ext.filter { it["\$type"] == JMA_EARTHQUAKE || it["\$type"] == JMA_WEATHER }.singleOrNull() ?: error("Not a bsaf or jma-xml re-post")
-        val title = Attest.text(Attest.map(Attest.map(jma["message"])["control"])["title"])
-        require(utf8(title).size in 1..128) { "Invalid Control/Title" }
-        return Selection.Feed(FEED_JMA_XML, title)
+        val sources = ext.filter { it["\$type"] == SOURCE }
+        if (ext.any { it["\$type"] == BSAF }) {
+            require(sources.none { it.containsKey("feed") }) { "A Bot re-post cannot declare a feed" }
+            return bsafOriginal(event).let { Selection.Bot(it.botDid, it.type) }
+        }
+        val declared = Attest.map(sources.singleOrNull()?.get("feed") ?: error("Not a bsaf or feed re-post"))
+        require(declared.keys.all { it == "id" || it == "origin" || it == "type" }) { "Unexpected feed fields" }
+        val feed = Attest.text(declared["id"]).also { require(Attest.isFeedId(it)) { "Invalid feed ID" } }
+        val origin = declared["origin"]?.let { o -> Attest.text(o).also { require(Attest.isOrigin(it)) { "Invalid feed origin" } } }
+        val type = Attest.text(declared["type"]).also { require(utf8(it).size <= 128) { "Invalid feed type" } }
+        if (feed == FEED_JMA) {
+            val jma = ext.filter { it["\$type"] == JMA_EARTHQUAKE || it["\$type"] == JMA_WEATHER }.singleOrNull()
+            val title = jma?.let { runCatching { Attest.map(Attest.map(it["message"])["control"])["title"] }.getOrNull() }
+            require(origin == null && title == type) { "Feed declaration does not match the JMA extension" }
+        }
+        return Selection.Feed(feed, origin, type)
     }
 
-    /** importer §1: the leaf's `importer` block lists [s] among its pairs of the same kind. */
+    /** importer §1, §1.3: the leaf's `importer` block holds the post's pair [s] among its pairs of the same kind. */
     fun covers(leaf: Attest.Attestation, s: Selection): Boolean = when (s) {
         is Selection.Bot -> leaf.importerSources?.get(s.botDid)?.contains(s.type) == true
-        is Selection.Feed -> leaf.importerFeeds?.get(s.feed)?.contains(s.type) == true
+        is Selection.Feed -> s.type != null && Attest.includesFeed(leaf.importerFeeds, s.feed, s.origin, s.type)
     }
 
     /**
@@ -200,7 +225,7 @@ object PublicIngress {
         val chains = runCatching { Attest.chains(event) }.getOrElse { return ChainView(Attest.ChainState.INVALID, null, null, null, null, emptyList(), null, "malformed chain: ${it.message}") }
         if (chains.isEmpty()) return null
         val createdAt = Instant.ofEpochSecond(event.createdAt)
-        val selection = runCatching { importSelection(event) }.getOrNull()?.takeIf { it in selected }
+        val selection = runCatching { importSelection(event) }.getOrNull()?.takeIf { selects(selected, it) }
         var best: ChainView? = null
         for (chain in chains) {
             val leaf = chain.attestations.last()
@@ -223,7 +248,7 @@ object PublicIngress {
 
     /**
      * importer §3: local selection, a chain verified at both creation and now whose leaf has the `import` role, an
-     * `importer` block covering (botDid, type) or (feed, type) and an `organization`, and no known revocation.
+     * `importer` block covering (botDid, type) or (feed, origin, type) and an `organization`, and no known revocation.
      */
     fun verify(event: NostrEvent, config: Config, revocations: RevocationStore, now: Instant?, seenAt: Instant = now ?: Instant.ofEpochSecond(event.createdAt)): Decision {
         return try {
@@ -231,7 +256,7 @@ object PublicIngress {
             require(event.verify()) { "Invalid author signature" }
             require(EventCodec.encode(event).size <= MeshPolicy.MAX_PAYLOAD_BYTES && AtRepository.verifyEnvelope(event)) { "Invalid envelope/resource limit" }
             val selection = importSelection(event)
-            require(selection in config.selected) { "Source/type not selected" }
+            require(selects(config.selected, selection)) { "Source/type not selected" }
             require(now != null) { "Clock unknown" }
             val createdAt = Instant.ofEpochSecond(event.createdAt)
             require(!createdAt.isAfter(now) && AtRepository.deliveryExpiresAt(event)?.isAfter(now) == true) { "Future event or past deadline" }

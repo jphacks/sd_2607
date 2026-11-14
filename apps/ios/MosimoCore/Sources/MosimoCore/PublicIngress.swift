@@ -6,19 +6,31 @@ public enum PublicIngress {
     public static let bsaf = "dev.jisaku.mosimo.public.bsaf"
     public static let jmaEarthquake = "dev.jisaku.mosimo.public.jma.earthquake"
     public static let jmaWeather = "dev.jisaku.mosimo.public.jma.weather"
-    /// importer §1.1: the feed of re-posted JMA disaster-prevention XML; its types are the original `Control/Title`.
-    public static let jmaFeed = "jma-xml"
+    /// public §5.1: the source extension; its `feed` declares a feed re-post (importer §1.2).
+    public static let sourceType = "dev.jisaku.mosimo.public#source"
+    /// importer §1.1, jma §12: the feed of re-posted JMA disaster-prevention XML; no origin, its types are the original `Control/Title`.
+    public static let jmaFeed = "dev.jisaku.mosimo.public.jma"
     public static let priorityType = "dev.jisaku.mosimo.priority"
     public static let maxRoots = 8
     public static let maxSelected = 64
 
-    /// One re-posted (botDid, type) or (feed, type) pair (importer §1): exactly one of [botDid] and [feed] is set.
+    /// A re-posted (botDid, type) or (feed, origin, type) pair (importer §1), or one entry of the local selection (§3):
+    /// exactly one of [botDid] and [feed] is set. As a post's pair, [type] is always set and a nil [origin] means the post
+    /// has none; as a selection entry of a feed, a nil [origin] or [type] selects every issuer or type (importer §1.3).
     public struct Selection: Hashable, Sendable {
-        public let botDid: String?, feed: String?
-        public let type: String
-        public init(botDid: String, type: String) { self.botDid = botDid; feed = nil; self.type = type }
-        public init(feed: String, type: String) { botDid = nil; self.feed = feed; self.type = type }
-        public var description: String { botDid.map { "bot=\($0)" } ?? "feed=\(feed ?? "")" }
+        public let botDid: String?, feed: String?, origin: String?
+        public let type: String?
+        public init(botDid: String, type: String) { self.botDid = botDid; feed = nil; origin = nil; self.type = type }
+        public init(feed: String, origin: String? = nil, type: String? = nil) { botDid = nil; self.feed = feed; self.origin = origin; self.type = type }
+        public var description: String { botDid.map { "bot=\($0)" } ?? "feed=\(feed ?? "")\(origin.map { " origin=\($0)" } ?? "")" }
+    }
+    /// importer §3, §1.3: whether the local selection [entries] holds a post's [pair].
+    public static func covers(_ entries: Set<Selection>, _ pair: Selection) -> Bool {
+        if pair.botDid != nil { return entries.contains(pair) }
+        guard let feed = pair.feed else { return false }
+        return entries.contains { e in
+            e.feed == feed && (e.origin == nil || (pair.origin != nil && e.origin == pair.origin)) && (e.type == nil || (pair.type != nil && e.type == pair.type))
+        }
     }
     public struct Config: Sendable {
         public var roots: [Attest.Root] = []
@@ -56,7 +68,7 @@ public enum PublicIngress {
         public let trustLevel: Int64?
         public let reason: String
         /// importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
-        /// (Bot DID, type) or (feed, type), and that pair locally selected. Decided from the post alone, however it arrived.
+        /// (Bot DID, type) or (feed, origin, type), and that pair locally selected. Decided from the post alone, however it arrived.
         public let importAuthorized: Bool
         public var identity: Bool { roles.contains(Attest.roleIdentity) }
         public var publicInformation: Bool { roles.contains(Attest.rolePublicInformation) }
@@ -71,7 +83,7 @@ public enum PublicIngress {
         public let checkedAt: String
         public let leafValidUntil: String?
         public var description: String {
-            "root=\(rootPubkey.prefix(8)) leaf=\(leafId.prefix(8)) org=\(orgName)(\(orgId)) \(source.description) type=\(source.type) priority=\(priority) checked=\(checkedAt)"
+            "root=\(rootPubkey.prefix(8)) leaf=\(leafId.prefix(8)) org=\(orgName)(\(orgId)) \(source.description) type=\(source.type ?? "") priority=\(priority) checked=\(checkedAt)"
         }
     }
     public struct Decision: Sendable { public let receipt: Receipt?; public let chain: ChainView?; public let reason: String }
@@ -89,12 +101,23 @@ public enum PublicIngress {
         }
         try require(Set(roots.map(\.pubkeyHex)).count == roots.count, "Duplicate root")
         guard let selectedNodes = node["selected"]?.array, selectedNodes.count <= maxSelected else { throw CoreError("Invalid selected") }
-        // Each element names a Bot or a feed: {"botDid", "type"} or {"feed", "type"}.
+        // Each element names a Bot or a feed: {"botDid", "type"} or {"feed", "origin"?, "type"?} (importer §1.3: an absent origin
+        // or type selects every issuer or type of the feed).
         let selected: [Selection] = try selectedNodes.map { s in
-            try require(s.keys == ["botDid", "type"] || s.keys == ["feed", "type"], "Unexpected/missing JSON fields")
-            guard let type = s["type"]?.string, (1...128).contains(type.utf8.count) else { throw CoreError("Invalid selection") }
-            if let feed = s["feed"]?.string, (1...Attest.maxTextBytes).contains(feed.utf8.count) { return Selection(feed: feed, type: type) }
-            guard let did = s["botDid"]?.string, matches(AtRepository.didPattern, did) else { throw CoreError("Invalid selection") }
+            func text(_ key: String) throws -> String? {
+                guard let v = s[key] else { return nil }
+                guard let t = v.string, (1...128).contains(t.utf8.count) || key != "type" else { throw CoreError("Invalid selection") }
+                return t
+            }
+            if s.keys.contains("feed") {
+                try require(s.keys.isSubset(of: ["feed", "origin", "type"]), "Unexpected/missing JSON fields")
+                guard let feed = try text("feed"), Attest.isFeedId(feed), feed != bsaf else { throw CoreError("Invalid feed ID") }
+                let origin = try text("origin")
+                try require(origin.map(Attest.isOrigin) ?? true, "Invalid feed origin")
+                return Selection(feed: feed, origin: origin, type: try text("type"))
+            }
+            try require(s.keys == ["botDid", "type"], "Unexpected/missing JSON fields")
+            guard let type = try text("type"), let did = s["botDid"]?.string, matches(AtRepository.didPattern, did) else { throw CoreError("Invalid selection") }
             return Selection(botDid: did, type: type)
         }
         try require(Set(selected).count == selected.count, "Duplicate selection")
@@ -132,9 +155,10 @@ public enum PublicIngress {
             return TrustChoices(disabled: Set(disabled), added: added)
         }
     }
-    /// Roles and depth given to a user-added root: it may certify importers and public-information issuers below it.
+    /// Roles and depth given to a user-added root: it may certify importers and public-information issuers below it, up to
+    /// the receivers' maximum delegation depth (attest §5), so the issuer's own chain decides its shape.
     public static let userRootRoles: Set<String> = [Attest.roleImport, Attest.rolePublicInformation, "attest"]
-    public static let userRootDepth = 2
+    public static let userRootDepth = 16
 
     private static let rootKeyPattern = try! NSRegularExpression(pattern: "^[0-9a-f]{64}$")
     /// A root key typed by the user: 64 hex digits (x-only, as in Nostr and the attest chain).
@@ -220,18 +244,35 @@ public enum PublicIngress {
         return BsafOriginal(botDid: did, type: type, uri: uri, cid: cidText)
     }
 
-    /// The re-posted pair of [event] (importer §1.1): a BSAF import gives (botDid, type); otherwise exactly one
-    /// `public.jma.earthquake` or `public.jma.weather` gives (`jma-xml`, its `message.control.title`). Throws for anything else.
+    /// The re-posted pair of [event] (importer §1.2, §2): a Bot re-post has exactly one `public.bsaf` with `original` and gives
+    /// (botDid, type); a feed re-post has no `public.bsaf` and exactly one `public#source` declaring `feed: {id, origin?, type}`.
+    /// A declaration of a feed this app knows (`dev.jisaku.mosimo.public.jma`) must also match the content; an unknown feed is
+    /// taken as declared. Throws for anything else.
     public static func importPair(_ event: NostrEvent) throws -> Selection {
         let ext = try AtRepository.extensions(event)
+        let sources = ext.filter { $0["$type"] == .text(sourceType) }
         if ext.contains(where: { $0["$type"] == .text(bsaf) }) {
+            try require(!sources.contains { $0["feed"] != nil }, "A BSAF re-post with a feed declaration")
             let o = try bsafOriginal(event)
             return Selection(botDid: o.botDid, type: o.type)
         }
-        let jma = ext.filter { $0["$type"] == .text(jmaEarthquake) || $0["$type"] == .text(jmaWeather) }
-        try require(jma.count == 1, "Neither a BSAF import nor exactly one JMA extension")
-        guard let title = jma[0]["message"]?["control"]?["title"]?.text, !title.isEmpty else { throw CoreError("JMA message.control.title") }
-        return Selection(feed: jmaFeed, type: title)
+        try require(sources.count == 1, "Expected exactly one BSAF extension or feed source")
+        guard let value = sources[0]["feed"] else { throw CoreError("Feed re-post without a feed declaration") }
+        let declared = try Attest.map(value)
+        try require(declared["id"] != nil && declared["type"] != nil && declared.keys.allSatisfy { ["id", "origin", "type"].contains($0) },
+                    "Unexpected feed declaration fields")
+        let id = try Attest.text(declared["id"])
+        try require(Attest.isFeedId(id) && id != bsaf, "Invalid feed ID")
+        let origin = try declared["origin"].map { try Attest.text($0) }
+        try require(origin.map(Attest.isOrigin) ?? true, "Invalid feed origin")
+        let type = try Attest.text(declared["type"])
+        try require((1...128).contains(type.utf8.count), "Invalid feed type")
+        if id == jmaFeed {
+            let jma = ext.filter { $0["$type"] == .text(jmaEarthquake) || $0["$type"] == .text(jmaWeather) }
+            try require(jma.count == 1 && origin == nil && jma[0]["message"]?["control"]?["title"]?.text == type,
+                        "Feed declaration does not match the JMA extension")
+        }
+        return Selection(feed: id, origin: origin, type: type)
     }
 
     /// Evaluates every chain of [event] against [roots]; the first chain whose leaf belongs to the event decides.
@@ -245,7 +286,7 @@ public enum PublicIngress {
         }
         if chains.isEmpty { return nil }
         let createdAt = Instant(epochSecond: event.createdAt)
-        let pair = (try? importPair(event)).flatMap { selected.contains($0) ? $0 : nil }
+        let pair = (try? importPair(event)).flatMap { covers(selected, $0) ? $0 : nil }
         var best: ChainView?
         for chain in chains {
             let leaf = chain.attestations.last!
@@ -268,14 +309,14 @@ public enum PublicIngress {
     }
 
     /// importer §3: local selection, a chain verified at both creation and now whose leaf has the `import` role, an
-    /// `importer` block covering (botDid, type) or (feed, type) and an `organization`, and no known revocation.
+    /// `importer` block covering (botDid, type) or (feed, origin, type) and an `organization`, and no known revocation.
     public static func verify(_ event: NostrEvent, _ config: Config, _ revocations: RevocationStore, _ now: Instant?, seenAt: Instant? = nil) -> Decision {
         do {
             try require(event.tags.count <= 64 && event.tags.filter { $0.first?.hasPrefix(AtRepository.extPrefix) == true }.count <= 16, "Event resource limit")
             try require(event.verify(), "Invalid author signature")
             try require(try EventCodec.encode(event).count <= MeshPolicy.maxPayloadBytes && AtRepository.verifyEnvelope(event), "Invalid envelope/resource limit")
             let pair = try importPair(event)
-            try require(config.selected.contains(pair), "Bot/feed type not selected")
+            try require(covers(config.selected, pair), "Bot/feed type not selected")
             guard let now else { throw CoreError("Clock unknown") }
             let seen = seenAt ?? now
             let createdAt = Instant(epochSecond: event.createdAt)
@@ -296,7 +337,7 @@ public enum PublicIngress {
                 if !leaf.roles.contains(Attest.roleImport) { failure = "leaf lacks import role"; continue }
                 guard let block = leaf.importerBlock else { failure = "leaf lacks importer block"; continue }
                 guard let org = leaf.orgId else { failure = "leaf lacks organization"; continue }
-                if !block.covers(pair) { failure = "importer block does not cover \(pair.description)/\(pair.type)"; continue }
+                if !block.covers(pair) { failure = "importer block does not cover \(pair.description)/\(pair.type ?? "")"; continue }
                 if revocation != .notRevokedAsKnown { failure = "revocation: \(String(describing: revocation))"; continue }
                 let receipt = Receipt(rootPubkey: result.root!.pubkeyHex, leafId: hex(leaf.id), orgId: org,
                                       orgName: leaf.orgName ?? leaf.ownerName, source: pair, priority: priority(event), checkedAt: now.description,

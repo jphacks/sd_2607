@@ -38,6 +38,8 @@ import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
+import org.mndt.app.alert.groupedAway
+import org.mndt.app.alert.hazardGroupsById
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.Banner
 import org.mndt.app.ui.Navigator
@@ -65,9 +67,16 @@ fun EntryProviderScope<NavKey>.timelineEntries(nav: Navigator) {
 
 class TimelineViewModel(private val mesh: MeshCoordinator, private val prefs: SharedPreferences) : ViewModel() {
     val state = mesh.state
-    /** Newest first by event time, annotations with a present target folded away. */
-    val cards = mesh.state.map { s -> standalone(s.posts).sortedByDescending { it.eventTime() } to annotationsByTarget(s.posts) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<PostView>() to emptyMap())
+    /**
+     * Newest first by event time, annotations with a present target folded away, and each group of posts of one event
+     * (public §8.1) as its representative only. Also the annotations by target and the groups by member.
+     */
+    val cards = mesh.state.map { s ->
+        val posts = standalone(s.posts)
+        val groups = hazardGroupsById(posts)
+        val away = groupedAway(groups.values.toSet())
+        Triple(posts.filter { it.id !in away }.sortedByDescending { it.eventTime() }, annotationsByTarget(s.posts), groups)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Triple(emptyList<PostView>(), emptyMap(), emptyMap()))
 
     /** Previous open time (epoch s); stores now. ponytail: compares author created_at, not local arrival; skewed clocks miscount. */
     fun markOpened(): Long {
@@ -92,7 +101,7 @@ private fun String.titleAndRest(): Pair<String, String> = trim().let { it.substr
 @Composable
 private fun TimelineScreen(nav: Navigator, vm: TimelineViewModel = koinViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val (all, annotations) = vm.cards.collectAsStateWithLifecycle().value
+    val (all, annotations, groups) = vm.cards.collectAsStateWithLifecycle().value
     val location = koinInject<LocationRepository>()
     val here by location.location.collectAsStateWithLifecycle()
     val since = rememberSaveable { vm.markOpened() }
@@ -134,7 +143,7 @@ private fun TimelineScreen(nav: Navigator, vm: TimelineViewModel = koinViewModel
                                 Text(hhmm(post.eventTime()), style = Mosimo.number.copy(fontSize = 13.sp), color = Mosimo.textSecondary)
                                 Box(Modifier.padding(start = 18.dp, top = 6.dp).width(1.dp).weight(1f).background(Mosimo.border))
                             }
-                            PostCard(post, annotations[post.id].orEmpty(), here, nav)
+                            PostCard(post, annotations[post.id].orEmpty(), here, nav, groups[post.id]?.members?.size ?: 1)
                         }
                     }
                 }
@@ -148,7 +157,7 @@ private fun DayHeader(label: String) = Text(label, Modifier.padding(vertical = 8
     .padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, color = Mosimo.textSecondary, fontWeight = FontWeight.Bold)
 
 @Composable
-private fun PostCard(post: PostView, annotations: List<PostView>, here: android.location.Location?, nav: Navigator) {
+private fun PostCard(post: PostView, annotations: List<PostView>, here: android.location.Location?, nav: Navigator, grouped: Int = 1) {
     val (title, rest) = (if (post.isPublic) post.content else post.body()).titleAndRest()
     Column(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(Mosimo.bgSurface).border(1.dp, Mosimo.border, MaterialTheme.shapes.medium)
@@ -166,7 +175,7 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f, fill = false)) {
-                    if (post.isPublic) BsafVerification(post)
+                    if (post.isPublic) SourceSummary(post)
                     else Text(listOfNotNull(post.senderName ?: shortDid(post.did, post.pubkey), post.distanceFrom(here)?.let { distanceLabel(it) + "先" }).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
                 }
@@ -175,6 +184,7 @@ private fun PostCard(post: PostView, annotations: List<PostView>, here: android.
             if (post.isPublic) Link("詳細 >") { nav.push(PostKey(post.id)) }
             else if (post.latLng() != null) Link("マップで見る >") { nav.showOnMap(post.id) }
         }
+        if (grouped > 1) Text("同じ事象の情報 ${grouped}件（詳細で情報源ごとに表示）", style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
         if (!post.isPublic) AnnotationActions(post, annotations)
     }
 }

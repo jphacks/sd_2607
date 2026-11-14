@@ -14,6 +14,8 @@ pub const ACTIVATION: &str = "dev.jisaku.mosimo.attest.revocation#activation";
 pub const REASON: &str = "dev.jisaku.mosimo.attest.revocation#reason";
 pub const REVOCATION_LIST: &str = "dev.jisaku.mosimo.attest.revocation.list";
 pub const IMPORTER: &str = "dev.jisaku.mosimo.attest.importer";
+/// Bot の転載の形式。フィード ID には使えない（importer §1.1）。
+pub const BSAF: &str = "dev.jisaku.mosimo.public.bsaf";
 pub const KEY_VALIDITY: &str = "dev.jisaku.mosimo.attest#keyValidity";
 pub const DELEGATION: &str = "dev.jisaku.mosimo.attest#delegation";
 pub const ORGANIZATION: &str = "dev.jisaku.mosimo.attest#organization";
@@ -170,22 +172,69 @@ fn is_org_id(s: &str) -> bool {
     }
 }
 
+/// importer §1.1: フィード ID は authority 部が小文字の NSID。
+pub fn is_feed_id(s: &str) -> bool {
+    let segments: Vec<&str> = s.split('.').collect();
+    let Some((name, authority)) = segments.split_last() else { return false };
+    let label = |l: &str| {
+        (1..=63).contains(&l.len()) && l.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') && !l.starts_with('-') && !l.ends_with('-')
+    };
+    s.len() <= 317
+        && segments.len() >= 3
+        && authority.iter().all(|l| label(l))
+        && (1..=63).contains(&name.len())
+        && name.bytes().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && name.bytes().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// importer §1.1: 発表者 ID は scheme を持つ絶対 URI（256 バイト以下、空白・制御文字なし）。
+pub fn is_origin(s: &str) -> bool {
+    let Some((scheme, rest)) = s.split_once(':') else { return false };
+    s.len() <= 256
+        && scheme.bytes().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'.' | b'-'))
+        && !rest.is_empty()
+        && !rest.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// importer §1: `sources`（Bot DID）と `feeds`（フィード ID・発表者 ID・種別）。少なくとも一方を持ち、持つものは空でない。
 pub fn validate_importer_block(block: &Value) -> Result<()> {
-    keys(block, &["$type", "sources"], &["$type", "sources"])?;
-    let sources = block.get("sources").and_then(Value::as_array).ok_or_else(|| anyhow!("Invalid importer sources"))?;
-    ensure!((1..=16).contains(&sources.len()), "Invalid importer sources");
+    keys(block, &["$type", "sources", "feeds"], &["$type"])?;
+    ensure!(block.get("sources").is_some() || block.get("feeds").is_some(), "Importer block without sources or feeds");
     let mut pairs = 0;
-    let mut dids = Vec::new();
-    for source in sources {
-        keys(source, &["botDid", "types"], &["botDid", "types"])?;
-        let did = text(source.get("botDid"), 64)?;
-        ensure!(is_did(did), "Invalid Bot DID");
-        let types = sorted_unique_texts(source.get("types"), 32, 128)?;
-        ensure!(!types.is_empty(), "Empty types");
-        pairs += types.len();
-        dids.push(did.to_string());
+    if let Some(list) = block.get("sources") {
+        let list = list.as_array().filter(|l| (1..=16).contains(&l.len())).ok_or_else(|| anyhow!("Invalid importer sources"))?;
+        let mut names = Vec::new();
+        for entry in list {
+            keys(entry, &["botDid", "types"], &["botDid", "types"])?;
+            let did = text(entry.get("botDid"), 64)?;
+            ensure!(is_did(did), "Invalid Bot DID");
+            let types = sorted_unique_texts(entry.get("types"), 32, 128)?;
+            ensure!(!types.is_empty(), "Empty types");
+            pairs += types.len();
+            names.push(did.to_string());
+        }
+        ensure!(names.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()), "Importer sources must be sorted without duplicates");
     }
-    ensure!(dids.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()), "Sources must be sorted by botDid without duplicates");
+    if let Some(list) = block.get("feeds") {
+        let list = list.as_array().filter(|l| (1..=32).contains(&l.len())).ok_or_else(|| anyhow!("Invalid importer feeds"))?;
+        let mut order = Vec::new();
+        for entry in list {
+            keys(entry, &["feed", "origin", "types"], &["feed"])?;
+            let feed = entry.get("feed").and_then(Value::as_text).filter(|f| is_feed_id(f) && *f != BSAF).ok_or_else(|| anyhow!("Invalid feed ID"))?;
+            let origin = match entry.get("origin") {
+                Some(o) => o.as_text().filter(|o| is_origin(o)).ok_or_else(|| anyhow!("Invalid feed origin"))?,
+                None => "",
+            };
+            if entry.get("types").is_some() {
+                let types = sorted_unique_texts(entry.get("types"), 32, 128)?;
+                ensure!(!types.is_empty(), "Empty types");
+                pairs += types.len();
+            }
+            order.push((feed.as_bytes().to_vec(), origin.as_bytes().to_vec()));
+        }
+        ensure!(order.windows(2).all(|w| w[0] < w[1]), "Feeds must be sorted by (feed, origin) without duplicates");
+    }
     ensure!(pairs <= 64, "Importer scope limit");
     Ok(())
 }
@@ -373,22 +422,78 @@ pub fn within((from, until): Validity, t: f64) -> bool {
     from.is_none_or(|f| f <= t) && until.is_none_or(|u| t < u)
 }
 
-pub fn importer_sources(block: &Value) -> Vec<(String, Vec<String>)> {
-    block
-        .get("sources")
-        .and_then(Value::as_array)
-        .unwrap_or(&[])
-        .iter()
-        .map(|s| {
-            let did = s.get("botDid").and_then(Value::as_text).unwrap_or("").to_string();
-            let types = s.get("types").and_then(Value::as_array).unwrap_or(&[]).iter().filter_map(|t| t.as_text().map(str::to_string)).collect();
-            (did, types)
-        })
-        .collect()
+/// フィードの範囲の要素（importer §1.1）。`origin`・`types` の None は「全て」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedEntry {
+    pub feed: String,
+    pub origin: Option<String>,
+    pub types: Option<Vec<String>>,
 }
 
-pub fn includes_pair(sources: &[(String, Vec<String>)], did: &str, t: &str) -> bool {
-    sources.iter().any(|(d, types)| d == did && types.iter().any(|x| x == t))
+impl FeedEntry {
+    /// 範囲の要素が (feed, origin, type) を含むか（importer §1.3）。origin・type の None は「全て」を問う。
+    fn includes(&self, feed: &str, origin: Option<&str>, t: Option<&str>) -> bool {
+        self.feed == feed
+            && self.origin.as_deref().is_none_or(|o| origin == Some(o))
+            && self.types.as_ref().is_none_or(|ts| t.is_some_and(|t| ts.iter().any(|x| x == t)))
+    }
+
+    /// フィード ID と発表者（"FEED" / "FEED @ORIGIN"）。
+    pub fn name(&self) -> String {
+        match &self.origin {
+            Some(o) => format!("{} @{o}", self.feed),
+            None => format!("{}（全発表者）", self.feed),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}: {}", self.name(), self.types.as_ref().map_or("（全種別）".to_string(), |ts| ts.join(", ")))
+    }
+}
+
+/// importer ブロックの転載範囲。`sources` は (botDid, types)。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scope {
+    pub sources: Vec<(String, Vec<String>)>,
+    pub feeds: Vec<FeedEntry>,
+}
+
+impl Scope {
+    /// self に含まれない子の組。空なら子は self に収まる（importer §1.3 の包含規則）。
+    pub fn outside(&self, child: &Scope) -> Vec<String> {
+        let mut out: Vec<String> =
+            child.sources.iter().flat_map(|(n, ts)| ts.iter().filter(|t| !includes_pair(&self.sources, n, t)).map(move |t| format!("{n} {t}"))).collect();
+        for c in &child.feeds {
+            let covered = |t: Option<&str>| self.feeds.iter().any(|p| p.includes(&c.feed, c.origin.as_deref(), t));
+            match &c.types {
+                None if !covered(None) => out.push(c.label()),
+                Some(ts) => out.extend(ts.iter().filter(|t| !covered(Some(t))).map(|t| format!("{} {t}", c.name()))),
+                None => {}
+            }
+        }
+        out
+    }
+}
+
+pub fn importer_scope(block: &Value) -> Scope {
+    let list = |field: &str| block.get(field).and_then(Value::as_array).unwrap_or(&[]).to_vec();
+    let texts =
+        |v: Option<&Value>| -> Vec<String> { v.and_then(Value::as_array).unwrap_or(&[]).iter().filter_map(|t| t.as_text().map(str::to_string)).collect() };
+    Scope {
+        sources: list("sources").iter().map(|s| (s.get("botDid").and_then(Value::as_text).unwrap_or("").to_string(), texts(s.get("types")))).collect(),
+        feeds: list("feeds")
+            .iter()
+            .map(|f| FeedEntry {
+                feed: f.get("feed").and_then(Value::as_text).unwrap_or("").to_string(),
+                origin: f.get("origin").and_then(Value::as_text).map(str::to_string),
+                types: f.get("types").map(|t| texts(Some(t))),
+            })
+            .collect(),
+    }
+}
+
+pub fn includes_pair(entries: &[(String, Vec<String>)], name: &str, t: &str) -> bool {
+    entries.iter().any(|(d, types)| d == name && types.iter().any(|x| x == t))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -431,7 +536,7 @@ fn verify_chain_inner(chain: &[Value], roots: &[RootConfig], at: i64) -> Result<
     let mut parent_depth = root.max_depth;
     let mut parent_validity: Validity = (None, None);
     let mut parent_org: Option<String> = None;
-    let mut parent_importer: Option<Vec<(String, Vec<String>)>> = None;
+    let mut parent_importer: Option<Scope> = None;
     let mut parent_import_role = root.roles.iter().any(|r| r == "import");
     for (i, a) in chain.iter().enumerate() {
         let b = body(a);
@@ -455,10 +560,10 @@ fn verify_chain_inner(chain: &[Value], roots: &[RootConfig], at: i64) -> Result<
         if let Some(p) = &parent_org {
             ensure!(org.as_ref() == Some(p), "Organization mismatch");
         }
-        let importer = block_of(a, IMPORTER).map(importer_sources);
-        if let Some(sources) = &importer {
+        let importer = block_of(a, IMPORTER).map(importer_scope);
+        if let Some(scope) = &importer {
             let ok = match &parent_importer {
-                Some(parent) => sources.iter().all(|(d, ts)| ts.iter().all(|t| includes_pair(parent, d, t))),
+                Some(parent) => parent.outside(scope).is_empty(),
                 None => parent_import_role,
             };
             ensure!(ok, "Importer scope escalation");

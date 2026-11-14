@@ -284,9 +284,9 @@ struct TrustScreen: View {
             if sources.isEmpty { Group_ { NoneText() } }
             ForEach(sources) { source in
                 Group_ {
-                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.name, value: "\(source.types.count)種別")
+                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.label, value: source.types.map { "\($0.count)種別" } ?? "全種別")
                     Line()
-                    detail(source.types.map(bsafLabel).joined(separator: "・"))
+                    detail(source.types.map { $0.map { source.feed ? $0 : bsafLabel($0) }.joined(separator: "・") } ?? "このフィードの全ての種別")
                 }
             }
             Header(text: "失効情報")

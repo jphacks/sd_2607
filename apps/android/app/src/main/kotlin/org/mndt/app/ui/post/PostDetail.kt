@@ -1,6 +1,8 @@
 package org.mndt.app.ui.post
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,14 +17,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.compose.koinInject
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.theme.Mosimo
+import org.mndt.app.alert.HazardGroup
+import org.mndt.app.alert.hazardGroupsById
 import org.mndt.core.Attest
+import org.mndt.core.PublicIngress
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.PostView
 import org.mndt.mesh.Relation
@@ -30,26 +37,78 @@ import java.time.Instant
 import java.time.OffsetDateTime
 
 private val sourceNames = mapOf("jma" to "気象庁")
-/** BSAF `source:` tag, e.g. `jma` → 「気象庁」. */
-fun PostView.bsafSource(): String = if (ext.jma != null) "気象庁防災情報XML" else ext.bsaf?.source?.ifBlank { null }?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
+/** Known Bots re-posted by importers: DID → Bluesky handle. Unknown ones are shown by DID. */
+private val botHandles = mapOf(
+    "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" to "jma-alert-bot.bsky.social",
+    "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" to "bsaf-kikikuru-bot.bsky.social",
+)
+/** importer §3.2, public.jma §12: a feed is shown by its definition's source name (「気象庁」), else by its ID and issuer. */
+fun feedName(feed: String, origin: String? = null): String = if (feed == PublicIngress.FEED_JMA) "気象庁" else feed + (origin?.let { "（$it）" } ?: "")
 
 /**
- * importer §3.2: 「orgName が転載した botDid の情報」. The BSAF `source:` tag is self-declared (bsaf §7), so it is
- * shown only as the post's own claim. Never claims the content is 公式.
+ * The original source of a re-post: the feed definition's source name, or a Bot re-post's BSAF `source:` tag (`jma` →
+ * 「気象庁」, else as sent). The tag is the Bot's own claim (bsaf §7); only the Bot DID is covered by the importer's scope.
+ */
+fun PostView.originalSource(): String = ext.feed?.let { feedName(it.id, it.origin) } ?: if (ext.bsaf == null && ext.jma != null) "気象庁"
+    else ext.bsaf?.source?.ifBlank { null }?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
+
+/** Where the original source name leads: a Bot re-post's original on Bluesky, else the first web page of `public#source.links`. */
+fun PostView.originalUrl(): String? {
+    ext.bsaf?.let { b ->
+        val did = b.botDid ?: return null
+        val rkey = b.originalUri?.substringAfterLast('/')?.takeIf { it.isNotEmpty() } ?: return null
+        return "https://bsky.app/profile/$did/post/$rkey"
+    }
+    val web = ext.links.filter { it.url.lowercase().let { u -> u.startsWith("https://") || u.startsWith("http://") } }
+    return (web.firstOrNull { it.mediaType == "text/html" } ?: web.firstOrNull())?.url
+}
+
+/** importer §3.2: 「転載: orgName」 only for an importer authorized now; otherwise no organization name. */
+private fun PostView.importerLine(): String =
+    if (importerAuthorized) "転載: ${chain?.name ?: "転載者"}" else "転載者の認可を確認できません"
+
+/**
+ * importer §3.2 / public §8.1: who re-posted (small) apart from the original source (large, opening its page when there is
+ * one); for a Bot re-post also the Bot account it came from. Never claims the content is 公式.
  */
 @Composable
-fun BsafVerification(post: PostView) {
-    val importer = post.chain?.takeIf { it.confirmedNow }?.name
-    // importer §1.1: a feed re-post names the feed, not a Bot.
-    val bot = if (post.ext.jma != null) "気象庁防災情報XML" else post.ext.bsaf?.botDid?.let { shortDid(it, "") } ?: "Bot"
-    Column {
+fun SourceInfo(post: PostView) {
+    val uri = LocalUriHandler.current
+    fun open(url: String) { runCatching { uri.openUri(url) } }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (post.importerAuthorized) {
-                Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(14.dp))
-                Text(" ${importer ?: "転載者"}が転載した $bot の情報", style = MaterialTheme.typography.bodySmall, color = Mosimo.textSecondary)
-            } else Text("転載された情報・転載者の認可を確認できません", style = MaterialTheme.typography.bodySmall, color = Mosimo.textTertiary)
+            if (post.importerAuthorized) Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(12.dp))
+            Text(post.importerLine(), style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
         }
-        Text("出典の表示: ${post.bsafSource()}（投稿内の申告）", style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary)
+        val url = post.originalUrl()
+        Text(post.originalSource(), Modifier.clickable(enabled = url != null) { url?.let(::open) },
+            style = MaterialTheme.typography.titleSmall, color = if (url != null) Mosimo.info else Mosimo.textPrimary, fontWeight = FontWeight.Bold)
+        post.ext.bsaf?.botDid?.let { did ->
+            Text("BSAF @${botHandles[did] ?: did} から取得", Modifier.clickable { open("https://bsky.app/profile/$did") },
+                style = MaterialTheme.typography.bodySmall, color = Mosimo.info)
+            Text(did, style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = Mosimo.textTertiary)
+        }
+    }
+}
+
+/** One line for a list card: the original source and, small, who re-posted it. */
+@Composable
+fun SourceSummary(post: PostView) = Row(verticalAlignment = Alignment.CenterVertically) {
+    Text(post.originalSource(), style = MaterialTheme.typography.labelLarge, color = Mosimo.textSecondary, fontWeight = FontWeight.Bold, maxLines = 1)
+    Text(" · ${post.importerLine()}", style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary, maxLines = 1)
+}
+
+/** public §8.1: every post of the group by source (feed re-posts first), each with its source, text and hazard details. */
+@Composable
+private fun GroupSection(group: HazardGroup) = Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text("同じ事象の情報 ${group.members.size}件（情報源ごと）", style = MaterialTheme.typography.labelMedium, color = Mosimo.textTertiary, fontWeight = FontWeight.Bold)
+    group.members.forEach { member ->
+        Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).border(1.dp, Mosimo.border, MaterialTheme.shapes.medium).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SourceInfo(member)
+            Text(member.content, style = MaterialTheme.typography.bodyMedium, color = Mosimo.textPrimary)
+            HazardSection(member)
+        }
     }
 }
 
@@ -120,13 +179,16 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
     var confirmBlock by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var reporting by remember { mutableStateOf(false) }
+    val group = remember(state.posts, post.id) { hazardGroupsById(state.posts)[post.id] }
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             KindLabel(post)
             post.category()?.let { CategoryBadge(it) }
         }
-        Text(if (post.isPublic) post.content else post.body(), style = MaterialTheme.typography.bodyLarge, color = Mosimo.textPrimary)
-        HazardSection(post)
+        if (group != null) GroupSection(group) else {
+            Text(if (post.isPublic) post.content else post.body(), style = MaterialTheme.typography.bodyLarge, color = Mosimo.textPrimary)
+            HazardSection(post)
+        }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Fact("時刻", dateTime(post.eventTime()))
             if (post.isPublic) Fact("転載", dateTime(post.createdAt))
@@ -138,13 +200,14 @@ fun PostDetail(post: PostView, modifier: Modifier = Modifier, onShowOnMap: (() -
                 Fact("情報の有効期間", listOfNotNull(v.from?.let { endsAt(it) + " から" }, v.until?.let { endsAt(it) + " まで" }).joinToString("・").ifEmpty { "不明" })
             }
             if (post.isPublic) {
-                BsafVerification(post)
+                if (group == null) SourceInfo(post)
                 post.publicAuthorization?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Mosimo.textTertiary) }
             } else Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Check, contentDescription = null, tint = Mosimo.safe, modifier = Modifier.size(14.dp))
                 Text(" 署名検証済み", style = MaterialTheme.typography.bodySmall, color = Mosimo.safe)
             }
-            if (post.ext.hasChain || post.chain != null) SenderVerification(post)
+            // An authorized re-post already shows its importer as confirmed (SourceInfo); the identity line would contradict it.
+            if ((post.ext.hasChain || post.chain != null) && !post.importerAuthorized) SenderVerification(post)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onShowOnMap != null && post.latLng() != null) OutlinedButton(onClick = onShowOnMap) { Text("マップで見る") }

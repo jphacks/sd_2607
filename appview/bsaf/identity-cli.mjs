@@ -8,23 +8,25 @@
 //       key, atproto signing key, Nostr key) and writes it to FILE (new file, mode 0600). Hand the
 //       file to `mosimo-ca issue PARENT NAME --importer-identity FILE`, then delete it: it holds
 //       the PLC rotation secret in plain text.
-//   receiver-export --anchor ANCHOR_JSON --domain DOMAIN... [--jma] [--kikikuru] --out DIR
+//   receiver-export --anchor ANCHOR_JSON --domain DOMAIN... [--jma] [--kikikuru] [--jma-xml] --out DIR
 //       Writes the receivers' public configuration from a root setting (`mosimo-ca trust-export`
 //       or the root's anchor.json) and the importer selection: pds-public-information.json and
-//       mosimo-public-trust.json. Never reads or writes secrets.
+//       mosimo-public-trust.json. --jma-xml adds the JMA XML feed (importer/jma-xml). Never reads
+//       or writes secrets.
 //
 // No key material is printed and nothing is written to a fixed directory.
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { IMPORTER, JMA_SELECTION, KIKIKURU_SELECTION, createImporter, validateImporterBlock } from '../../pds/attest.mjs';
+import { JMA_SELECTION, JMA_XML_SELECTION, KIKIKURU_SELECTION, createImporter, selectionBlock, validateImporterBlock } from '../../pds/attest.mjs';
 
 export function presetSelection(flags = []) {
-  const known = flags.filter(f => ['--jma', '--kikikuru'].includes(f));
+  const known = flags.filter(f => ['--jma', '--kikikuru', '--jma-xml'].includes(f));
   if (new Set(known).size !== known.length) throw new Error('Duplicate preset flag');
-  // No preset flags retains the historical five-type JMA scope, never the combined scope.
+  // No preset flags retains the historical five-type JMA scope, never the combined scope; --jma-xml alone is only the feed.
   return [...(known.length === 0 || known.includes('--jma') ? JMA_SELECTION : []),
     ...(known.includes('--kikikuru') ? KIKIKURU_SELECTION : [])].sort((a, b) => a.botDid < b.botDid ? -1 : 1)
-    .map(e => ({ botDid: e.botDid, types: [...e.types] }));
+    .map(e => ({ botDid: e.botDid, types: [...e.types] }))
+    .concat(known.includes('--jma-xml') ? JMA_XML_SELECTION.map(e => ({ feed: e.feed, types: [...e.types] })) : []);
 }
 function options(flags, name) {
   return flags.filter(f => f.startsWith(`${name}=`)).map(f => f.slice(name.length + 1));
@@ -41,7 +43,7 @@ async function writeNew(path, data) {
 
 /** Public receiver exports. Only named public fields are copied, so a caller cannot leak secrets. */
 export function receiverConfigurations(root, domains, selection) {
-  validateImporterBlock({ $type: IMPORTER, sources: selection });
+  validateImporterBlock(selectionBlock(selection));
   const revocationDomains = Array.isArray(domains) ? domains : [domains];
   if (!revocationDomains.length || !revocationDomains.every(d => typeof d === 'string' && /^[a-z0-9.-]+$/.test(d))) throw new Error('Invalid revocation domains');
   const publicRoot = { pubkey: root.pubkey, roles: root.roles, maxDepth: root.maxDepth, enabled: root.enabled ?? true, ...(root.name ? { name: root.name } : {}) };
@@ -51,7 +53,10 @@ export function receiverConfigurations(root, domains, selection) {
     // The apps' trust asset (PublicIngress.config on Android and iOS) takes exactly {roots, selected}, each root with a name;
     // issuer domains for revocation lists come from the chains themselves.
     android: { roots: [{ pubkey: publicRoot.pubkey, name: publicRoot.name ?? 'Mosimo BSAF trust root', roles: publicRoot.roles,
-      maxDepth: publicRoot.maxDepth, enabled: publicRoot.enabled }], selected: selection.flatMap(e => e.types.map(type => ({ botDid: e.botDid, type }))) },
+      maxDepth: publicRoot.maxDepth, enabled: publicRoot.enabled }],
+      // Feed entries keep their origin; a feed entry without types selects every type (importer §1.3).
+      selected: selection.flatMap(e => e.botDid ? e.types.map(type => ({ botDid: e.botDid, type }))
+        : (e.types ?? [undefined]).map(type => ({ feed: e.feed, ...(e.origin ? { origin: e.origin } : {}), ...(type ? { type } : {}) }))) },
   };
 }
 
@@ -69,7 +74,7 @@ export async function run(args) {
   }
   if (command === 'receiver-export') {
     const anchorPath = option(flags, '--anchor'), out = option(flags, '--out'), domains = options(flags, '--domain');
-    if (!anchorPath || !out || !domains.length || positional.length) throw new Error('receiver-export --anchor=FILE --domain=DOMAIN... [--jma] [--kikikuru] --out=DIR');
+    if (!anchorPath || !out || !domains.length || positional.length) throw new Error('receiver-export --anchor=FILE --domain=DOMAIN... [--jma] [--kikikuru] [--jma-xml] --out=DIR');
     const anchor = JSON.parse(await readFile(anchorPath, 'utf8'));
     if (Object.keys(anchor).some(key => /secret/i.test(key))) throw new Error('Root settings must not carry secrets');
     const files = receiverConfigurations(anchor, domains, presetSelection(flags));
@@ -78,7 +83,7 @@ export async function run(args) {
     await writeNew(join(resolve(out), 'mosimo-public-trust.json'), `${JSON.stringify(files.android, null, 2)}\n`);
     return { status: 'written', command, pairs: files.android.selected.length };
   }
-  throw new Error('Commands: importer-create HTTPS_PDS --out=FILE | receiver-export --anchor=FILE --domain=DOMAIN... [--jma] [--kikikuru] --out=DIR '
+  throw new Error('Commands: importer-create HTTPS_PDS --out=FILE | receiver-export --anchor=FILE --domain=DOMAIN... [--jma] [--kikikuru] [--jma-xml] --out=DIR '
     + '(key attestations and revocations: ca/ mosimo-ca)');
 }
 if (import.meta.main) run(process.argv.slice(2)).then(result => console.log(JSON.stringify(result))).catch(error => {

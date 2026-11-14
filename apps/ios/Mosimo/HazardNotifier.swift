@@ -75,11 +75,11 @@ final class HazardNotifier: NSObject, ObservableObject, UNUserNotificationCenter
         lastPosts = posts; lastMe = me
         let now = MeshCoordinator.now()
         let due = HazardAlerts.due(posts.map { HazardAlerts.Candidate(id: $0.id, pubkey: $0.pubkey, createdAt: $0.createdAt, official: $0.officialHazard,
-                                                                      danger: $0.category == .danger, ext: $0.ext) },
+                                                                      danger: $0.category == .danger, importAuthorized: $0.importerAuthorized, ext: $0.ext) },
                                    me: me, here: here(), nowSeconds: now / 1000, notified: Set(notified.keys))
         guard !due.isEmpty else { return }
-        // Switched-off genres and a refused permission are recorded without showing; while the permission is still being
-        // read, switched-on genres are left for later.
+        // Switched-off genres, a refused permission and re-posts whose group (public §8.1) already had a post at least as severe
+        // notified are recorded without showing; while the permission is still being read, switched-on genres are left for later.
         let (show, record) = HazardAlerts.split(due, on: genres, permission: granted ? .granted : status == .notDetermined ? .unknown : .refused)
         guard !record.isEmpty else { return }
         for a in record { notified[a.post.id] = a.post.createdAt }

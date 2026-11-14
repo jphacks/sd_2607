@@ -10,9 +10,9 @@ import {
   createAttestation, validateAttestation, attestationId, verifyChain, verifyBinding, createBinding, issuerDomains,
   createNotice, createActivation, validateRevocation, revocationStatus, createRevocationList, decodeRevocationList,
   createRevocationEvent, decodeRevocationEvent, controlType, verifyBsaf, authorizeImport, createImporter, createImportPost,
-  priorityHintOf, effectivePriority,
+  priorityHintOf, effectivePriority, validateImporterBlock, selectionBlock, includesFeed, SOURCE, JMA_XML_SELECTION, JMA_XML_FEED, JMA_EARTHQUAKE,
 } from './attest.mjs';
-import { decodePost, isBsafImport, TAG } from './repository.mjs';
+import { decodePost, isBsafImport, isNostrOnlyImport, TAG } from './repository.mjs';
 
 const now = 1794000000; // 2026-11-06T...
 const selection = [...JMA_SELECTION, ...KIKIKURU_SELECTION].sort((a, b) => a.botDid < b.botDid ? -1 : 1);
@@ -218,6 +218,82 @@ test('import authorization fails closed: unknown root, unselected pair, scope, r
   const ordinary = finalizeEvent({ kind: 1, content: 'hi', created_at: now, tags: [['t', TAG], ['mosimo:v', '1'], ['mosimo:commit', 'AA'], ['mosimo:base', ''],
     ['mosimo:rkey', '3jzfcijpj2z2a'], ['mosimo:exp', timestamp(now + 10)], [`mosimo:ext:${PRIORITY}`, b64(canonical({ level: 3 }))]] }, generateSecretKey());
   assert.equal(priorityHintOf(ordinary), 3);
+});
+
+test('importer feeds: identifiers, validation and containment (importer §1.1, §1.3)', () => {
+  const feeds = [...JMA_XML_SELECTION];
+  assert.ok(validateImporterBlock({ $type: IMPORTER, feeds }));
+  assert.ok(validateImporterBlock({ $type: IMPORTER, sources: selection, feeds }));
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER }), /without sources or feeds/);
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [] }), /Invalid importer feeds/);
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: JMA_XML_FEED, types: ['b', 'a'] }] }), /sorted/);
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: JMA_XML_FEED, types: [] }] }), /Empty types/);
+  // Feed IDs are NSIDs with a lowercase authority; the BSAF NSID is not a feed; origins are absolute URIs.
+  for (const feed of ['jma-xml', 'Dev.example.feed', 'example.feed', 'org.example.my-feed', 'dev.jisaku.mosimo.public.bsaf']) {
+    assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed }] }), /Invalid feed ID/, feed);
+  }
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: 'org.example.cap', origin: 'not a uri' }] }), /origin/);
+  const cap = 'org.example.alerts.cap', us = 'urn:oid:2.49.0.1.840.0', jp = 'urn:oid:2.49.0.1.392.0';
+  // Sorted by feed, then origin with the absent origin first; (feed, origin) unique.
+  assert.ok(validateImporterBlock({ $type: IMPORTER, feeds: [...feeds, { feed: cap }, { feed: cap, origin: jp, types: ['Flood'] }, { feed: cap, origin: us }] }));
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: cap, origin: us }, { feed: cap }] }), /sorted/);
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: cap, origin: us }, { feed: cap, origin: us, types: ['x'] }] }), /sorted/);
+  assert.throws(() => validateImporterBlock({ $type: IMPORTER, feeds: [{ feed: 'org.example.b' }, { feed: 'org.example.a' }] }), /sorted/);
+  assert.deepEqual(selectionBlock([...selection, ...feeds]), { $type: IMPORTER, sources: selection, feeds });
+  // Absent origin or types stand for every issuer or type; a post without origin needs an entry without origin.
+  assert.ok(includesFeed([{ feed: cap }], cap, us, 'Flood'));
+  assert.ok(includesFeed([{ feed: cap, origin: us }], cap, us, 'Flood'));
+  assert.ok(!includesFeed([{ feed: cap, origin: us }], cap, jp, 'Flood'));
+  assert.ok(!includesFeed([{ feed: cap, origin: us }], cap, undefined, 'Flood'));
+  assert.ok(!includesFeed([{ feed: cap, types: ['Fire'] }], cap, us, 'Flood'));
+  assert.ok(!includesFeed([{ feed: cap, types: ['Fire'] }], cap, us, undefined));
+});
+
+test('importer feeds: declared re-post authorization and scope escalation', async () => {
+  const feeds = [...JMA_XML_SELECTION];
+  const cap = 'org.example.alerts.cap', us = 'urn:oid:2.49.0.1.840.0';
+  const caBlocks = [{ $type: BLOCK.delegation, maxDepth: 1 }, { $type: BLOCK.issuerDomain, domain: 'pds.example.org' },
+    { $type: IMPORTER, sources: selection, feeds: [...feeds, { feed: cap }].sort((a, b) => a.feed < b.feed ? -1 : 1) }];
+  const leafScope = [...feeds, { feed: cap, origin: us, types: ['Flood Warning'] }].sort((a, b) => a.feed < b.feed ? -1 : 1);
+  const leafBlocks = [{ $type: BLOCK.keyValidity, from: timestamp(now - 86400), until: timestamp(now + 86400) }, org, { $type: IMPORTER, feeds: leafScope }];
+  const h = hierarchy({ caBlocks, leafBlocks });
+  const title = '震源・震度に関する情報';
+  const source = feed => ({ $type: SOURCE, document: { format: 'jma-xml-1.3' }, ...(feed ? { feed } : {}) });
+  const jma = (t = title, declared = { id: JMA_XML_FEED, type: t }) => [{ $type: JMA_EARTHQUAKE, message: { control: { title: t,
+    dateTime: '2026-11-06T00:00:00Z', status: '通常', editorialOffice: '気象庁本庁', publishingOffice: '気象庁' } }, selection: { kind: 'whole' }, body: {} },
+    source(declared)];
+  const { event } = await importPost(h, { ext: jma() });
+  assert.ok(isNostrOnlyImport(event)); assert.ok(!isBsafImport(event));
+  const result = await authorizeImport(event, { roots: h.roots, selection: [...selection, ...feeds], now });
+  assert.equal(result.feed, JMA_XML_FEED); assert.equal(result.type, title); assert.equal(result.origin, null); assert.equal(result.botDid, null);
+  await assert.rejects(authorizeImport(event, { roots: h.roots, selection, now }), /Unselected/);
+  const other = await importPost(h, { ext: jma('震度速報') });
+  await assert.rejects(authorizeImport(other.event, { roots: h.roots, selection: [{ feed: JMA_XML_FEED, types: ['震度速報'] }], now }), /outside the importer scope/);
+  // A known feed's declaration must match the content; a post without a declaration is no feed re-post.
+  const mismatch = await importPost(h, { ext: jma(title, { id: JMA_XML_FEED, type: '震度速報' }) });
+  await assert.rejects(authorizeImport(mismatch.event, { roots: h.roots, selection: [{ feed: JMA_XML_FEED }], now }), /does not match/);
+  const withOrigin = await importPost(h, { ext: jma(title, { id: JMA_XML_FEED, origin: us, type: title }) });
+  await assert.rejects(authorizeImport(withOrigin.event, { roots: h.roots, selection: [{ feed: JMA_XML_FEED }], now }), /does not match/);
+  const undeclared = await importPost(h, { ext: jma(title, null) });
+  assert.ok(!isNostrOnlyImport(undeclared.event));
+  await assert.rejects(authorizeImport(undeclared.event, { roots: h.roots, selection: feeds, now }), /without a feed declaration/);
+  // An unknown feed is authorized as declared, by origin and type.
+  const capPost = await importPost(h, { ext: [source({ id: cap, origin: us, type: 'Flood Warning' })] });
+  assert.ok(isNostrOnlyImport(capPost.event));
+  const capResult = await authorizeImport(capPost.event, { roots: h.roots, selection: [{ feed: cap }], now });
+  assert.equal(capResult.feed, cap); assert.equal(capResult.origin, us); assert.equal(capResult.type, 'Flood Warning');
+  await assert.rejects(authorizeImport(capPost.event, { roots: h.roots, selection: [{ feed: cap, origin: 'urn:oid:2.49.0.1.392.0' }], now }), /Unselected/);
+  const otherOrigin = await importPost(h, { ext: [source({ id: cap, origin: 'urn:oid:2.49.0.1.392.0', type: 'Flood Warning' })] });
+  await assert.rejects(authorizeImport(otherOrigin.event, { roots: h.roots, selection: [{ feed: cap }], now }), /outside the importer scope/);
+  // A CA block without feeds cannot delegate them; an origin-wide child needs an origin-wide parent; a BSAF-only leaf covers no feed.
+  const escalated = hierarchy({ leafBlocks });
+  await assert.rejects(authorizeImport((await importPost(escalated, { ext: jma() })).event, { roots: escalated.roots, selection: feeds, now }), /Importer scope escalation/);
+  const narrowCa = [caBlocks[0], caBlocks[1], { $type: IMPORTER, feeds: [{ feed: cap, origin: us }] }];
+  const wide = hierarchy({ caBlocks: narrowCa, leafBlocks: [leafBlocks[0], org, { $type: IMPORTER, feeds: [{ feed: cap }] }] });
+  await assert.rejects(authorizeImport((await importPost(wide, { ext: [source({ id: cap, origin: us, type: 'Flood Warning' })] })).event,
+    { roots: wide.roots, selection: [{ feed: cap }], now }), /Importer scope escalation/);
+  const bsafLeaf = hierarchy({ caBlocks });
+  await assert.rejects(authorizeImport((await importPost(bsafLeaf, { ext: jma() })).event, { roots: bsafLeaf.roots, selection: feeds, now }), /outside the importer scope/);
 });
 
 test('BSAF extension validation keeps original tag strings and requires one core tag each', () => {

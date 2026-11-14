@@ -178,7 +178,7 @@ struct GsiMapView: UIViewRepresentable {
         private var shownRegions = [String: [MKOverlay]]()
         init(_ parent: GsiMapView) { self.parent = parent }
 
-        private func key(_ p: PostView) -> String { "\(p.id)|\(p.alert)|\(p.officialHazard)" }
+        private func key(_ p: PostView) -> String { "\(p.id)|\(p.alert)|\(p.officialHazard)|\(p.ext.regions.count)" }
 
         /// Puts on the map the pins and areas of the posts visible at the current zoom, adding and removing only the difference.
         @MainActor func sync(_ map: MKMapView) {

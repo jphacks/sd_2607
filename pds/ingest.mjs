@@ -3,7 +3,7 @@ import { sqliteNow } from './store.mjs';
 import { BlockMap, blocksToCarFile, readCar } from '@atproto/repo';
 import * as cbor from '@ipld/dag-cbor';
 import { CID } from 'multiformats/cid';
-import { decodePost, decodeDeletion, verifyCommit, reconstruct, isBsafImport, isPost, isDeletionCommit, REPORT_KIND, validateReport } from './repository.mjs';
+import { decodePost, decodeDeletion, verifyCommit, reconstruct, isNostrOnlyImport, isPost, isDeletionCommit, REPORT_KIND, validateReport } from './repository.mjs';
 import { CONTROL_KIND, controlType, decodeRevocationEvent } from './attest.mjs';
 import { commitFrame, encodeFrame, futureRevisionDelay } from './sync.mts';
 
@@ -63,7 +63,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
         await tx.query(`INSERT INTO revocations(id,subject,issuer,effective_at,seen_at,revocation) VALUES($1,$2,$3,$4,$5,$6)
           ON CONFLICT(id) DO NOTHING`, [revocation.id, revocation.subject, revocation.issuer, Math.floor(revocation.effectiveAt),
           Math.floor(clock() / 1000), event.tags[3][1]]);
-      } else if (isPost(event) && !isBsafImport(event)) {
+      } else if (isPost(event) && !isNostrOnlyImport(event)) {
         await tx.query('INSERT INTO jobs(event_id) VALUES($1)', [event.id]);
       }
       if (forward && (isPost(event) || event.kind === 5 || event.kind === REPORT_KIND || revocation)) {
@@ -73,7 +73,7 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
       }
       if (deleted) return { accepted: true, message: 'stored: deleted by author; kept hidden for repository verification' };
       return { accepted: true, message: revocation ? 'stored: revocation notice' : event.kind === REPORT_KIND ? 'stored: report'
-        : isPost(event) && isBsafImport(event) ? 'stored: Nostr-only BSAF import' : 'stored: repository verification is asynchronous' };
+        : isPost(event) && isNostrOnlyImport(event) ? 'stored: Nostr-only import' : 'stored: repository verification is asynchronous' };
     });
   }
 
@@ -83,8 +83,8 @@ export function createIngestion({ config, store, resolveIdentity, clock = Date.n
         WHERE j.status IN ('pending','retry') AND j.next_attempt <= ${now}
         ORDER BY j.next_attempt ${sqlite ? '' : 'FOR UPDATE OF j SKIP LOCKED'} LIMIT 1`)).rows[0];
       if (!job) return false;
-      if (isBsafImport(job.event)) {
-        await tx.query("UPDATE jobs SET status='invalid',error='Nostr-only BSAF import; retained without atproto publication' WHERE event_id=$1", [job.event_id]);
+      if (isNostrOnlyImport(job.event)) {
+        await tx.query("UPDATE jobs SET status='invalid',error='Nostr-only import; retained without atproto publication' WHERE event_id=$1", [job.event_id]);
         return true;
       }
       let decoded;

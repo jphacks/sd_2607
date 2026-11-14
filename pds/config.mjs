@@ -1,4 +1,4 @@
-import { rootConfig, validateImporterBlock, IMPORTER } from './attest.mjs';
+import { rootConfig, validateImporterBlock, selectionBlock } from './attest.mjs';
 
 export function validateConfig(input, env = process.env) {
   const config = { plcUrl: 'https://plc.directory', relays: [], peers: [], maxEventBytes: 131072,
@@ -29,7 +29,7 @@ export function validateConfig(input, env = process.env) {
     if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`Invalid ${key}`);
   }
   // Trust roots are receiver-local settings (attest §3): the key, the roles it may grant and the
-  // chain depth it may delegate. The selection lists the (Bot, type) pairs this relay authorizes.
+  // chain depth it may delegate. The selection lists the (Bot, type) and (feed, type) pairs this relay authorizes.
   const pi = config.publicInformation;
   if (!pi || !Array.isArray(pi.roots) || pi.roots.length > 64 || !Array.isArray(pi.selection)
     || pi.selection.length > 16 || (pi.revocationDomains !== undefined && !Array.isArray(pi.revocationDomains))) throw new Error('Invalid publicInformation');
@@ -40,7 +40,7 @@ export function validateConfig(input, env = process.env) {
     ids.add(normalized.id);
     return { ...root, pubkey: normalized.id };
   }), revocationDomains: pi.revocationDomains ?? [] };
-  if (pi.selection.length) validateImporterBlock({ $type: IMPORTER, sources: pi.selection });
+  if (pi.selection.length) validateImporterBlock(selectionBlock(pi.selection));
   for (const domain of config.publicInformation.revocationDomains) {
     if (typeof domain !== 'string' || !/^[a-z0-9.-]+$/.test(domain)) throw new Error('Invalid revocation domain');
   }

@@ -38,6 +38,9 @@ final class HazardImportTests: XCTestCase {
         let (effective, entries) = PublicIngress.effective(config, test, PublicIngress.TrustChoices.parse(choices.toJson()))
         XCTAssertEqual(entries.map(\.origin), [.builtin, .test, .user])
         XCTAssertEqual(effective.roots.map(\.enabled), [false, true, true])
+        // A user-added root delegates as deep as receivers allow (attest §5); the shipped roots keep their own depth.
+        XCTAssertEqual(entries.map(\.root.maxDepth), [config.roots[0].maxDepth, 2, PublicIngress.userRootDepth])
+        XCTAssertEqual(PublicIngress.userRootDepth, 16)
         XCTAssertEqual(effective.selected, config.selected)
         // A switched-off root no longer authorizes; switching it back restores the verdict.
         let trusted = try event("trusted")

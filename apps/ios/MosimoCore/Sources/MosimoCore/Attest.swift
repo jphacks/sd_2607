@@ -91,25 +91,44 @@ public enum Attest {
             trustLevel = try blocks[trustLevelType].map { b in let l = try number(b["level"]); try require(l <= 3); return l }
             revocationSubkey = try blocks[subkey].map { try publicKey($0["key"]) }
             importerBlock = try blocks[importer].map { block in
-                // Each list, when present, is non-empty, sorted by its key and free of duplicates (importer §1, §4).
-                func pairs(_ field: String, _ key: String, _ max: Int, _ check: (String) -> Bool) throws -> [String: Set<String>]? {
-                    guard let value = block[field] else { return nil }
-                    guard let list = value.array, (1...max).contains(list.count) else { throw CoreError("Expected \(field)") }
+                try require(block.keys.allSatisfy { ["$type", "sources", "feeds"].contains($0) }, "Unexpected importer fields")
+                // importer §1, §4: `types` are sorted, unique, 1...32 texts of at most 128 bytes.
+                func types(_ v: Cbor?) throws -> Set<String> { Set(try sortedTexts(v, 32, min: 1, maxBytes: 128)) }
+                var sources: [String: Set<String>]?
+                if let value = block["sources"] {
+                    guard let list = value.array, (1...16).contains(list.count) else { throw CoreError("Expected sources") }
                     let parsed: [(String, Set<String>)] = try list.map { s in
                         let m = try map(s)
-                        let name = try text(m[key])
-                        try require(check(name), "Invalid \(key)")
-                        return (name, Set(try sortedTexts(m["types"], 32, min: 1)))
+                        try require(Set(m.keys) == ["botDid", "types"], "Unexpected source fields")
+                        let did = try text(m["botDid"])
+                        try require(matches(AtRepository.didPattern, did), "Invalid botDid")
+                        return (did, try types(m["types"]))
                     }
-                    try require(zip(parsed, parsed.dropFirst()).allSatisfy { lexicalCompare($0.0, $1.0) < 0 }, "Unsorted \(field)")
-                    return Dictionary(uniqueKeysWithValues: parsed)
+                    try require(zip(parsed, parsed.dropFirst()).allSatisfy { lexicalCompare($0.0, $1.0) < 0 }, "Unsorted sources")
+                    sources = Dictionary(uniqueKeysWithValues: parsed)
                 }
-                let sources = try pairs("sources", "botDid", 16) { matches(AtRepository.didPattern, $0) }
-                // An unknown feed name parses; it just never authorizes (importer §1.1).
-                let feeds = try pairs("feeds", "feed", 8) { (1...maxTextBytes).contains($0.utf8.count) }
+                var feeds: [Importer.Feed]?
+                if let value = block["feeds"] {
+                    guard let list = value.array, (1...32).contains(list.count) else { throw CoreError("Expected feeds") }
+                    let parsed: [Importer.Feed] = try list.map { f in
+                        let m = try map(f)
+                        try require(m["feed"] != nil && m.keys.allSatisfy { ["feed", "origin", "types"].contains($0) }, "Unexpected feed fields")
+                        let feed = try text(m["feed"])
+                        try require(isFeedId(feed) && feed != PublicIngress.bsaf, "Invalid feed ID")
+                        let origin = try m["origin"].map { try text($0) }
+                        try require(origin.map(isOrigin) ?? true, "Invalid feed origin")
+                        return Importer.Feed(feed: feed, origin: origin, types: try m["types"].map(types))
+                    }
+                    // importer §1.3: by (feed, origin) bytes, an absent origin first; no duplicate (feed, origin).
+                    try require(zip(parsed, parsed.dropFirst()).allSatisfy { a, b in
+                        let c = lexicalCompare(a.feed, b.feed)
+                        return c < 0 || (c == 0 && lexicalCompare(a.origin ?? "", b.origin ?? "") < 0)
+                    }, "Feeds must be sorted by (feed, origin) without duplicates")
+                    feeds = parsed
+                }
                 try require(sources != nil || feeds != nil, "importer block without sources or feeds")
                 let b = Importer(sources: sources, feeds: feeds)
-                try require(b.pairCount <= 64)
+                try require(b.pairCount <= 64, "Importer scope limit")
                 return b
             }
             try require(issuer != subject, "Self-signed attestation")
@@ -126,27 +145,52 @@ public enum Attest {
         public func validAt(_ t: Instant) -> Bool { (validFrom.map { t >= $0 } ?? true) && (validUntil.map { t < $0 } ?? true) }
     }
 
-    /// `dev.jisaku.mosimo.attest.importer`: the (botDid, type) pairs of `sources` and the (feed, type) pairs of `feeds`
-    /// an importer may re-publish; each map is nil when its list is absent.
+    /// `dev.jisaku.mosimo.attest.importer`: the (botDid, type) pairs of `sources` and the `{feed, origin?, types?}` entries of
+    /// `feeds` an importer may re-publish; each is nil when its list is absent.
     public struct Importer: Equatable, Sendable {
+        /// importer §1: an absent [origin] or [types] stands for every issuer or every type of the feed.
+        public struct Feed: Equatable, Sendable {
+            public let feed: String, origin: String?
+            public let types: Set<String>?
+            public init(feed: String, origin: String? = nil, types: Set<String>? = nil) { self.feed = feed; self.origin = origin; self.types = types }
+        }
         public let sources: [String: Set<String>]?
-        public let feeds: [String: Set<String>]?
-        var pairCount: Int { [sources, feeds].reduce(0) { $0 + ($1?.values.reduce(0) { $0 + $1.count } ?? 0) } }
+        public let feeds: [Feed]?
+        /// importer §4: explicit types over both lists.
+        var pairCount: Int { (sources?.values.reduce(0) { $0 + $1.count } ?? 0) + (feeds?.reduce(0) { $0 + ($1.types?.count ?? 0) } ?? 0) }
         public func covers(_ pair: PublicIngress.Selection) -> Bool {
-            if let bot = pair.botDid { return sources?[bot]?.contains(pair.type) == true }
-            if let feed = pair.feed { return feeds?[feed]?.contains(pair.type) == true }
+            if let bot = pair.botDid { return pair.type.map { sources?[bot]?.contains($0) } == true }
+            if let feed = pair.feed { return Self.includes(feeds, feed, pair.origin, pair.type) }
             return false
         }
-        /// importer §1: each child pair is in the issuer's list of the same kind; a list the issuer lacks, the child cannot have.
+        /// importer §1.3: whether [feeds] holds (feed, origin, type); a nil [origin] or [type] asks for every issuer or type,
+        /// so only an entry without origin covers a post without origin.
+        static func includes(_ feeds: [Feed]?, _ feed: String, _ origin: String?, _ type: String?) -> Bool {
+            feeds?.contains { f in
+                f.feed == feed && (f.origin == nil || (origin != nil && f.origin == origin)) && (f.types.map { t in type.map(t.contains) ?? false } ?? true)
+            } ?? false
+        }
+        /// importer §1, §1.3: each child pair is in the issuer's list of the same kind; a list the issuer lacks, the child
+        /// cannot have. An origin-wide or type-wide child entry needs an origin-wide or type-wide parent entry.
         func within(_ parent: Importer) -> Bool {
-            func contained(_ child: [String: Set<String>]?, _ parent: [String: Set<String>]?) -> Bool {
-                guard let child else { return true }
-                guard let parent else { return false }
-                return child.allSatisfy { key, types in parent[key].map { types.isSubset(of: $0) } ?? false }
+            let botsWithin = sources.map { child in
+                parent.sources.map { p in child.allSatisfy { key, types in p[key].map { types.isSubset(of: $0) } ?? false } } ?? false
+            } ?? true
+            let feedsWithin = (feeds ?? []).allSatisfy { c in
+                c.types.map { $0.allSatisfy { Self.includes(parent.feeds, c.feed, c.origin, $0) } } ?? Self.includes(parent.feeds, c.feed, c.origin, nil)
             }
-            return contained(sources, parent.sources) && contained(feeds, parent.feeds)
+            return botsWithin && feedsWithin
         }
     }
+
+    /// importer §1.1: a feed ID is an NSID with a lowercase authority and at least three segments.
+    private static let nsid = try! NSRegularExpression(pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\\.[a-zA-Z][a-zA-Z0-9]{0,62}$")
+    public static func isFeedId(_ value: String) -> Bool {
+        value.utf8.count <= 317 && matches(nsid, value) && value.split(separator: ".", omittingEmptySubsequences: false).count >= 3
+    }
+    /// importer §1.1: an issuer is an absolute URI of at most 256 bytes without whitespace or control characters.
+    private static let originPattern = try! NSRegularExpression(pattern: "^[a-zA-Z][a-zA-Z0-9+.-]*:[^\\s\\x00-\\x1f\\x7f]+$")
+    public static func isOrigin(_ value: String) -> Bool { value.utf8.count <= 256 && matches(originPattern, value) }
 
     /// `{body, sig}` as carried in chains and FETCH responses.
     public static func attestation(_ v: Cbor?) throws -> Attestation {
@@ -191,7 +235,9 @@ public enum Attest {
         var parentDepth = Int64(root.maxDepth)
         var parentFrom: Instant?, parentUntil: Instant?
         var parentOrg: String?
+        // importer §1: the nearest ancestor's block bounds a child's; with none above, the direct parent needs `import`.
         var parentImporter: Importer?
+        var parentHasImport = root.roles.contains(roleImport)
         for (i, a) in attestations.enumerated() {
             let leaf = i == attestations.count - 1
             func invalid(_ why: String) -> ChainResult { ChainResult(state: .invalid, reason: "attestation \(i): \(why)", root: root) }
@@ -204,10 +250,11 @@ public enum Attest {
             if a.maxDepth > parentDepth - 1 { return invalid("delegation depth exceeds the issuer's") }
             if !leaf && a.maxDepth < 1 { return invalid("intermediate without delegation") }
             if let po = parentOrg, a.orgId != po { return invalid("organization differs from the issuer's") }
-            if let pi = parentImporter, let ci = a.importerBlock, !ci.within(pi) { return invalid("importer block exceeds the issuer's") }
+            if let ci = a.importerBlock, !(parentImporter.map(ci.within) ?? parentHasImport) { return invalid("importer block exceeds the issuer's") }
             parentRoles = Set(a.roles); parentDepth = a.maxDepth; parentFrom = a.validFrom; parentUntil = a.validUntil
             parentOrg = a.orgId ?? parentOrg
-            parentImporter = a.importerBlock // importer §1: a child of a block-less issuer is unconstrained
+            parentImporter = a.importerBlock ?? parentImporter // a block-less intermediate does not widen the scope
+            parentHasImport = a.roles.contains(roleImport)
         }
         guard let now else { return ChainResult(state: .unknownTime, reason: "clock unknown", root: root, attestations: attestations) }
         if !attestations.allSatisfy({ $0.validAt(createdAt) }) { return ChainResult(state: .expired, reason: "outside validity at creation", root: root, attestations: attestations) }
@@ -372,9 +419,13 @@ public enum Attest {
         for (p, q) in zip(x, y) where p != q { return p < q ? -1 : 1 }
         return x.count == y.count ? 0 : x.count < y.count ? -1 : 1
     }
-    private static func sortedTexts(_ v: Cbor?, _ max: Int, min: Int = 0) throws -> [String] {
+    private static func sortedTexts(_ v: Cbor?, _ max: Int, min: Int = 0, maxBytes: Int? = nil) throws -> [String] {
         guard let a = v?.array else { throw CoreError("Expected array") }
-        let list = try a.map { x in let t = try text(x); try require(t.utf8.count <= maxTextBytes); return t }
+        let list = try a.map { x in
+            let t = try text(x)
+            try require(maxBytes.map { (1...$0).contains(t.utf8.count) } ?? (t.utf8.count <= maxTextBytes))
+            return t
+        }
         try require((min...max).contains(list.count) && zip(list, list.dropFirst()).allSatisfy { lexicalCompare($0, $1) < 0 }, "Unsorted/duplicate/oversized list")
         return list
     }

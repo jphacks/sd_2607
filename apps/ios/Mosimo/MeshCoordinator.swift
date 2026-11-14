@@ -552,16 +552,19 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         note("中継を停止。保存済み投稿とリレー設定は保持")
     }
 
-    /// The Bot/type and feed/type pairs selected for ingress by the shipped config, as shown in settings (roots are in `state.trustRoots`).
+    /// The Bot/type and feed/origin/type entries selected for ingress by the shipped config, as shown in settings (roots are in
+    /// `state.trustRoots`). A feed entry without a type selects every type of that feed (importer §1.3).
     func trustSources() -> [TrustSource] {
         guard let json = Self.trustAsset("mosimo-public-trust"), let n = try? Json.parse(json) else { return [] }
-        var order = [String](), types = [String: [String]]()
+        var order = [TrustSource](), types = [String: [String]](), everyType = Set<String>()
         for s in n["selected"]?.array ?? [] {
-            guard let d = s["botDid"]?.string ?? s["feed"]?.string.map({ "フィード \($0)" }), let t = s["type"]?.string else { continue }
-            if types[d] == nil { order.append(d) }
-            types[d, default: []].append(t)
+            let feed = s["feed"]?.string
+            guard let name = feed ?? s["botDid"]?.string else { continue }
+            let source = TrustSource(name: name, feed: feed != nil, origin: feed != nil ? s["origin"]?.string : nil, types: nil)
+            if !order.contains(where: { $0.id == source.id }) { order.append(source) }
+            if let t = s["type"]?.string { types[source.id, default: []].append(t) } else { everyType.insert(source.id) }
         }
-        return order.map { TrustSource(name: $0, types: types[$0]!) }
+        return order.map { TrustSource(name: $0.name, feed: $0.feed, origin: $0.origin, types: everyType.contains($0.id) ? nil : types[$0.id] ?? []) }
     }
 
     /// A trust config bundled with the app; Debug builds alone also bundle `mosimo-public-trust-test` (project.yml).
@@ -684,6 +687,15 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             let stopped = Set(engine.entries().map(\.event).filter(moderation.stopped).map(\.id) + online.filter(moderation.stopped).map(\.id))
             s.posts = posts.filter { !blocked.contains($0.pubkey) && !stopped.contains($0.id) &&
                 !(hide && $0.deliveryDeadline == .expired) && !filter.blocks($0.content) }
+            // public §8.1: groups among authorized re-posts, leaving out those a newer post of their series replaces (jma §5.3).
+            let replaced = JmaDisplay.superseded(s.posts.compactMap { p in p.officialHazard ? p.ext.jma.map { (p.id, $0) } : nil })
+            let groups = RepostGroups.groups(s.posts.filter { $0.importerAuthorized && !replaced.contains($0.id) }
+                .map { RepostGroups.Post(id: $0.id, createdAt: $0.createdAt, ext: $0.ext) })
+            if !groups.isEmpty {
+                var byId = [String: RepostGroups.Group]()
+                for g in groups { for m in g.members { byId[m] = g } }
+                for i in s.posts.indices { s.posts[i].group = byId[s.posts[i].id] }
+            }
         }
         s.publicBusy = publicBusy
         s.blockedPubkeys = blocked

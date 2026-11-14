@@ -38,6 +38,8 @@ class HazardImportTest {
         val (effective, entries) = PublicIngress.effective(config, test, PublicIngress.TrustChoices.parse(choices.toJson()))
         assertEquals(listOf(PublicIngress.RootOrigin.BUILTIN, PublicIngress.RootOrigin.TEST, PublicIngress.RootOrigin.USER), entries.map { it.origin })
         assertEquals(listOf(false, true, true), effective.roots.map { it.enabled })
+        // A user-added root may delegate as deep as receivers allow (attest §2: maxDepth ≤ 16).
+        assertEquals(16, effective.roots.last().maxDepth)
         assertEquals(config.selected, effective.selected)
         // A switched-off root no longer authorizes; switching it back restores the verdict.
         assertFalse(PublicIngress.chainView(event("trusted"), effective.roots, PublicIngress.RevocationStore(),
