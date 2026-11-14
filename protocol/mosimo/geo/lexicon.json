@@ -49,7 +49,7 @@
     },
     "region": {
       "type": "object",
-      "description": "One element of an area. The shape field selects which other fields are present: circle uses latitudeMicrodegrees, longitudeMicrodegrees and radiusMillimeters; geohash uses hash.",
+      "description": "One element of an area. The shape field selects which other fields are present: circle uses lat, lon and r (latitudeMicrodegrees, longitudeMicrodegrees and radiusMillimeters); geohash uses hash.",
       "required": ["shape"],
       "properties": {
         "shape": {
