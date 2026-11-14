@@ -75,7 +75,7 @@ internal fun readRevocations(node: JsonNode?): List<Attest.Revocation> = node?.l
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
 internal class EncryptedStore(context: Context) {
     private val file = AtomicFile(File(context.noBackupFilesDir, "mosimo-state.aesgcm"))
-    private val aad = "dev.oriom.mosimo.state.v1".toByteArray()
+    private val aad = "dev.jisaku.mosimo.state.v1".toByteArray()
     private val base64 = Base64.getEncoder()
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

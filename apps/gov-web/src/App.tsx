@@ -181,7 +181,7 @@ function Detail({ post, thread, status, now, onStatus, onSelect, onAuthor }: {
       <dl>
         <Row label="作成日時">{post.createdAt}</Row>
         <Row label="索引日時">{post.indexedAt ?? '—'}</Row>
-        <Row label="有効期間">{post.validity ? `${post.validity.startsAt ?? '不明'} 〜 ${post.validity.endsAt ?? '不明'}` : '—'}</Row>
+        <Row label="有効期間">{post.validity ? `${post.validity.from ?? '不明'} 〜 ${post.validity.until ?? '不明'}` : '—'}</Row>
         <Row label="発信地点">{post.origin ? post.origin.map(v => v.toFixed(6)).join(', ') : '—'}</Row>
         <Row label="影響範囲">{post.areas.length ? `${post.areas.length}件` : '—'}</Row>
         {post.unknownTypes.length > 0 && <Row label="未対応の拡張">{post.unknownTypes.join(', ')}</Row>}

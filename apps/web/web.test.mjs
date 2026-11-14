@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import { runWeb } from './web-harness.mjs';
 
 const did = 'did:plc:synthetic';
+// Deterministic 13-char TID per id so the client can derive createdAt from the rkey and dedupe by URI.
+const tidFor = id => '3' + (id + 'aaaaaaaaaaaa').slice(0, 12).toLowerCase().replace(/[^234567a-z]/g, 'a');
 const post = (id, extra = {}) => ({
-  $type: 'dev.oriom.mosimo.post', uri: `at://${did}/dev.oriom.mosimo.post/${id}`,
-  text: `<script>not HTML ${id}</script>`, createdAt: '2020-01-01T00:00:00Z',
-  deliveryExpiresAt: '2020-01-02T00:00:00Z', extensions: [{ $type: 'example.unknown.ext', future: true }], ...extra,
+  $type: 'dev.jisaku.mosimo.post', uri: `at://${did}/dev.jisaku.mosimo.post/${tidFor(id)}`,
+  text: `<script>not HTML ${id}</script>`,
+  exp: '2020-01-02T00:00:00Z', ext: [{ $type: 'example.unknown.ext', future: true }], ...extra,
 });
 const json = data => ({ ok: true, json: async () => data });
 
@@ -22,7 +24,7 @@ test('actual client paginates, keeps arrival order and expired/unknown-extension
     assert.equal(options.cache, 'no-store');
     if (fail) throw new Error('offline');
     if (url.searchParams.has('cursor')) return json({ records: [post('one'), post('old')] });
-    return json({ records: removed ? [post('new')] : [post('one'), post('two', { createdAt: '2026-01-01T00:00:00Z' })], cursor: '2' });
+    return json({ records: removed ? [post('new')] : [post('one'), post('two')], cursor: '2' });
   });
   assert.equal(client.articles().length, 2);
   assert.match(client.articles()[0].querySelector('.text').textContent, /not HTML one/);
@@ -53,7 +55,7 @@ test('DID/URI diagnostic filters, single record response, and BSAF is not presen
     if (url.hostname === 'plc.directory') return json({});
     assert.equal(url.searchParams.get('did'), did);
     assert.equal(url.searchParams.get('uri'), uri);
-    return json({ record: post('one', { uri, $type: 'app.bsky.feed.post' }) });
+    return json({ record: post('one', { uri, $type: 'app.bsky.feed.post', createdAt: '2020-01-01T00:00:00Z' }) });
   }, `?did=${did}&uri=${encodeURIComponent(uri)}`);
   assert.equal(client.articles().length, 1);
   assert.ok(client.articles()[0].querySelectorAll('.time').some(e => e.textContent.includes('BSAF 原投稿')));
@@ -82,7 +84,7 @@ test('public client key and override survive every page and refresh without leak
     assert.deepEqual(apiCalls.map(url => url.searchParams.get('cursor')), [null, null, '1', null, '1']);
     for (const url of apiCalls) {
       assert.equal(url.origin, apiOrigin);
-      assert.equal(url.pathname, '/xrpc/dev.oriom.mosimo.getFeed');
+      assert.equal(url.pathname, '/xrpc/dev.jisaku.mosimo.getFeed');
       assert.deepEqual(url.searchParams.getAll('client_key'), [key]);
       assert.equal(url.searchParams.get('did'), did);
       assert.equal(url.searchParams.get('limit'), '50');
