@@ -1,4 +1,4 @@
-// JMA XML → Mosimo importer (attest.importer feed `jma-xml`). Polls the JMA PULL Atom feeds, keeps every fetched
+// JMA XML → Mosimo importer (attest.importer feed dev.jisaku.mosimo.public.jma). Polls the JMA PULL Atom feeds, keeps every fetched
 // original with its SHA-256, converts the selected titles (convert.mts), signs each draft as an import post with the
 // importer's own keys and chain, checks it with the same rules a relay applies, and pushes it to the PDS relay.
 // Posts are Nostr-only (importer §2). Signed events are stored and retried unchanged; deadlines are never renewed.

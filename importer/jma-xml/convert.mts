@@ -3,6 +3,7 @@
 // A draft is unsigned: the importer signs it, after checking that it fits one mesh payload.
 import { NS, parseXml, child, children, text, attr, value, code, type Node } from './xml.mts';
 import { cover, areaExtension } from './area.mts';
+import { JMA_XML_FEED } from '../../pds/attest.mjs';
 
 export const RULE = 'dev.jisaku.mosimo.public.jma.hazard';
 export const REVISION = '1';
@@ -62,6 +63,8 @@ function source(msg: Message, ctx: Context) {
     retrievedFrom: ctx.url, retrievedAt: ctx.retrievedAt, converter: ctx.converter,
     conversion: { rule: RULE, revision: REVISION },
     originalDigest: { algorithm: 'sha-256', value: ctx.digest },
+    // importer §1.2, public.jma §12: the feed re-post declaration; no origin, the type is the original Control/Title.
+    feed: { id: JMA_XML_FEED, type: msg.control.title },
   };
 }
 const footer = (msg: Message) => `出典: 気象庁防災情報XML（${msg.control.publishingOffice} ${local(msg.head.reportDateTime)}発表）を転載サーバーが変換。気象庁の署名ではありません。`;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createECDH, createPrivateKey } from 'node:crypto';
-import { BLOCK, IMPORTER, JMA_XML_SELECTION, canonical, createAttestation, createImporter, randomSecret, nostrPublicKey, hex, unhex, timestamp,
+import { BLOCK, IMPORTER, JMA_XML_FEED, JMA_XML_SELECTION, canonical, createAttestation, createImporter, randomSecret, nostrPublicKey, hex, unhex, timestamp,
   authorizeImport, atprotoPublicKey } from '../../pds/attest.mjs';
 import { openStore, poll, stage, pushOnce, parseFeed, validateConfig, loadCredentials, type ImporterConfig } from './importer.mts';
 import { useTables } from './area.mts';
@@ -66,7 +66,7 @@ test('poll fetches the newest of each weather series once, stage signs authorize
   const rows = store.db.prepare('SELECT * FROM jma_xml_posts ORDER BY seq').all();
   for (const row of rows) {
     const result = await authorizeImport(JSON.parse(String(row.event_json)), { roots, selection, revocations: [], now });
-    assert.equal(result.feed, 'jma-xml');
+    assert.equal(result.feed, JMA_XML_FEED);
   }
   let sent = 0;
   const failing = async () => { sent++; return false; };

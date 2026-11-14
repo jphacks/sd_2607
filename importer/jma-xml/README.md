@@ -1,6 +1,6 @@
 # 気象庁XML転載サーバー（importer/jma-xml）
 
-気象庁防災情報XMLの公開PULLフィードから電文を取得し、Mosimoの投稿に変換して署名し、PDSのNostrリレーへ送るサーバーです。転載の認可は [`attest.importer`](../../protocol/mosimo/attest/importer/README.md) のフィード `jma-xml` で受けます。BSAFの転載（`appview/bsaf`）とは別の鍵・別の証明書で動きます。
+気象庁防災情報XMLの公開PULLフィードから電文を取得し、Mosimoの投稿に変換して署名し、PDSのNostrリレーへ送るサーバーです。転載の認可は [`attest.importer`](../../protocol/mosimo/attest/importer/README.md) のフィード `dev.jisaku.mosimo.public.jma`（[public.jma §12](../../protocol/mosimo/public/jma/README.md#12-フィード)）で受け、投稿の `public#source.feed` でそれを宣言します。BSAFの転載（`appview/bsaf`）とは別の鍵・別の証明書で動きます。
 
 ## できること
 
@@ -29,7 +29,7 @@
 
 ## 鍵の発行（ルート鍵のあるPCで実行）
 
-鍵の発行は認証局ツール [`mosimo-ca`](../../ca/README.md) で行います。転載範囲はプリセット `jma-xml`（フィード `jma-xml` の8種。[importer §1.1](../../protocol/mosimo/attest/importer/README.md#11-フィード)）です。チェーンは次の3段にします。
+鍵の発行は認証局ツール [`mosimo-ca`](../../ca/README.md) で行います。転載範囲はプリセット `jma-xml`（フィード `dev.jisaku.mosimo.public.jma` の8種。[importer §1.1](../../protocol/mosimo/attest/importer/README.md#11-情報源の識別)）です。チェーンは次の3段にします。
 
 ```text
 oriom-root                 ルート鍵（受信側のルート設定は maxDepth 16）
@@ -40,7 +40,7 @@ oriom-root                 ルート鍵（受信側のルート設定は maxDept
 
 - `feeds` を持つ鍵署名は、`feeds` に未対応の検証器ではチェーンごと不正になります。`feeds` に対応したアプリは、ルート設定の `maxDepth` も16に上げてあります。2段までしか受け付けない旧版アプリは、3段のこのチェーンをどのみち検証できません。そのため、`feeds` は現行の2段のチェーン（`oriom-mosimo-ca`）には入れず、新しい3段のチェーンの認証局に入れます。
 - 認証局の `issuerDomain` は `pds.oriom.dev` 以外にします。失効リストは1ドメインに1つで、そのドメインを持つ認証局が署名するためです。`pds.oriom.dev` は現行の `oriom-mosimo-ca` が使っています。
-- `import` が既にあって転載範囲に `jma-xml` を含まない場合は、子に `jma-xml` を足せません。別の認証局（例: `oriom-root/jma-xml`）を同じ形で発行してください。
+- `import` が既にあって転載範囲にこのフィードを含まない場合は、子にこのフィードを足せません。別の認証局（例: `oriom-root/jma-xml`）を同じ形で発行してください。
 
 `ca/` で `nix develop ./ca` に入るか、以下の `mosimo-ca` を `nix run ./ca --` に読み替えます。`appview/bsaf` では先に `npm ci && npm ci --prefix ../../pds` を実行しておきます。
 
@@ -111,7 +111,7 @@ node appview/bsaf/identity-cli.mjs receiver-export --anchor=ca/keys/oriom-root/a
   --domain=pds.oriom.dev --domain=<認証局のドメイン> --jma --kikikuru --jma-xml --out=receiver
 ```
 
-PDSは、`publicInformation.selection` に `{ "feed": "jma-xml", "types": [...] }` があるときだけ、この転載の優先度ヒントを認めます。また、ルート設定の `maxDepth` が3以上でないと、3段のチェーンを検証できません。
+PDSは、`publicInformation.selection` に `{ "feed": "dev.jisaku.mosimo.public.jma", "types": [...] }` があるときだけ、この転載の優先度ヒントを認めます。また、ルート設定の `maxDepth` が3以上でないと、3段のチェーンを検証できません。
 
 直接実行する場合は `IMPORTER_CONFIG_FILE=/absolute/config.json node importer.mts` です。設定項目は `importer.mts` の `ImporterConfig` を参照してください。
 

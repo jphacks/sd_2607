@@ -5,7 +5,7 @@ let
   stateDir = "/var/lib/mosimo-importer-jma-xml";
   # importer §1.1: the titles this importer converts; the CA and leaf attestations must contain them too.
   selection = [{
-    feed = "jma-xml";
+    feed = "dev.jisaku.mosimo.public.jma";
     types = [
       "気象警報・注意報（Ｒ０６）（その他注意報）" "気象警報・注意報（Ｒ０６）（土砂）" "気象警報・注意報（Ｒ０６）（大雨）"
       "気象警報・注意報（Ｒ０６）（大雪）" "気象警報・注意報（Ｒ０６）（暴風）" "気象警報・注意報（Ｒ０６）（波浪）"
