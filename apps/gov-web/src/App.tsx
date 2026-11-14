@@ -9,7 +9,7 @@ const POLL_PAGES = 5;
 const TITLE = document.title;
 
 type Status = 'todo' | 'doing' | 'done';
-type Tone = 'gray' | 'blue' | 'red' | 'orange' | 'green';
+type Tone = 'gray' | 'blue' | 'red' | 'orange' | 'green' | 'purple';
 const STATUS: Record<Status, string> = { todo: '未対応', doing: '対応中', done: '対応済' };
 const STATUS_TONE: Record<Status, Tone> = { todo: 'gray', doing: 'orange', done: 'green' };
 const VALIDITY: Record<ValidityState, string> = { valid: '有効', pending: '開始前', expired: '期限切れ', unknown: '有効期間不明' };
@@ -126,6 +126,7 @@ const Badge = ({ tone = 'gray', children }: { tone?: Tone; children: ReactNode }
     red: 'border-error-1 text-error-2',
     orange: 'border-warning-orange-1 text-warning-orange-2',
     green: 'border-success-1 text-success-2',
+    purple: 'border-purple-700 text-purple-900',
   };
   return <span className={`inline-block rounded-4 border bg-white px-1.5 text-dns-14N-130 ${tones[tone]}`}>{children}</span>;
 };
@@ -160,7 +161,17 @@ function PostBadges({ post, now, target, list }: { post: Post; now: number; targ
       {(post.annotation || post.repostOf) && <Badge tone="blue">{relationText(post, target)}</Badge>}
       {v !== 'unknown' && <Badge tone={v === 'valid' ? 'green' : 'gray'}>{VALIDITY[v]}</Badge>}
       <PriorityBadge post={post} />
-      {post.online != null && <Badge>{post.online ? '直接投稿' : 'mesh経由で投稿'}</Badge>}
+      {/* Direct is the usual path and stays plain; a mesh relay gets its own colour and a node icon so it stands out in the list. */}
+      {post.online === true && <Badge>直接投稿</Badge>}
+      {post.online === false && (
+        <Badge tone="purple">
+          <svg aria-hidden viewBox="0 0 16 16" className="mr-1 inline size-3.5 align-[-2px]" fill="currentColor">
+            <path d="M3 12 8 4l5 8z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <circle cx="3" cy="12" r="2" /><circle cx="8" cy="4" r="2" /><circle cx="13" cy="12" r="2" />
+          </svg>
+          mesh経由で投稿
+        </Badge>
+      )}
       {delay && <Badge>{delay}</Badge>}
       {post.conflicts.length > 0 && <Badge tone="orange">複数指定</Badge>}
       {/* BSAF never carries coordinates, so its rows are not flagged; an unreadable area is not "none" either. */}

@@ -85,7 +85,7 @@ test('L2 a Kikikuru post without exactly one known type: tag gets no value label
   }
 });
 
-// D11: the apps' connectivity extension in the user's wording, a neutral badge; nothing when the post has none.
+// D11: the apps' connectivity extension in the user's wording; mesh relays stand out, nothing when the post has none.
 test('connectivity shows 直接投稿 or mesh経由で投稿, and nothing when absent', () => {
   const p = (k: string, ext: unknown[]) => ({ post: parsePost({ $type: N + 'post', uri: `at://did:plc:a/dev.jisaku.mosimo.post/${k}`, text: k, exp: '2026-11-15T00:00:00Z', ext })!,
     replies: [], corrected: false, endorsers: 0, orphan: false });
