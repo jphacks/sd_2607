@@ -26,6 +26,10 @@ test('R06 warning: one whole post, city-level area of the active kinds, level sc
   assert.deepEqual(ext(d, `${HAZARD}.weather`)[0].phenomena, ['landslide']);
   assert.equal(ext(d, 'dev.jisaku.mosimo.geo#area')[0].regions.length, 2); // 佐世保市（宇久地域を除く）and 平戸市
   assert.match(d.text, /レベル２土砂災害注意報: 佐世保市（宇久地域を除く）、平戸市/);
+  // The declared feed pair and the JMA warning page of the prefecture forecast area.
+  const [source] = ext(d, 'dev.jisaku.mosimo.public#source');
+  assert.deepEqual(source.feed, { id: 'dev.jisaku.mosimo.public.jma', type: '気象警報・注意報（Ｒ０６）（土砂）' });
+  assert.deepEqual(source.links, [{ url: 'https://www.jma.go.jp/bosai/warning/#area_type=offices&area_code=420000', mediaType: 'text/html' }]);
 });
 
 test('R06 warning: lifted-only message is an all-clear; mixed message keeps the most severe active kind', () => {
@@ -50,6 +54,7 @@ test('earthquake: one post per Pref with the national overview, hypocenter, magn
   assert.deepEqual(kind.hypocenter, { name: { text: '岩手県内陸南部', lang: 'ja' }, lat: 39000000, lon: 140900000, depth: 10000000 });
   assert.deepEqual(kind.magnitude, { value: 70, type: 'Mj' });
   assert.equal(d.priority, 3);
+  assert.equal(ext(d, 'dev.jisaku.mosimo.public#source')[0].links[0].url, 'https://www.jma.go.jp/bosai/map.html#contents=earthquake_map');
 });
 
 test('earthquake: an oversized Pref splits into Areas, then omits station details, and says so', () => {

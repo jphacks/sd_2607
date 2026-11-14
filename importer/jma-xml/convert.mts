@@ -55,7 +55,11 @@ function message(root: Node) {
 }
 type Message = ReturnType<typeof message>;
 
-function source(msg: Message, ctx: Context) {
+/** The JMA web pages a reader can open from the source (public §5.2 `links`). */
+const EARTHQUAKE_PAGE = 'https://www.jma.go.jp/bosai/map.html#contents=earthquake_map';
+const warningPage = (prefecture: string) => `https://www.jma.go.jp/bosai/warning/#area_type=offices&area_code=${prefecture}`;
+
+function source(msg: Message, ctx: Context, page: string) {
   return {
     $type: 'dev.jisaku.mosimo.public#source',
     document: { format: 'jma-xml-1.3', senderId: msg.control.publishingOffice, messageId: ctx.url,
@@ -63,6 +67,7 @@ function source(msg: Message, ctx: Context) {
     retrievedFrom: ctx.url, retrievedAt: ctx.retrievedAt, converter: ctx.converter,
     conversion: { rule: RULE, revision: REVISION },
     originalDigest: { algorithm: 'sha-256', value: ctx.digest },
+    links: [{ url: page, mediaType: 'text/html' }],
     // importer §1.2, public.jma §12: the feed re-post declaration; no origin, the type is the original Control/Title.
     feed: { id: JMA_XML_FEED, type: msg.control.title },
   };
@@ -192,7 +197,7 @@ function earthquake(root: Node, msg: Message, ctx: Context, fits: Fits): Convers
   // 取消 and messages without a domestic observation are one whole post (public.jma.earthquake §3.1).
   if (cancelled || !prefs.length) {
     const lines = [`${infoMark(msg)}【気象庁 ${title(msg)}】`, ...(cancelled ? [bodyText ?? 'この情報は取り消されました。'] : [...quakeLines(), ...commentLines()]), footer(msg)];
-    const ext = [extension({ kind: 'whole' }, undefined, [], false), ...(cancelled ? [] : hazard(undefined)), source(msg, ctx)];
+    const ext = [extension({ kind: 'whole' }, undefined, [], false), ...(cancelled ? [] : hazard(undefined)), source(msg, ctx, EARTHQUAKE_PAGE)];
     const draft: Draft = { text: lines.join('\n'), ext, priority: 1, part: 'whole' };
     return fits(draft) ? { status: 'converted', title: msg.control.title, drafts: [draft], held: [] } : { status: 'converted', title: msg.control.title, drafts: [], held: ['whole'] };
   }
@@ -220,7 +225,7 @@ function earthquake(root: Node, msg: Message, ctx: Context, fits: Fits): Convers
       ...commentLines(), ...omittedNote, footer(msg)];
     const cells = cover('quakeArea', areas.map(a => a.code.value));
     const ext = [extension({ kind: 'region', path: ai === undefined ? [pi] : [pi, ai] }, [selected], reduction, withOverview),
-      ...hazard(scopeMax), ...(cells ? [areaExtension(cells)] : []), source(msg, ctx)];
+      ...hazard(scopeMax), ...(cells ? [areaExtension(cells)] : []), source(msg, ctx, EARTHQUAKE_PAGE)];
     return { text: lines.join('\n'), ext, priority: SHINDO[scopeMax ?? '']?.[1] ?? 1, part: ai === undefined ? `pref:${pref.code.value}` : `area:${pref.code.value}/${areas[0]!.code.value}` };
   };
   // §4: Pref without omission; else each Area without omission; else omit categories in order, re-measuring each time.
@@ -380,7 +385,7 @@ function weather(root: Node, msg: Message, ctx: Context, fits: Fits): Conversion
   const codes = activeCodes.size ? activeCodes : liftedCodes;
   const cells = codes.size ? cover('warningCity', codes) : null;
   const level = best?.scale?.scheme === 'jp.jma.warning-level' ? Number(best.scale.value) : 0;
-  const draft: Draft = { text: lines.join('\n'), ext: [extension, ...hazard, ...(cells ? [areaExtension(cells)] : []), source(msg, ctx)],
+  const draft: Draft = { text: lines.join('\n'), ext: [extension, ...hazard, ...(cells ? [areaExtension(cells)] : []), source(msg, ctx, warningPage(prefecture.code.value))],
     priority: level >= 5 || best?.scale?.value === 'special-warning' ? 3 : level === 4 ? 2 : 1, part: `pref:${prefecture.code.value}` };
   return fits(draft) ? { status: 'converted', title: msg.control.title, drafts: [draft], held: [] }
     : { status: 'converted', title: msg.control.title, drafts: [], held: [draft.part] };

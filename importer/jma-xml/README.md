@@ -33,43 +33,43 @@
 
 ```text
 oriom-root                 ルート鍵（受信側のルート設定は maxDepth 16）
-  └─ import                役割ごとの認証局。attest・import、maxDepth 2、issuerDomain、転載範囲 jma・kikikuru・jma-xml
-       └─ oriom            運営者。maxDepth 1、organization
-            └─ jma-xml-1   ノード（転載サーバーの Nostr 鍵）。import、730日
+  └─ importer              役割ごとの認証局。attest・import、maxDepth 2、issuerDomain、転載範囲 jma・kikikuru・jma-xml
+       └─ oriom-c1         運営者。maxDepth 1、organization（orgName「Oriom Cluster」）
+            └─ jma-xml     ノード（転載サーバーの Nostr 鍵）。import、730日
 ```
 
 - `feeds` を持つ鍵署名は、`feeds` に未対応の検証器ではチェーンごと不正になります。`feeds` に対応したアプリは、ルート設定の `maxDepth` も16に上げてあります。2段までしか受け付けない旧版アプリは、3段のこのチェーンをどのみち検証できません。そのため、`feeds` は現行の2段のチェーン（`oriom-mosimo-ca`）には入れず、新しい3段のチェーンの認証局に入れます。
 - 認証局の `issuerDomain` は `pds.oriom.dev` 以外にします。失効リストは1ドメインに1つで、そのドメインを持つ認証局が署名するためです。`pds.oriom.dev` は現行の `oriom-mosimo-ca` が使っています。
-- `import` が既にあって転載範囲にこのフィードを含まない場合は、子にこのフィードを足せません。別の認証局（例: `oriom-root/jma-xml`）を同じ形で発行してください。
+- `importer` が既にあって転載範囲にこのフィードを含まない場合は、子にこのフィードを足せません。別の認証局を同じ形で発行してください。
 
 `ca/` で `nix develop ./ca` に入るか、以下の `mosimo-ca` を `nix run ./ca --` に読み替えます。`appview/bsaf` では先に `npm ci && npm ci --prefix ../../pds` を実行しておきます。
 
 ```sh
 # 1. 役割ごとの認証局（まだない場合）
-mosimo-ca issue oriom-root import --max-depth 2 --domain <認証局のドメイン> \
+mosimo-ca issue oriom-root importer --max-depth 2 --domain <認証局のドメイン> \
   --owner-name 'Oriom Mosimo 転載 CA' --preset jma --preset kikikuru --preset jma-xml --age-passphrase
 # 2. 運営者（まだない場合）。orgId は以下のノードすべてで共通になる
-mosimo-ca issue oriom-root/import oriom --max-depth 1 --owner-name Oriom \
-  --org-id oriom.dev:mosimo-importer --org-name 'Mosimo importer (not JMA)' --days 1095 --age-passphrase
+mosimo-ca issue oriom-root/importer oriom-c1 --max-depth 1 --owner-name 'Oriom Cluster' \
+  --org-id oriom.dev:cluster --org-name 'Oriom Cluster' --days 1095 --age-passphrase
 # 3. ノードの DID と鍵（PLC 管理鍵・atproto 鍵・Nostr 鍵）を作る
 node appview/bsaf/identity-cli.mjs importer-create https://pds.oriom.dev --out=importer-secret.json
-# 4. 運営者がノードの Nostr 鍵に署名する。DID・atproto 鍵・PLC 管理鍵は jma-xml-1/_importer/ に入る
-mosimo-ca issue oriom-root/import/oriom jma-xml-1 --leaf --owner-name '気象庁XML転載ノード 1' \
-  --org-name 'Mosimo JMA XML importer (not JMA)' --preset jma-xml --importer-identity importer-secret.json --days 730
+# 4. 運営者がノードの Nostr 鍵に署名する。DID・atproto 鍵・PLC 管理鍵は jma-xml/_importer/ に入る
+mosimo-ca issue oriom-root/importer/oriom-c1 jma-xml --leaf --owner-name '気象庁XML転載ノード' \
+  --preset jma-xml --importer-identity importer-secret.json --days 730
 rm importer-secret.json   # PLC 管理鍵を平文で含む
 # 5. 確認
 mosimo-ca verify
-mosimo-ca show oriom-root/import/oriom/jma-xml-1
+mosimo-ca show oriom-root/importer/oriom-c1/jma-xml
 ```
 
-受信者に表示される発信者名は、ノードの `organization.orgName` です。`orgId` は運営者と同じで、`orgName` だけをノードごとに変えられます。
+アプリは、ノードの `organization.orgName`（ここでは運営者から引き継いだ「Oriom Cluster」）を転載サーバー名として小さく、元の情報源（気象庁）を大きく表示します。`orgId` は運営者と同じで、`orgName` は `--org-name` でノードごとに変えられます。
 
 ## サーバーへの配置
 
 サーバーに渡すのは、ノードの署名鍵2つと公開ファイルだけです。ルート・認証局・運営者・PLC管理鍵は渡しません。BSAF転載と同じ形式です（[PUBLISHER.md の Key placement](../../appview/bsaf/PUBLISHER.md#key-placement)）。
 
 ```sh
-mosimo-ca credentials oriom-root/import/oriom/jma-xml-1 --out /tmp/jma-xml-importer
+mosimo-ca credentials oriom-root/importer/oriom-c1/jma-xml --out /tmp/jma-xml-importer
 ```
 
 | ファイル | 種類 | 指定するオプション |
