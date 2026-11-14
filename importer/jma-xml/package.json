@@ -1,0 +1,22 @@
+{
+  "name": "@mosimo/importer-jma-xml",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node importer.mts",
+    "test": "node --test convert.test.mts area.test.mts importer.test.mts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.8.10",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "~5.9.3"
+  }
+}

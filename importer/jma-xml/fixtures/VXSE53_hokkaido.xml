@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/" xmlns:jmx="http://xml.kishou.go.jp/jmaxml1/">
+<Control>
+<Title>震源・震度に関する情報</Title>
+<DateTime>2026-11-14T06:42:05Z</DateTime>
+<Status>通常</Status>
+<EditorialOffice>気象庁本庁</EditorialOffice>
+<PublishingOffice>気象庁</PublishingOffice>
+</Control>
+<Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+<Title>震源・震度情報</Title>
+<ReportDateTime>2026-11-14T15:42:00+09:00</ReportDateTime>
+<TargetDateTime>2026-11-14T15:42:00+09:00</TargetDateTime>
+<EventID>20261114153905</EventID>
+<InfoType>発表</InfoType>
+<Serial>1</Serial>
+<InfoKind>地震情報</InfoKind>
+<InfoKindVersion>1.0_1</InfoKindVersion>
+<Headline>
+<Text>１４日１５時３９分ころ、地震がありました。</Text>
+</Headline>
+</Head>
+<Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/" xmlns:jmx_eb="http://xml.kishou.go.jp/jmaxml1/elementBasis1/">
+<Earthquake>
+<OriginTime>2026-11-14T15:38:00+09:00</OriginTime>
+<ArrivalTime>2026-11-14T15:39:00+09:00</ArrivalTime>
+<Hypocenter>
+<Area>
+<Name>根室半島南東沖</Name>
+<Code type="震央地名">189</Code>
+<jmx_eb:Coordinate description="北緯４３．０度　東経１４６．３度　深さ　３０ｋｍ" >+43.0+146.3-30000/</jmx_eb:Coordinate>
+</Area>
+</Hypocenter>
+<jmx_eb:Magnitude type="Mj" description="Ｍ４．２">4.2</jmx_eb:Magnitude>
+</Earthquake>
+<Intensity>
+<Observation>
+<CodeDefine>
+<Type xpath="Pref/Code">地震情報／都道府県等</Type>
+<Type xpath="Pref/Area/Code">地震情報／細分区域</Type>
+<Type xpath="Pref/Area/City/Code">気象・地震・火山情報／市町村等</Type>
+<Type xpath="Pref/Area/City/IntensityStation/Code">震度観測点</Type>
+</CodeDefine>
+<MaxInt>1</MaxInt>
+<Pref><Name>北海道</Name><Code>01</Code><MaxInt>1</MaxInt>
+<Area><Name>根室地方北部</Name><Code>165</Code><MaxInt>1</MaxInt>
+<City><Name>標津町</Name><Code>0169300</Code><MaxInt>1</MaxInt>
+<IntensityStation><Name>標津町北２条＊</Name><Code>0169320</Code><Int>1</Int></IntensityStation>
+</City>
+</Area>
+<Area><Name>根室地方南部</Name><Code>167</Code><MaxInt>1</MaxInt>
+<City><Name>根室市</Name><Code>0122300</Code><MaxInt>1</MaxInt>
+<IntensityStation><Name>根室市牧の内＊</Name><Code>0122320</Code><Int>1</Int></IntensityStation>
+<IntensityStation><Name>根室市珸瑤瑁＊</Name><Code>0122323</Code><Int>1</Int></IntensityStation>
+</City>
+</Area>
+</Pref>
+</Observation>
+</Intensity>
+<Comments>
+<ForecastComment codeType="固定付加文">
+<Text>この地震による津波の心配はありません。</Text>
+<Code>0215</Code>
+</ForecastComment>
+<VarComment codeType="固定付加文">
+<Text>＊印は気象庁以外の震度観測点についての情報です。</Text>
+<Code>0262</Code>
+</VarComment>
+</Comments>
+</Body>
+</Report>
