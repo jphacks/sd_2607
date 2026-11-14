@@ -27,6 +27,8 @@ object Hanashi {
     val myBubble = Color(0xFF8DE055)
     val chatBackground = Color(0xFF8CABD9)
     val muted = Color(0xFF8A8F98)
+    val canvas = Color(0xFFF0F2F5)
+    val line = Color(0xFFE1E4E8)
 }
 
 // ponytail: light theme only; add a dark scheme if the demo needs it.
@@ -48,6 +50,7 @@ fun Avatar(pubkey: String, name: String, size: Dp = 48.dp) = Box(
 
 private val zone get() = ZoneId.systemDefault()
 fun clock(seconds: Long): String = DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochSecond(seconds).atZone(zone))
+fun clockSeconds(millis: Long): String = DateTimeFormatter.ofPattern("HH:mm:ss").format(Instant.ofEpochMilli(millis).atZone(zone))
 fun day(seconds: Long): LocalDate = Instant.ofEpochSecond(seconds).atZone(zone).toLocalDate()
 fun dayLabel(date: LocalDate): String = DateTimeFormatter.ofPattern("M月d日(E)", Locale.JAPAN).format(date)
 /** Chat list style: time today, otherwise the date. */

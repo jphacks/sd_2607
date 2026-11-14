@@ -44,7 +44,7 @@ class ExchangeTest {
 
     private class Node(val engine: MeshEngine, val exchange: Exchange)
     private fun node(messageLimit: Int = Exchange.MESSAGE_LIMIT, credit: Int = Exchange.INITIAL_CREDIT,
-        accepted: (org.mndt.core.StoredBundle) -> Unit = {}, forwarded: (String, String) -> Unit = { _, _ -> }): Node {
+        accepted: (org.mndt.core.StoredBundle, Handoff) -> Unit = { _, _ -> }, forwarded: (String, Handoff) -> Unit = { _, _ -> }): Node {
         val engine = MeshEngine()
         return Node(engine, Exchange(engine, { now }, { clock }, accepted = accepted, forwarded = forwarded,
             messageLimit = messageLimit, initialCredit = credit))
@@ -151,16 +151,16 @@ class ExchangeTest {
 
     @Test fun storedResultOnlyAfterDurableSave() {
         val order = mutableListOf<String>()
-        val a = node(forwarded = { id, _ -> order += "forwarded:$id" })
-        val b = node(accepted = { order += "saved:${it.event.id}" })
+        val a = node(forwarded = { id, to -> order += "forwarded:$id via ${to.link}" })
+        val b = node(accepted = { entry, from -> order += "saved:${entry.event.id} via ${from.link}" })
         val event = author().createPost("x", now).event
         a.engine.originate(event, now, clock)
         connect(a, b)
-        assertEquals(listOf("saved:${event.id}", "forwarded:${event.id}"), order)
+        assertEquals(listOf("saved:${event.id} via test", "forwarded:${event.id} via test"), order)
     }
 
     @Test fun failedDurableSaveSendsNoStoredResult() {
-        val a = node(); val b = node(accepted = { error("disk full") })
+        val a = node(); val b = node(accepted = { _, _ -> error("disk full") })
         a.engine.originate(author().createPost("x", now).event, now, clock)
         val (_, lb) = connect(a, b)
         assertTrue(lb.sent.filterIsInstance<Msg.Result>().none { it.code == Messages.RESULT_STORED })

@@ -45,6 +45,13 @@ data class PostView(val id: String, val pubkey: String, val content: String, val
     val chain: PublicIngress.ChainView? = null)
 /** mesh.time §2: an unverified peer clock difference, for diagnostics only. */
 data class ClockSkew(val peer: String, val deltaSeconds: Long, val confidence: Int)
+/** One link handoff of a bundle: wall time (ms), link ("ble", "lan", "local") and the peer's session label. */
+data class Handoff(val atMillis: Long, val link: String, val peer: String)
+/**
+ * How a stored bundle passed through this device this run: its hop count on arrival, the handoff it came in on (null when
+ * we originated it or restored it from disk) and the peers that took it from us.
+ */
+data class Transit(val hop: Int, val received: Handoff?, val forwarded: List<Handoff>)
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -64,6 +71,8 @@ data class MeshState(
     val lastReceivedAtMillis: Long? = null, val lastReceivedOnline: Boolean = false,
     /** Every stored mesh event of any kind (for apps built on other kinds), and how many peers took each one from us this run. */
     val events: List<NostrEvent> = emptyList(), val forwardedTo: Map<String, Int> = emptyMap(),
+    /** How each stored event passed through this device this run, by event ID (for relay views). */
+    val transits: Map<String, Transit> = emptyMap(),
     /** Trusted roots from the local config, held revocations, and the last revocation-list check per issuer domain. */
     val roots: List<Attest.Root> = emptyList(),
     /** Every configured root with its origin; disabled ones included so the user can switch them back on. */
@@ -141,10 +150,15 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val blocked get() = disk?.blockedPubkeys.orEmpty()
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
-    private val forwarded = mutableMapOf<String, MutableSet<String>>()
+    private val arrived = mutableMapOf<String, Handoff>()
+    /** Event ID → peer label → the first handoff to that peer. */
+    private val forwarded = mutableMapOf<String, MutableMap<String, Handoff>>()
     private val exchange = Exchange(engine, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor,
-        forwarded = { id, peer -> forwarded.getOrPut(id) { mutableSetOf() } += peer },
-        accepted = { absorbControl(it.event); persist(); drainRelay(); if (it.event.kind == 1) received(online = false) },
+        forwarded = { id, to -> forwarded.getOrPut(id) { linkedMapOf() }.getOrPut(to.peer) { to } },
+        accepted = { entry, from ->
+            arrived[entry.event.id] = from
+            absorbControl(entry.event); persist(); drainRelay(); if (entry.event.kind == 1) received(online = false)
+        },
         timeHint = ::timeHint, onTimeHint = { peer, delta, confidence -> noteSkew(peer, delta, confidence) },
         skip = { moderation.skip(it) })
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
@@ -441,6 +455,8 @@ class MeshCoordinator private constructor(private val context: Context) {
             publicBusy = publicBusy, blockedPubkeys = blocked, hideExpired = hideExpired,
             events = if (fatal) emptyList() else engine.entries().map { it.event },
             forwardedTo = forwarded.apply { keys.retainAll(engine.entries().mapTo(hashSetOf()) { it.event.id }) }.mapValues { it.value.size },
+            transits = engine.entries().associate { it.event.id to Transit(it.hop, arrived[it.event.id], forwarded[it.event.id]?.values?.toList().orEmpty()) }
+                .also { arrived.keys.retainAll(it.keys) },
             roots = publicConfig.roots, trustRoots = trustEntries, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
             clockSkews = clockSkews.values.reversed(),
             reported = reported.toSet(),

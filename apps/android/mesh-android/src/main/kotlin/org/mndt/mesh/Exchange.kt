@@ -69,10 +69,10 @@ internal class Exchange(
     private val note: (String) -> Unit = {},
     private val allowedPeerNode: String? = null,
     private val allowedAuthor: String? = null,
-    // (event id, peer label): a peer stored or already holds a bundle we sent it.
-    private val forwarded: (String, String) -> Unit = { _, _ -> },
-    // Must durably save before returning; failures must stop the coordinator's links.
-    private val accepted: (StoredBundle) -> Unit = {},
+    // (event id, handoff): a peer stored or already holds a bundle we sent it.
+    private val forwarded: (String, Handoff) -> Unit = { _, _ -> },
+    // Must durably save before returning; failures must stop the coordinator's links. The handoff is the one it came in on.
+    private val accepted: (StoredBundle, Handoff) -> Unit = { _, _ -> },
     /** mesh.time: our HELLO hint (null = none) and the peer's observed hint (label, delta seconds, confidence). */
     private val timeHint: () -> Map<String, Any?>? = { null },
     private val onTimeHint: (String, Long, Int) -> Unit = { _, _, _ -> },
@@ -313,7 +313,7 @@ internal class Exchange(
                 val t = s.outgoing.remove(target.transferId) ?: return
                 if (s.sending === t) s.sending = null
                 when (m.code) {
-                    Messages.RESULT_STORED, Messages.RESULT_ALREADY_HELD -> { s.peerHas += t.eventId; forwarded(t.eventId, s.label) }
+                    Messages.RESULT_STORED, Messages.RESULT_ALREADY_HELD -> { s.peerHas += t.eventId; forwarded(t.eventId, handoff(s)) }
                     else -> log("peer ${s.label} refused ${t.eventId.take(8)}: code ${m.code} reason ${m.reason}")
                 }
                 pump(s)
@@ -389,12 +389,14 @@ internal class Exchange(
         }
         if (entry == null) { s.peerHas += t.eventId; send(s, Messages.encode(Msg.Result(target, Messages.RESULT_ALREADY_HELD, Messages.REASON_NONE))); return }
         require(entry.event.id == t.eventId) { "Bundle carries a different event than announced" }
-        accepted(entry)
+        accepted(entry, handoff(s))
         s.peerHas += t.eventId
         send(s, Messages.encode(Msg.Result(target, Messages.RESULT_STORED, Messages.REASON_NONE)))
         note("署名検証・保存 ${entry.event.id.take(8)} / 観測 hop ${entry.hop}")
         broadcastInventory()
     }
+
+    private fun handoff(s: Session) = Handoff(now(), s.link.name, s.label)
 
     private fun trimClosed(s: Session) { while (s.closedIncoming.size > 64) s.closedIncoming.remove(s.closedIncoming.first()) }
 

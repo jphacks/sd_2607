@@ -16,12 +16,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import org.mndt.core.NostrEvent
 import org.mndt.dm.Delivery
 import org.mndt.dm.DmCodec
 import org.mndt.dm.Draft
 import org.mndt.dm.Inbound
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshState
+import org.mndt.mesh.Transit
 import java.util.concurrent.ConcurrentHashMap
 
 @Serializable data class Msg(val id: String, val peer: String, val mine: Boolean, val text: String, val createdAt: Long,
@@ -34,6 +36,14 @@ import java.util.concurrent.ConcurrentHashMap
     val messages: List<Msg> = emptyList(), val receipted: Set<String> = emptySet()) {
     fun nameOf(pubkey: String) = contacts[pubkey]?.name ?: "名無し ${pubkey.take(6)}"
 }
+
+/** A bundle this phone holds for someone else, and how it passed through. */
+data class Carried(val event: NostrEvent, val transit: Transit)
+
+/** Everyone else's bundles, newest arrival first; ones restored from an earlier run (no arrival this run) go last. */
+fun carried(state: MeshState): List<Carried> = state.events.filter { it.pubkey != state.publicKey }
+    .mapNotNull { e -> state.transits[e.id]?.let { Carried(e, it) } }
+    .sortedByDescending { it.transit.received?.atMillis ?: Long.MIN_VALUE }
 
 /** Glue between the Mosimo mesh SDK and the chat history. Everything goes over the mesh; there is no server. */
 class Messenger(private val context: Context) {

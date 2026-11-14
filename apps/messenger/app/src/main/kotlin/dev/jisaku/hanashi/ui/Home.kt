@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WifiOff
@@ -101,7 +102,7 @@ private fun Onboarding(onDone: (String) -> Unit) {
     }
 }
 
-private enum class Tab(val label: String) { CHATS("トーク"), NEARBY("近くの人"), SETTINGS("設定") }
+private enum class Tab(val label: String) { CHATS("トーク"), NEARBY("近くの人"), RELAYS("中継"), SETTINGS("設定") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,7 +121,10 @@ private fun Home(messenger: Messenger, chats: Chats, startMesh: () -> Unit, open
             NavigationBar(containerColor = Color.White) {
                 Tab.entries.forEach { t ->
                     NavigationBarItem(selected = tab == t, onClick = { tab = t }, label = { Text(t.label) }, icon = {
-                        val icon = when (t) { Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.NEARBY -> Icons.Outlined.People; Tab.SETTINGS -> Icons.Outlined.Settings }
+                        val icon = when (t) {
+                            Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.NEARBY -> Icons.Outlined.People
+                            Tab.RELAYS -> Icons.Outlined.Hub; Tab.SETTINGS -> Icons.Outlined.Settings
+                        }
                         BadgedBox(badge = { if (t == Tab.CHATS && unread > 0) Badge { Text("$unread") } }) { Icon(icon, null) }
                     })
                 }
@@ -131,6 +135,7 @@ private fun Home(messenger: Messenger, chats: Chats, startMesh: () -> Unit, open
             when (tab) {
                 Tab.CHATS -> ChatList(chats, open)
                 Tab.NEARBY -> Nearby(chats, open)
+                Tab.RELAYS -> Relays(mesh, chats)
                 Tab.SETTINGS -> SettingsTab(messenger, chats, mesh)
             }
         }
@@ -152,7 +157,7 @@ private fun MosimoBanner(mesh: MeshState, startMesh: () -> Unit) {
 }
 
 @Composable
-private fun Empty(text: String) = Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+fun Empty(text: String) = Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
     Text(text, color = Hanashi.muted, textAlign = TextAlign.Center)
 }
 
