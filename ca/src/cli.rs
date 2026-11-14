@@ -43,6 +43,21 @@ const PRESETS: [(&str, &str, &[&str]); 2] = [
         ],
     ),
 ];
+/// フィードの転載範囲のプリセット（importer §1.1）。名前、フィード名、types（原電文の Control/Title）。
+const FEED_PRESETS: [(&str, &str, &[&str]); 1] = [(
+    "jma-xml",
+    "jma-xml",
+    &[
+        "震源・震度に関する情報",
+        "気象警報・注意報（Ｒ０６）（大雨）",
+        "気象警報・注意報（Ｒ０６）（土砂）",
+        "気象警報・注意報（Ｒ０６）（高潮）",
+        "気象警報・注意報（Ｒ０６）（暴風）",
+        "気象警報・注意報（Ｒ０６）（波浪）",
+        "気象警報・注意報（Ｒ０６）（大雪）",
+        "気象警報・注意報（Ｒ０６）（その他注意報）",
+    ],
+)];
 
 #[derive(Parser)]
 #[command(name = "mosimo-ca", version, about = "dev.jisaku.mosimo.attest の認証局ツール（鍵署名・失効通知の発行と発信）")]
@@ -239,12 +254,15 @@ struct IssueArgs {
     /// 期限なし（信頼の起点がルート鍵で、その直下の鍵だけ）
     #[arg(long)]
     no_expiry: bool,
-    /// 転載範囲のプリセット（jma, kikikuru）。複数可
+    /// 転載範囲のプリセット（jma, kikikuru, jma-xml）。複数可
     #[arg(long = "preset")]
     presets: Vec<String>,
     /// 転載範囲（DID=type1,type2）。複数可
     #[arg(long = "source")]
     sources: Vec<String>,
+    /// フィードの転載範囲（FEED=type1,type2。importer §1.1）。複数可
+    #[arg(long = "feed")]
+    feeds: Vec<String>,
     #[arg(long)]
     trust_level: Option<i64>,
     #[arg(long)]
@@ -826,61 +844,97 @@ impl Ctx {
         if !roles.iter().any(|r| r == "import") {
             return Ok(None);
         }
-        let parent_sources = t.importer_sources(parent);
+        let parent_scope = t.importer_scope(parent);
         let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        if !a.presets.is_empty() || !a.sources.is_empty() {
-            for name in &a.presets {
-                let (_, did, types) = PRESETS.iter().find(|(n, _, _)| n == name).ok_or_else(|| anyhow!("不明なプリセット: {name}"))?;
+        let mut feeds: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut add_preset = |name: &str| -> Result<()> {
+            if let Some((_, did, types)) = PRESETS.iter().find(|(n, _, _)| *n == name) {
                 sources.entry(did.to_string()).or_default().extend(types.iter().map(|s| s.to_string()));
+            } else if let Some((_, feed, types)) = FEED_PRESETS.iter().find(|(n, _, _)| *n == name) {
+                feeds.entry(feed.to_string()).or_default().extend(types.iter().map(|s| s.to_string()));
+            } else {
+                bail!("不明なプリセット: {name}");
             }
-            for spec in &a.sources {
-                let (did, types) = spec.split_once('=').ok_or_else(|| anyhow!("--source は DID=type1,type2 の形です: {spec}"))?;
-                sources.entry(did.to_string()).or_default().extend(types.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+            Ok(())
+        };
+        let preset_names: Vec<&str> = PRESETS.iter().map(|(n, _, _)| *n).chain(FEED_PRESETS.iter().map(|(n, _, _)| *n)).collect();
+        if !a.presets.is_empty() || !a.sources.is_empty() || !a.feeds.is_empty() {
+            for name in &a.presets {
+                add_preset(name)?;
             }
-        } else if let Some(ps) = &parent_sources {
-            for (did, types) in ps {
-                let label = PRESETS.iter().find(|(_, d, _)| d == did).map(|(n, _, _)| n.to_string()).unwrap_or(did.clone());
-                let answer = if tty() {
-                    ask(&format!("{label}（{} 種）を転載範囲に含める？ y=全部 / n=含めない / 種別をカンマ区切り", types.len()), Some("y"), "")?
-                } else {
-                    "y".into()
-                };
-                match answer.as_str() {
-                    "y" => sources.insert(did.clone(), types.clone()),
-                    "n" => None,
-                    list => sources.insert(did.clone(), list.split(',').map(|s| s.trim().to_string()).collect()),
-                };
+            for (specs, map, form) in [(&a.sources, &mut sources, "--source は DID=type1,type2"), (&a.feeds, &mut feeds, "--feed は FEED=type1,type2")] {
+                for spec in specs {
+                    let (name, types) = spec.split_once('=').ok_or_else(|| anyhow!("{form} の形です: {spec}"))?;
+                    map.entry(name.to_string()).or_default().extend(types.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+                }
+            }
+        } else if let Some(ps) = &parent_scope {
+            for (entries, map, is_feed) in [(&ps.sources, &mut sources, false), (&ps.feeds, &mut feeds, true)] {
+                for (name, types) in entries {
+                    let label = if is_feed {
+                        FEED_PRESETS.iter().find(|(_, f, _)| f == name).map(|(n, _, _)| n.to_string()).unwrap_or(format!("feed:{name}"))
+                    } else {
+                        PRESETS.iter().find(|(_, d, _)| d == name).map(|(n, _, _)| n.to_string()).unwrap_or(name.clone())
+                    };
+                    let answer = if tty() {
+                        ask(&format!("{label}（{} 種）を転載範囲に含める？ y=全部 / n=含めない / 種別をカンマ区切り", types.len()), Some("y"), "")?
+                    } else {
+                        "y".into()
+                    };
+                    match answer.as_str() {
+                        "y" => map.insert(name.clone(), types.clone()),
+                        "n" => None,
+                        list => map.insert(name.clone(), list.split(',').map(|s| s.trim().to_string()).collect()),
+                    };
+                }
             }
         } else {
-            let names: Vec<&str> = PRESETS.iter().map(|(n, _, _)| *n).collect();
             let answer = if depth == 0 {
-                ask(&format!("転載範囲のプリセット（{}）", names.join(",")), Some(&names.join(",")), "--preset")?
+                ask(&format!("転載範囲のプリセット（{}）", preset_names.join(",")), Some(&preset_names.join(",")), "--preset")?
             } else {
-                ask_optional(&format!("転載範囲のプリセット（{}。空欄なら制限なし）", names.join(",")))?.unwrap_or_default()
+                ask_optional(&format!("転載範囲のプリセット（{}。空欄なら制限なし）", preset_names.join(",")))?.unwrap_or_default()
             };
             for name in answer.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                let (_, did, types) = PRESETS.iter().find(|(n, _, _)| *n == name).ok_or_else(|| anyhow!("不明なプリセット: {name}"))?;
-                sources.entry(did.to_string()).or_default().extend(types.iter().map(|s| s.to_string()));
+                add_preset(name)?;
             }
         }
-        if sources.is_empty() {
+        if sources.is_empty() && feeds.is_empty() {
             ensure!(depth > 0, "import 役割の末端の鍵には転載範囲（importer ブロック）が必要です（attest.importer §1）");
             return Ok(None);
         }
-        if let Some(ps) = &parent_sources {
-            let outside: Vec<String> =
-                sources.iter().flat_map(|(d, ts)| ts.iter().filter(|t| !p::includes_pair(ps, d, t)).map(move |t| format!("{d} {t}"))).collect();
+        let to_list = |map: BTreeMap<String, Vec<String>>| -> Vec<(String, Vec<String>)> {
+            map.into_iter()
+                .map(|(n, mut types)| {
+                    types.sort();
+                    types.dedup();
+                    (n, types)
+                })
+                .collect()
+        };
+        let scope = p::Scope { sources: to_list(sources), feeds: to_list(feeds) };
+        if let Some(ps) = &parent_scope {
+            let outside = ps.outside(&scope);
             ensure!(outside.is_empty(), "親の転載範囲を超えています: {}", outside.join(", "));
         }
-        let list: Vec<Value> = sources
-            .into_iter()
-            .map(|(did, mut types)| {
-                types.sort();
-                types.dedup();
-                Value::map([("botDid", Value::Text(did)), ("types", Value::Array(types.into_iter().map(Value::Text).collect()))])
-            })
-            .collect();
-        let block = Value::map([("$type", Value::text(p::IMPORTER)), ("sources", Value::Array(list))]);
+        let values = |list: &[(String, Vec<String>)], name_field: &'static str| -> Value {
+            Value::Array(
+                list.iter()
+                    .map(|(n, types)| {
+                        Value::map([(name_field, Value::Text(n.clone())), ("types", Value::Array(types.iter().cloned().map(Value::Text).collect()))])
+                    })
+                    .collect(),
+            )
+        };
+        let mut fields = vec![("$type", Value::text(p::IMPORTER))];
+        if !scope.sources.is_empty() {
+            fields.push(("sources", values(&scope.sources, "botDid")));
+        }
+        if !scope.feeds.is_empty() {
+            // feeds を知らない検証器はこの鍵署名を含むチェーン全体を拒否する（importer §1.1 の互換性）。
+            eprintln!("注意: feeds を持つ鍵署名は、feeds に未対応の検証器（ルート設定 maxDepth 2 の旧版アプリなど）ではチェーンごと検証できません。");
+            fields.push(("feeds", values(&scope.feeds, "feed")));
+        }
+        let block = Value::Map(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
         p::validate_importer_block(&block)?;
         Ok(Some(block))
     }
@@ -931,8 +985,10 @@ impl Ctx {
             .iter()
             .map(|b| {
                 if b.get("$type").and_then(Value::as_text) == Some(p::IMPORTER) {
-                    let sources: Vec<String> = p::importer_sources(b).into_iter().map(|(d, ts)| format!("{d}: {}", ts.join(", "))).collect();
-                    serde_json::json!({ "$type": p::IMPORTER, "sources": sources })
+                    let scope = p::importer_scope(b);
+                    let lines =
+                        |list: Vec<(String, Vec<String>)>| -> Vec<String> { list.into_iter().map(|(n, ts)| format!("{n}: {}", ts.join(", "))).collect() };
+                    serde_json::json!({ "$type": p::IMPORTER, "sources": lines(scope.sources), "feeds": lines(scope.feeds) })
                 } else {
                     b.to_display_json()
                 }

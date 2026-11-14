@@ -302,8 +302,8 @@ impl Tree {
     }
 
     /// チェーン上で最も近い importer の範囲。None は「import 役割があれば制限なし」。
-    pub fn importer_sources(&self, i: usize) -> Option<Vec<(String, Vec<String>)>> {
-        self.chain(i).iter().rev().find_map(|a| p::block_of(a, p::IMPORTER).map(p::importer_sources))
+    pub fn importer_scope(&self, i: usize) -> Option<p::Scope> {
+        self.chain(i).iter().rev().find_map(|a| p::block_of(a, p::IMPORTER).map(p::importer_scope))
     }
 
     pub fn owner(&self, i: usize) -> (String, String) {

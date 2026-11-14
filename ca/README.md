@@ -96,6 +96,16 @@ mosimo-ca issue oriom-root/import/oriom bsaf-1 --leaf --owner-name 'BSAF ノー�
 
 省略したパラメーターは、端末から実行していれば対話で尋ねます（`maxDepth` の既定は親より 1 小さい値、役割・転載範囲は親の範囲から選択）。発行前に鍵署名の内容を表示して確認を求めます。`--yes` で確認を省略します。
 
+転載範囲は `--preset` と、`--source DID=type1,type2`（Bot の転載）・`--feed FEED=type1,type2`（フィードの転載、[importer §1.1](../protocol/mosimo/attest/importer/README.md#11-フィード)）で指定します。
+
+| プリセット | 範囲 |
+|---|---|
+| `jma` | JMA Bot（`did:plc:vwi7zhfyamyvrg5v6ycjgzxi`）の 5 種 |
+| `kikikuru` | Kikikuru Bot（`did:plc:kxwz5cz7o6g4jlmxh6doyfsm`）の 23 種 |
+| `jma-xml` | フィード `jma-xml` の 8 種（[importer/jma-xml](../importer/jma-xml/README.md) が変換する電文の `Control/Title`） |
+
+`feeds` を持つ鍵署名は、`feeds` に未対応の検証器ではチェーンごと不正になります。`feeds` に対応したアプリはルート設定の `maxDepth` も 16 に上げているので、3 段以上のチェーン（ルート → 役割ごとの認証局 → 運営者 → ノード）の認証局には含めてかまいません。現行の 2 段のチェーン（`oriom-mosimo-ca`）には含めないでください。
+
 - ノードが自分で鍵を作る場合は、ノード側で `mosimo-ca keygen DIR` を実行し、`public.pem` だけを受け取って `--subject-public-pem` で署名します。秘密鍵は発行者の手元に残りません。
 - 秘密鍵は age で暗号化して保存します。`--age-recipient`・`--age-recipients-file`・`--age-passphrase`、または `keys/age-recipients.txt` を使います。署名に使う鍵（`maxDepth` 1 以上）を平文で保存するには `--plaintext` が必要です。
 - 暗号化された親鍵は署名のたびに復号します。受信者指定で暗号化した場合は `MOSIMO_CA_AGE_IDENTITY` に identity ファイルを指定します（`:` 区切りで複数可）。パスフレーズの場合は端末から入力します。

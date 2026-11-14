@@ -396,3 +396,41 @@ fn credentials_directory() {
     let (code, _, _) = e.run_in(&e.keys(), &["credentials", &node, "--out", out.to_str().unwrap()], &[]);
     assert_eq!(code, 1);
 }
+
+/// フィードの転載範囲（importer §1.1）。Bot の転載とは別の認証局の下で発行し、範囲の種類をまたいで広げられない。
+#[test]
+fn issue_feed_scope() {
+    let e = Env::new("feeds");
+    e.build();
+    e.ok(&[
+        "issue",
+        "oriom-root",
+        "jma-xml",
+        "--max-depth",
+        "1",
+        "--domain",
+        "jma-xml.example.org",
+        "--owner-name",
+        "JMA XML CA",
+        "--preset",
+        "jma-xml",
+        "--plaintext",
+        "--yes",
+    ]);
+    let common = ["--leaf", "--owner-name", "n", "--org-id", "oriom.dev:jma-xml", "--org-name", "JMA XML", "--days", "30", "--yes"];
+    let issue = |name: &str, scope: &[&str]| -> Vec<String> {
+        ["issue", "oriom-root/jma-xml", name].iter().chain(scope).chain(&common).map(|s| s.to_string()).collect()
+    };
+    let args = issue("node-x", &["--feed", "jma-xml=震源・震度に関する情報"]);
+    e.ok(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    let show = e.ok(&["show", "oriom-root/jma-xml/node-x"]);
+    assert!(show.contains("feeds") && show.contains("\"feed\": \"jma-xml\"") && show.contains("震源・震度に関する情報"), "{show}");
+    e.ok(&["verify"]);
+    // フィードの認証局から Bot の範囲へは広げられない
+    let args = issue("node-bot", &["--preset", "jma"]);
+    e.ng("親の転載範囲", &args.iter().map(String::as_str).collect::<Vec<_>>());
+    let args = issue("node-other", &["--feed", "jma-xml=気象特別警報・警報・注意報"]);
+    e.ng("feed:jma-xml 気象特別警報・警報・注意報", &args.iter().map(String::as_str).collect::<Vec<_>>());
+    // Bot の転載の認証局からフィードへも広げられない
+    e.ng("親の転載範囲", &["issue", OPERATOR, "node-feed", "--leaf", "--owner-name", "n", "--preset", "jma-xml", "--days", "30", "--yes"]);
+}
