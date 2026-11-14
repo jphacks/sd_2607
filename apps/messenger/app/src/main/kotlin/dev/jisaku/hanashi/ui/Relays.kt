@@ -12,10 +12,12 @@ import androidx.compose.material.icons.outlined.NorthEast
 import androidx.compose.material.icons.outlined.SouthWest
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import dev.jisaku.hanashi.Carried
 import dev.jisaku.hanashi.Chats
 import dev.jisaku.hanashi.carried
+import dev.jisaku.hanashi.time
 import org.mndt.core.AtRepository
 import org.mndt.core.NostrEvent
 import org.mndt.mesh.MeshState
@@ -35,20 +38,33 @@ import org.mndt.mesh.MeshState
 /** Demo view of what this phone carries for others over Mosimo; the chat UI never shows other people's bundles. */
 @Composable
 fun Relays(mesh: MeshState, chats: Chats) {
-    val items = remember(mesh.events, mesh.transits, mesh.publicKey) { carried(mesh) }
+    val items = remember(mesh.events, chats.trails, mesh.publicKey) { carried(mesh.events, mesh.publicKey, chats.trails) }
+    var graph by rememberSaveable { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().background(Hanashi.canvas)) {
+        Column(Modifier.background(Color.White).padding(bottom = 8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                Stat(items.size, "受信", Color.Black)
+                Stat(items.count { it.trail.forwarded.isNotEmpty() }, "中継", Hanashi.green)
+                Stat(mesh.neighbors.size, "近くの端末", Color.Black)
+            }
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                SegmentedButton(!graph, { graph = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("タイムライン") }
+                SegmentedButton(graph, { graph = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("ネットワーク図") }
+            }
+        }
+        if (graph) RelayGraph(mesh, Modifier.weight(1f))
+        else if (items.isEmpty()) Empty("まだ中継したデータはありません\n近くで Mosimo のアプリが使われると、ここに流れます")
+        else Timeline(items, chats, mesh.publicKey)
+    }
+}
+
+@Composable
+private fun Timeline(items: List<Carried>, chats: Chats, me: String) {
     val list = rememberLazyListState()
     // A new arrival lands above the first row, which the list keeps in place; follow it while at the top.
     LaunchedEffect(items.firstOrNull()?.event?.id) { if (list.firstVisibleItemIndex <= 1) list.animateScrollToItem(0) }
-    Column(Modifier.fillMaxSize().background(Hanashi.canvas)) {
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(vertical = 12.dp)) {
-            Stat(items.size, "受信", Color.Black)
-            Stat(items.count { it.transit.forwarded.isNotEmpty() }, "中継", Hanashi.green)
-            Stat(mesh.neighbors.size, "近くの端末", Color.Black)
-        }
-        if (items.isEmpty()) Empty("まだ中継したデータはありません\n近くで Mosimo のアプリが使われると、ここに流れます")
-        else LazyColumn(Modifier.fillMaxSize(), list, PaddingValues(12.dp)) {
-            items(items, key = { it.event.id }) { CarriedRow(it, chats, mesh.publicKey, Modifier.animateItem()) }
-        }
+    LazyColumn(Modifier.fillMaxSize(), list, PaddingValues(12.dp)) {
+        items(items, key = { it.event.id }) { CarriedRow(it, chats, me, Modifier.animateItem()) }
     }
 }
 
@@ -60,27 +76,27 @@ private fun RowScope.Stat(value: Int, label: String, color: Color) = Column(Modi
 
 @Composable
 private fun CarriedRow(item: Carried, chats: Chats, me: String, modifier: Modifier) {
-    val (event, transit) = item
+    val (event, trail) = item
     val (label, color) = kind(event)
     val did = remember(event.id) { AtRepository.did(event) }
     Row(modifier.height(IntrinsicSize.Min).padding(bottom = 12.dp)) {
         // Time rail as in Mosimo Bosai's timeline: when the bundle reached this phone.
         Column(Modifier.width(64.dp).fillMaxHeight()) {
-            Text(transit.received?.let { clockSeconds(it.atMillis) } ?: "前回", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Hanashi.muted)
+            Text(clockSeconds(item.time()), fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Hanashi.muted)
             Box(Modifier.padding(start = 20.dp, top = 6.dp).width(1.dp).weight(1f).background(Hanashi.line))
         }
         Column(Modifier.weight(1f).background(Color.White, RoundedCornerShape(12.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Pill(label, color, color.copy(alpha = 0.12f))
                 Spacer(Modifier.weight(1f))
-                if (transit.forwarded.isNotEmpty()) Pill("中継 ${transit.forwarded.size}台", Color.White, Hanashi.green)
+                if (trail.forwarded.isNotEmpty()) Pill("中継 ${trail.forwarded.size}台", Color.White, Hanashi.green)
             }
             summary(event, chats, me)?.let { Text(it, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis) }
             Text(people(event, chats, me, did), fontSize = 12.sp, color = Hanashi.muted)
             HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Hanashi.line)
-            Leg(Icons.Outlined.SouthWest, "受信", "${transit.received?.let { linkLabel(it.link) } ?: "前回の起動まで"} · ${hopLabel(transit.hop)}")
-            transit.forwarded.forEach { Leg(Icons.Outlined.NorthEast, "中継", "${linkLabel(it.link)} · ${clockSeconds(it.atMillis)}") }
-            if (transit.forwarded.isEmpty()) Leg(Icons.Outlined.NorthEast, "中継待ち", "持っていない端末に渡します", Hanashi.muted)
+            Leg(Icons.Outlined.SouthWest, "受信", listOfNotNull(trail.received?.let { linkLabel(it.link) }, hopLabel(trail.hop)).joinToString(" · "))
+            trail.forwarded.forEach { Leg(Icons.Outlined.NorthEast, "中継", "${linkLabel(it.link)} · ${clockSeconds(it.at)}") }
+            if (trail.forwarded.isEmpty()) Leg(Icons.Outlined.NorthEast, "中継待ち", "持っていない端末に渡します", Hanashi.muted)
         }
     }
 }
@@ -102,14 +118,14 @@ private fun isReceipt(e: NostrEvent) = e.tags.any { it.firstOrNull() == "e" }
 private fun recipient(e: NostrEvent) = e.tags.singleOrNull { it.firstOrNull() == "p" }?.getOrNull(1)
 
 /** Mosimo Bosai posts are kind 1; Talk sends kind 4 (messages, receipts) and kind 0 (names), protocol dm §1. */
-private fun kind(e: NostrEvent): Pair<String, Color> = when (e.kind) {
-    1 -> "防災の投稿" to Color(0xFFE8590C)
+fun kind(e: NostrEvent): Pair<String, Color> = when (e.kind) {
+    1 -> "防災アプリの投稿" to Hanashi.bosai
     4 -> (if (isReceipt(e)) "トークの配達通知" else "トークのメッセージ") to Hanashi.green
-    0 -> "トークの表示名" to Color(0xFF1C7ED6)
-    5 -> "削除要求" to Hanashi.muted
-    1984 -> "報告" to Hanashi.muted
-    AtRepository.CONTROL_KIND -> (if (AtRepository.controlTopic(e) == AtRepository.PLC_TOPIC) "ID 登録" else "制御データ") to Color(0xFF7048E8)
-    else -> "kind ${e.kind}" to Hanashi.muted
+    0 -> "トークの表示名" to Hanashi.green
+    5 -> "削除要求" to Hanashi.other
+    1984 -> "報告" to Hanashi.other
+    AtRepository.CONTROL_KIND -> (if (AtRepository.controlTopic(e) == AtRepository.PLC_TOPIC) "ID 登録" else "制御データ") to Hanashi.other
+    else -> "kind ${e.kind}" to Hanashi.other
 }
 
 /** The readable part; messages stay sealed, since only the two ends hold the key. */
@@ -134,7 +150,8 @@ private fun people(e: NostrEvent, chats: Chats, me: String, did: String?): Strin
 /** Hop count on arrival: the author's own device sends with 1. */
 private fun hopLabel(hop: Int) = if (hop <= 1) "作成者から直接" else "${hop - 1}台を経由"
 
-private fun linkLabel(link: String) = when (link) {
+/** "local" is another Mosimo app on this phone, which reaches other phones through the one app running the radios (mesh §4.6). */
+fun linkLabel(link: String) = when (link) {
     "ble" -> "Bluetooth"
     "lan" -> "Wi-Fi"
     "local" -> "同じ端末のアプリ"

@@ -32,18 +32,33 @@ import java.util.concurrent.ConcurrentHashMap
 }
 /** [seenAt]: created_at of the newest profile we hold for them. */
 @Serializable data class Contact(val pubkey: String, val name: String, val seenAt: Long)
+/** A saved [org.mndt.mesh.Handoff]: wall time (ms), link ("ble", "lan", "local") and the peer's session label. */
+@Serializable data class Step(val at: Long, val link: String, val peer: String)
+/** A saved [Transit]: the SDK keeps one per run, we keep it across restarts. */
+@Serializable data class Trail(val hop: Int, val received: Step? = null, val forwarded: List<Step> = emptyList())
+/** [trails]: by event ID, for every bundle the mesh holds. */
 @Serializable data class Chats(val name: String? = null, val contacts: Map<String, Contact> = emptyMap(),
-    val messages: List<Msg> = emptyList(), val receipted: Set<String> = emptySet()) {
+    val messages: List<Msg> = emptyList(), val receipted: Set<String> = emptySet(), val trails: Map<String, Trail> = emptyMap()) {
     fun nameOf(pubkey: String) = contacts[pubkey]?.name ?: "名無し ${pubkey.take(6)}"
 }
 
-/** A bundle this phone holds for someone else, and how it passed through. */
-data class Carried(val event: NostrEvent, val transit: Transit)
+/** This run's transits laid over the saved trails: the first arrival and the first handoff per peer stay; gone bundles drop out. */
+fun merge(saved: Map<String, Trail>, live: Map<String, Transit>): Map<String, Trail> = live.mapValues { (id, t) ->
+    val before = saved[id]
+    Trail(t.hop, before?.received ?: t.received?.let { Step(it.atMillis, it.link, it.peer) },
+        (before?.forwarded.orEmpty() + t.forwarded.map { Step(it.atMillis, it.link, it.peer) }).distinctBy { it.peer })
+}
 
-/** Everyone else's bundles, newest arrival first; ones restored from an earlier run (no arrival this run) go last. */
-fun carried(state: MeshState): List<Carried> = state.events.filter { it.pubkey != state.publicKey }
-    .mapNotNull { e -> state.transits[e.id]?.let { Carried(e, it) } }
-    .sortedByDescending { it.transit.received?.atMillis ?: Long.MIN_VALUE }
+/** A bundle this phone holds for someone else, and how it passed through. */
+data class Carried(val event: NostrEvent, val trail: Trail)
+
+/** Everyone else's bundles, newest arrival first; one received before trails were kept sorts by its creation time. */
+fun carried(events: List<NostrEvent>, me: String, trails: Map<String, Trail>): List<Carried> = events.filter { it.pubkey != me }
+    .mapNotNull { e -> trails[e.id]?.let { Carried(e, it) } }
+    .sortedByDescending { it.time() }
+
+/** When the bundle reached this phone (ms), else when its author made it. */
+fun Carried.time() = trail.received?.at ?: (event.createdAt * 1000)
 
 /** Glue between the Mosimo mesh SDK and the chat history. Everything goes over the mesh; there is no server. */
 class Messenger(private val context: Context) {
@@ -87,7 +102,8 @@ class Messenger(private val context: Context) {
             }
         }
         next = next.copy(messages = next.messages.map {
-            if (it.mine && !it.relayed && (state.forwardedTo[it.id] ?: 0) > 0) it.copy(relayed = true) else it })
+            if (it.mine && !it.relayed && (state.forwardedTo[it.id] ?: 0) > 0) it.copy(relayed = true) else it },
+            trails = merge(next.trails, state.transits))
         commit(next)
         fresh.filterNot { it.read }.forEach(::notify)
         // The mesh rate limit (12 events/min) may refuse a receipt; the rest are retried on the next sync.

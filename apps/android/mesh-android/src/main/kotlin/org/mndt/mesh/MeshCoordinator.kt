@@ -34,7 +34,8 @@ import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 /** UI snapshots contain public information only, never the private author or key set. */
-data class Neighbor(val endpoint: String, val name: String, val status: String)
+/** [links]: "ble", "lan", "local"; [syncing]: in a session now rather than only seen nearby. */
+data class Neighbor(val endpoint: String, val name: String, val status: String, val links: List<String> = emptyList(), val syncing: Boolean = false)
 data class PostView(val id: String, val pubkey: String, val content: String, val hop: Int?, val relayAccepted: Boolean,
     val sourceRelay: String? = null, val volatile: Boolean = false,
     val deliveryDeadline: DeliveryDeadline = DeliveryDeadline.UNKNOWN, val acceptedBy: List<String> = emptyList(),
@@ -436,8 +437,8 @@ class MeshCoordinator private constructor(private val context: Context) {
                     .groupBy({ it.first }, { it.second })
                 val seen = (listOf(gatt, lan).flatMap { link -> link.nearby(NEARBY_MS).map { it to link.name } })
                     .groupBy({ it.first }, { it.second })
-                syncing.map { (label, via) -> Neighbor(label, label, "同期中（${via.joinToString("・")}）") } +
-                    (seen - syncing.keys).map { (node, via) -> Neighbor(node, node, "近く（${via.distinct().joinToString("・")}）") }
+                syncing.map { (label, via) -> Neighbor(label, label, "同期中（${via.joinToString("・")}）", via.distinct(), syncing = true) } +
+                    (seen - syncing.keys).map { (node, via) -> Neighbor(node, node, "近く（${via.distinct().joinToString("・")}）", via.distinct()) }
             },
             // Other apps' kinds (DMs, profiles) are relayed but are not posts.
             posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
