@@ -24,17 +24,18 @@ let
     bsaf = { enable = true; authors = [ "did:plc:example" ]; };
     happyview = enabledHappyView;
   };
+  publisherBase = {
+    enable = true; selectJmaDefaults = true;
+    credentialsDirectory = "/var/lib/mosimo-importer";
+    trustFile = "/var/lib/mosimo-importer/roots.json";
+    relayUrl = "wss://pds.invalid/";
+  };
   publishing = evaluate {
     happyview = enabledHappyView;
     bsaf = {
       enable = true;
       authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" ];
-      publisher = {
-        enable = true; selectJmaDefaults = true;
-        credentialsFile = "/var/lib/mosimo-importer/credentials.json";
-        trustFile = "/var/lib/mosimo-importer/roots.json";
-        relayUrl = "wss://pds.invalid/";
-      };
+      publisher = publisherBase;
     };
   };
   both = evaluate {
@@ -42,7 +43,7 @@ let
     bsaf = {
       enable = true;
       authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" ];
-      publisher = publishing.services.mosimo-bsaf.publisher // { selectKikikuruDefaults = true; };
+      publisher = publisherBase // { selectKikikuruDefaults = true; };
     };
   };
   mixed = evaluate {
@@ -50,7 +51,8 @@ let
     bsaf = {
       enable = true;
       authors = both.services.mosimo-bsaf.authors;
-      publisher = both.services.mosimo-bsaf.publisher // {
+      publisher = publisherBase // {
+        selectKikikuruDefaults = true;
         selection = [{ botDid = "did:plc:kxwz5cz7o6g4jlmxh6doyfsm"; types = [ "typhoon" ]; }];
       };
     };
@@ -66,7 +68,10 @@ assert !(disabled.systemd.services ? mosimo-bsaf-prepare);
 assert failedAssertions missingHappyView == failedAssertions selected + 1;
 assert !(empty.systemd.services ? mosimo-bsaf);
 assert !(empty.systemd.services ? mosimo-bsaf-publisher);
-assert publisher.serviceConfig.LoadCredential == [ "importer:/var/lib/mosimo-importer/credentials.json" ];
+assert publisher.serviceConfig.LoadCredential == [
+  "identity.json:/var/lib/mosimo-importer/identity.json" "chain.cbor:/var/lib/mosimo-importer/chain.cbor"
+  "nostr.pem:/var/lib/mosimo-importer/nostr.pem" "atproto.pem:/var/lib/mosimo-importer/atproto.pem"
+];
 assert builtins.match ".*publisher.mts" publisher.serviceConfig.ExecStart != null;
 assert publisher.serviceConfig.MemoryMax == "128M";
 assert publishing.services.mosimo-bsaf.publisher.priority == null;

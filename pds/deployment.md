@@ -150,8 +150,8 @@ No root authority is enabled implicitly. JSON `CONFIG_FILE` and Nix
 `roots` are receiver-local settings per [attest §3](../protocol/mosimo/attest/README.md#3-階層stratum):
 `pubkey` (hex, 32-byte x-only or 33-byte compressed secp256k1), `roles` the root may grant
 (`attest`, `import`, ...), `maxDepth` (chain depth below the root), optional `enabled`/`name`.
-Generate the fragment with `appview/bsaf/identity-cli.mjs receiver-export` from the reviewed
-`roots.json`; never include root, CA or importer secrets. At most 64 roots.
+Generate the fragment with `appview/bsaf/identity-cli.mjs receiver-export --anchor=...` from the root's
+`anchor.json` in the CA key directory (`mosimo-ca trust-export`); never include root, CA or importer secrets. At most 64 roots.
 
 `selection` is the explicit `{botDid,types}` list this relay authorizes for import
 (≤16 Bots, ≤32 types each, ≤64 pairs). Empty selection authorizes nothing even with roots.

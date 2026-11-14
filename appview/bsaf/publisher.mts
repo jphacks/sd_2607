@@ -1,4 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
+import { createPrivateKey } from 'node:crypto';
+import { join } from 'node:path';
 import { statSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,7 +16,7 @@ export interface Selection { botDid: string; types: string[] }
 export interface PublisherConfig {
   enabled: boolean;
   databasePath: string;
-  credentialsPath: string;
+  credentialsDirectory: string;
   trustPath: string;
   relayUrl: string;
   selection: Selection[];
@@ -22,8 +24,8 @@ export interface PublisherConfig {
   priority?: 0 | 1 | 2 | 3 | null;
   jmaPriorityPolicy?: boolean;
 }
-/** Worker-only material: the importer's signing secrets and its signing chain (root-issued CA
- * attestation first, importer leaf last). Never the root or CA secret. */
+/** Worker-only material: the importer's signing secrets and its signing chain (root-issued
+ * attestation first, importer leaf last). Never the root, CA, operator or PLC rotation secret. */
 export interface Credentials { importer: { did: string; atprotoSecret: string; nostrSecret: string }; attestations: any[] }
 
 // Local delivery hints only, never an interpretation of source:jma or original agency authority.
@@ -59,7 +61,7 @@ export function publicationPriority(config: PublisherConfig, botDid: string, tag
 }
 export function validatePublisherConfig(value: unknown): asserts value is PublisherConfig {
   if (!object(value) || typeof value.enabled !== 'boolean' || typeof value.databasePath !== 'string' || !value.databasePath
-    || typeof value.credentialsPath !== 'string' || !value.credentialsPath || typeof value.trustPath !== 'string' || !value.trustPath
+    || typeof value.credentialsDirectory !== 'string' || !value.credentialsDirectory || typeof value.trustPath !== 'string' || !value.trustPath
     || typeof value.relayUrl !== 'string' || !Array.isArray(value.selection) || value.selection.length > 16
     || !value.selection.every(e => object(e) && typeof e.botDid === 'string' && /^did:plc:[a-z2-7]{24}$/.test(e.botDid)
       && Array.isArray(e.types) && e.types.length > 0 && e.types.length <= 32 && new Set(e.types).size === e.types.length
@@ -72,20 +74,45 @@ export function validatePublisherConfig(value: unknown): asserts value is Publis
   const url = new URL(value.relayUrl);
   if (url.protocol !== 'wss:' || url.username || url.password || url.hash) throw new Error('Publisher requires wss relay');
 }
-/** credentials.json: {importer:{did,atprotoSecret,nostrSecret}, chain:<Base64 canonical CBOR of the attestation array>}. */
-export function loadCredentials(value: unknown): Credentials {
-  if (!object(value) || Object.keys(value).sort().join(',') !== 'chain,importer' || !object(value.importer)
-    || Object.keys(value.importer).sort().join(',') !== 'atprotoSecret,did,nostrSecret'
-    || typeof value.importer.did !== 'string' || !/^did:plc:[a-z2-7]{24}$/.test(value.importer.did)
-    || typeof value.importer.atprotoSecret !== 'string' || typeof value.importer.nostrSecret !== 'string'
-    || !/^[0-9a-f]{64}$/.test(value.importer.atprotoSecret) || !/^[0-9a-f]{64}$/.test(value.importer.nostrSecret)
-    || value.importer.atprotoSecret === value.importer.nostrSecret || typeof value.chain !== 'string') throw new Error('Importer-only credentials required');
-  const attestations = decodeCanonical(unb64(value.chain));
+/**
+ * Importer key material, as written by `mosimo-ca credentials` and loaded through systemd
+ * `LoadCredential` (PUBLISHER.md, "Key placement"):
+ *   identity.json  {did, nostrPubkey, atprotoPubkey}   public
+ *   chain.cbor     canonical CBOR array of KeyAttestation, root-issued first, importer leaf last
+ *   nostr.pem      PKCS#8 secp256k1, the attested importer key (signs Nostr events)
+ *   atproto.pem    PKCS#8 secp256k1, the DID's atproto signing key (signs commits)
+ */
+export const CREDENTIAL_FILES = ['identity.json', 'chain.cbor', 'nostr.pem', 'atproto.pem'] as const;
+export interface CredentialFiles { identity: string; chain: Uint8Array; nostrPem: string; atprotoPem: string }
+/** secp256k1 PKCS#8 PEM -> hex secret scalar. Any other key type or curve is refused. */
+export function secretFromPem(pem: string): string {
+  if (typeof pem !== 'string' || !pem.includes('-----BEGIN PRIVATE KEY-----')) throw new Error('Unencrypted PKCS#8 PEM required');
+  const key = createPrivateKey({ key: pem, format: 'pem' });
+  if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'secp256k1') throw new Error('secp256k1 key required');
+  const d = Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url');
+  if (d.length !== 32) throw new Error('Invalid secp256k1 secret');
+  return hex(d);
+}
+export function loadCredentials(files: CredentialFiles): Credentials {
+  const identity: unknown = JSON.parse(files.identity);
+  if (!object(identity) || Object.keys(identity).sort().join(',') !== 'atprotoPubkey,did,nostrPubkey'
+    || typeof identity.did !== 'string' || !/^did:plc:[a-z2-7]{24}$/.test(identity.did)
+    || typeof identity.nostrPubkey !== 'string' || typeof identity.atprotoPubkey !== 'string') throw new Error('Importer-only credentials required');
+  const nostrSecret = secretFromPem(files.nostrPem), atprotoSecret = secretFromPem(files.atprotoPem);
+  if (nostrSecret === atprotoSecret) throw new Error('Importer-only credentials required');
+  if (hex(nostrPublicKey(unhex(nostrSecret))) !== identity.nostrPubkey) throw new Error('nostr.pem does not match identity.json');
+  if (hex(atprotoPublicKey(unhex(atprotoSecret))) !== identity.atprotoPubkey) throw new Error('atproto.pem does not match identity.json');
+  const attestations = decodeCanonical(files.chain, { maxBytes: 65536 });
   if (!Array.isArray(attestations) || attestations.length < 1 || attestations.length > 8) throw new Error('Credentials chain must hold 1..8 attestations');
   attestations.forEach(validateAttestation);
   const leaf = attestations[attestations.length - 1].body.subject as Uint8Array;
-  if (hex(leaf) !== hex(nostrPublicKey(unhex(value.importer.nostrSecret)))) throw new Error('Chain leaf is not the importer Nostr key');
-  return { importer: { did: value.importer.did, atprotoSecret: value.importer.atprotoSecret, nostrSecret: value.importer.nostrSecret }, attestations };
+  if (hex(leaf) !== identity.nostrPubkey) throw new Error('Chain leaf is not the importer Nostr key');
+  return { importer: { did: identity.did, atprotoSecret, nostrSecret }, attestations };
+}
+export async function readCredentials(directory: string): Promise<Credentials> {
+  const read = (name: typeof CREDENTIAL_FILES[number]) => readFile(join(directory, name));
+  const [identity, chain, nostrPem, atprotoPem] = await Promise.all(CREDENTIAL_FILES.map(read));
+  return loadCredentials({ identity: identity!.toString('utf8'), chain: new Uint8Array(chain!), nostrPem: nostrPem!.toString('utf8'), atprotoPem: atprotoPem!.toString('utf8') });
 }
 /** roots.json: array of receiver-local root settings {pubkey, roles, maxDepth, enabled?, name?}. */
 export function loadRoots(value: unknown) {
@@ -96,7 +123,6 @@ export function loadRoots(value: unknown) {
   }
   return value;
 }
-export const encodeChain = (attestations: any[]) => encodeBytes(canonical(attestations, { maxBytes: 65536 }));
 
 // This connection is deliberately to the existing collector database, not a generic source hook.
 export function openPublicationStore(path: string) {
@@ -353,7 +379,7 @@ export async function main() {
   validatePublisherConfig(config);
   if (!config.enabled || !config.selection.length) return;
   if (!(await stat(config.databasePath)).isFile()) throw new Error('Existing collector DB required');
-  const credentials = loadCredentials(JSON.parse(await readFile(config.credentialsPath, 'utf8')));
+  const credentials = await readCredentials(config.credentialsDirectory);
   const roots = loadRoots(JSON.parse(await readFile(config.trustPath, 'utf8')));
   const store = openPublicationStore(config.databasePath);
   const controller = new AbortController(); const stop = () => controller.abort();

@@ -26,11 +26,13 @@ let
   publisherSettings = pkgs.writeText "mosimo-bsaf-publisher.json" (builtins.toJSON {
     enabled = cfg.publisher.enable;
     inherit (cfg) databasePath;
-    credentialsPath = "/run/credentials/mosimo-bsaf-publisher.service/importer";
+    credentialsDirectory = "/run/credentials/mosimo-bsaf-publisher.service";
     trustPath = cfg.publisher.trustFile;
     inherit (cfg.publisher) relayUrl maxOriginalAgeSeconds priority jmaPriorityPolicy;
     inherit selection;
   });
+  # Importer key material (PUBLISHER.md, "Key placement"), each file passed as its own systemd credential.
+  credentialFiles = [ "identity.json" "chain.cbor" "nostr.pem" "atproto.pem" ];
   hardening = {
     User = "root"; # The existing rootful HappyView volume is root-owned.
     NoNewPrivileges = true;
@@ -49,7 +51,11 @@ let
     UMask = "0077";
   };
 in {
-  imports = [ ../happyview ];
+  imports = [
+    ../happyview
+    (lib.mkRemovedOptionModule [ "services" "mosimo-bsaf" "publisher" "credentialsFile" ]
+      "credentials.json was replaced by a directory of PEM/CBOR files written by `mosimo-ca credentials`; set services.mosimo-bsaf.publisher.credentialsDirectory (see appview/bsaf/PUBLISHER.md).")
+  ];
 
   options.services.mosimo-bsaf = {
     enable = lib.mkEnableOption "DID-allowlisted BSAF collection into HappyView SQLite";
@@ -65,9 +71,10 @@ in {
     };
     publisher = {
       enable = lib.mkEnableOption "opt-in signed BSAF conversion and EVENT publication to PDS";
-      credentialsFile = lib.mkOption {
+      credentialsDirectory = lib.mkOption {
         type = lib.types.nullOr lib.types.str; default = null;
-        description = "Absolute path of the importer-only credentials.json (DID, signing secrets, signing chain) from identity-cli assemble, loaded using systemd credentials; never a Nix path, root or CA key.";
+        example = "/var/lib/mosimo-importer";
+        description = "Absolute host directory (root 0700, files 0600) holding the importer's identity.json, chain.cbor, nostr.pem and atproto.pem as written by `mosimo-ca credentials`; each file is passed with systemd LoadCredential. Never a Nix path, and never root, CA, operator or PLC rotation keys.";
       };
       trustFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str; default = null;
@@ -114,12 +121,13 @@ in {
       message = "mosimo-bsaf.authors must contain at most 10000 distinct DIDs";
     } {
       assertion = !cfg.publisher.enable || (
-        cfg.publisher.credentialsFile != null && lib.hasPrefix "/" cfg.publisher.credentialsFile
+        cfg.publisher.credentialsDirectory != null && lib.hasPrefix "/" cfg.publisher.credentialsDirectory
+        && !(lib.hasPrefix "/nix/store" cfg.publisher.credentialsDirectory)
         && cfg.publisher.trustFile != null && lib.hasPrefix "/" cfg.publisher.trustFile
         && lib.hasPrefix "wss://" cfg.publisher.relayUrl
         && !((cfg.publisher.selectJmaDefaults || cfg.publisher.selectKikikuruDefaults) && cfg.publisher.selection != [ ])
         && builtins.all (e: builtins.elem e.botDid cfg.authors) selection);
-      message = "BSAF publisher needs absolute importer credentials/public trust files, wss relay, and explicitly collected source DIDs; select one selection mode";
+      message = "BSAF publisher needs an absolute importer credentials directory outside /nix/store, an absolute public trust file, wss relay, and explicitly collected source DIDs; select one selection mode";
     }];
     systemd.services.mosimo-bsaf-publisher = lib.mkIf cfg.publisher.enable {
       description = "Sign selected collected BSAF records and push durable EVENT outbox to PDS";
@@ -131,7 +139,7 @@ in {
       environment.PUBLISHER_CONFIG_FILE = publisherSettings;
       serviceConfig = hardening // {
         Type = "simple";
-        LoadCredential = [ "importer:${cfg.publisher.credentialsFile}" ];
+        LoadCredential = map (name: "${name}:${cfg.publisher.credentialsDirectory}/${name}") credentialFiles;
         ExecStart = "${pkgs.nodejs_24}/bin/node --max-old-space-size=64 ${runtime}/publisher.mts";
         Restart = "on-failure";
         RestartSec = 5;

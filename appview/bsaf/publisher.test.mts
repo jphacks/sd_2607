@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { createECDH, createPrivateKey, generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { openStore } from './store.mts';
 import { receiverConfigurations, presetSelection } from './identity-cli.mjs';
 import { openPublicationStore, stageNext, pushOnce, publishEvent, validatePublisherConfig, refreshRevocations, publicationPriority,
-  loadCredentials, loadRoots, encodeChain, type PublisherConfig, type Credentials } from './publisher.mts';
+  loadCredentials, readCredentials, secretFromPem, loadRoots, type PublisherConfig, type Credentials } from './publisher.mts';
 import { BLOCK, IMPORTER, BSAF, REVOCATION, JMA_SELECTION, KIKIKURU_SELECTION, timestamp, hex, unhex, canonical, randomSecret, nostrPublicKey,
   createAttestation, createImporter, createImportPost, createNotice, createRevocationList, authorizeImport, priorityHintOf } from '../../pds/attest.mjs';
 import { decodePost } from '../../pds/repository.mjs';
@@ -36,7 +37,7 @@ async function fixture(t: any, selection: any = JMA_SELECTION) {
       { $type: BLOCK.organization, orgId: 'example.org:importer', orgName: 'Test importer, not JMA' }, { $type: IMPORTER, sources }] });
   const credentials: Credentials = { importer: { did: importer.did, atprotoSecret: importer.atprotoSecret, nostrSecret: importer.nostrSecret }, attestations: [caAttestation, leaf] };
   const roots = [{ pubkey: hex(root), roles: ['attest', 'import'], maxDepth: 2, enabled: true }];
-  const config: PublisherConfig = { enabled: true, databasePath, credentialsPath: 'not-read-by-tests', trustPath: 'not-read-by-tests',
+  const config: PublisherConfig = { enabled: true, databasePath, credentialsDirectory: 'not-read-by-tests', trustPath: 'not-read-by-tests',
     relayUrl: 'wss://relay.invalid', selection: sources, maxOriginalAgeSeconds: 600, priority: 3 };
   let sequence = 0;
   async function ingest(overrides: Record<string, any> = {}, rkey = `test-${++sequence}`, did: string = botDid) {
@@ -75,14 +76,41 @@ test('fixed presets are independent and never auto-expand', () => {
   assert.deepEqual(presetSelection(['--days=3']), presetSelection());
 });
 
+/** hex secret -> PKCS#8 PEM, as `mosimo-ca credentials` writes it. */
+function pem(secretHex: string) {
+  const ecdh = createECDH('secp256k1'); ecdh.setPrivateKey(Buffer.from(secretHex, 'hex'));
+  const point = ecdh.getPublicKey();
+  const b64u = (b: Buffer) => b.toString('base64url');
+  return createPrivateKey({ format: 'jwk', key: { kty: 'EC', crv: 'secp256k1', d: b64u(Buffer.from(secretHex, 'hex')),
+    x: b64u(point.subarray(1, 33)), y: b64u(point.subarray(33)) } }).export({ type: 'pkcs8', format: 'pem' }).toString();
+}
+
 test('credentials and roots loaders reject secrets in the wrong file and chains that do not end in the importer key', async t => {
   const f = await fixture(t);
-  const json = { importer: f.credentials.importer, chain: encodeChain(f.credentials.attestations) };
-  const loaded = loadCredentials(JSON.parse(JSON.stringify(json)));
+  const identity = JSON.stringify({ did: f.importer.did, nostrPubkey: f.importer.nostrPubkey, atprotoPubkey: f.importer.atprotoPubkey });
+  const files = { identity, chain: canonical(f.credentials.attestations, { maxBytes: 65536 }),
+    nostrPem: pem(f.importer.nostrSecret), atprotoPem: pem(f.importer.atprotoSecret) };
+  assert.equal(secretFromPem(files.nostrPem), f.importer.nostrSecret);
+  const loaded = loadCredentials(files);
+  assert.deepEqual(loaded.importer, f.credentials.importer);
   assert.equal(loaded.attestations.length, 2); assert.equal(hex(loaded.attestations[1].body.subject), f.importer.nostrPubkey);
-  assert.throws(() => loadCredentials({ ...json, importer: { ...json.importer, nostrSecret: hex(randomSecret()) } }), /leaf is not the importer/);
-  assert.throws(() => loadCredentials({ ...json, importer: { ...json.importer, plcSecret: 'x' } }), /Importer-only/);
-  assert.throws(() => loadCredentials({ ...json, chain: 'AAAA' }));
+  // The same files read from a directory, as systemd LoadCredential exposes them.
+  const directory = await mkdtemp(join(tmpdir(), 'mosimo-credentials-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'identity.json'), files.identity); await writeFile(join(directory, 'chain.cbor'), files.chain);
+  await writeFile(join(directory, 'nostr.pem'), files.nostrPem); await writeFile(join(directory, 'atproto.pem'), files.atprotoPem);
+  assert.deepEqual((await readCredentials(directory)).importer, f.credentials.importer);
+  const other = hex(randomSecret());
+  assert.throws(() => loadCredentials({ ...files, nostrPem: pem(other),
+    identity: JSON.stringify({ ...JSON.parse(identity), nostrPubkey: hex(nostrPublicKey(unhex(other))) }) }), /leaf is not the importer/);
+  assert.throws(() => loadCredentials({ ...files, nostrPem: pem(other) }), /nostr.pem does not match/);
+  assert.throws(() => loadCredentials({ ...files, atprotoPem: files.nostrPem }), /Importer-only/);
+  assert.throws(() => loadCredentials({ ...files, identity: JSON.stringify({ ...JSON.parse(identity), plcSecret: 'x' }) }), /Importer-only/);
+  assert.throws(() => loadCredentials({ ...files, chain: new Uint8Array([0x80]) }));
+  // Only unencrypted secp256k1 PKCS#8 keys are accepted.
+  const p256 = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  assert.throws(() => secretFromPem(p256), /secp256k1/);
+  assert.throws(() => secretFromPem('-----BEGIN ENCRYPTED PRIVATE KEY-----'), /PKCS#8/);
   assert.deepEqual(loadRoots(f.roots), f.roots);
   assert.throws(() => loadRoots([{ ...f.roots[0], secretKey: 'x' }]), /secrets/);
   assert.throws(() => loadRoots([]));

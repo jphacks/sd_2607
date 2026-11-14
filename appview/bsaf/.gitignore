@@ -2,4 +2,5 @@ node_modules/
 *.db
 *.db-*
 config.json
+# Former identity-cli.mjs output (secrets); keys now live in ca/keys/
 private/

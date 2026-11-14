@@ -4,37 +4,53 @@
 
 ## Trust model: no periodic refresh
 
-The importer is authorized by a key-attestation chain, not by a short-lived snapshot:
+The importer is authorized by a key-attestation chain, not by a short-lived snapshot. Keys are issued and revoked with the CA tool in [`ca/`](../../ca/README.md) (`mosimo-ca`); its key directory mirrors the chain, each directory named by the `owner.id` its parent gave it. The chain currently in production:
 
 ```
-root key (offline, stratum 0)
-  └─ KeyAttestation, no expiry ─▶ CA key (stratum 1), issuerDomain = pds.oriom.dev, delegation maxDepth 1
-        └─ KeyAttestation, keyValidity.until = issue + 730 days ─▶ importer Nostr key (leaf)
-              roles [import], organization, importer block (allowed Bot/type pairs), trustLevel
+oriom-root                         root key (offline, stratum 0), receivers' root setting maxDepth 16
+  └─ oriom-mosimo-ca               KeyAttestation, no expiry, issuerDomain = pds.oriom.dev, delegation maxDepth 1
+       └─ did:plc:vy6l6jpmhxupmelsphj7dpnx   importer Nostr key (leaf), keyValidity.until 2028-11-10
+                                    roles [import], organization, importer block (allowed Bot/type pairs), trustLevel
 ```
+
+App releases before the root setting was raised to `maxDepth 16` accept at most this two-step chain, so this CA and leaf stay in use until those releases are gone. New importers are planned as root → role-specific issuer → importer operator → node, which needs the newer root setting.
 
 - The chain travels inside every import post (`mosimo:ext:dev.jisaku.mosimo.attest.chain`). Receivers verify it offline against their locally configured root (`publicInformation.roots`: public key, allowed roles, allowed depth) and their own `(botDid, type)` selection ([importer §3](../../protocol/mosimo/attest/importer/README.md#3-受信者の認可)).
-- Nothing expires for two years. Renewal is `identity-cli issue` + `assemble` + redeploying `credentials.json`.
+- Nothing expires for two years. Renewal is `mosimo-ca issue` for a new leaf + `mosimo-ca credentials` + redeploying the key directory.
 - Revocation is a signed fact ([attest.revocation](../../protocol/mosimo/attest/revocation/README.md)). The CA publishes a signed list at `https://<issuerDomain>/.well-known/mosimo/attest/revocations` (`application/cbor`); it only changes when a key is revoked. Receivers that are online fetch it periodically and persist notices; fetch failure keeps the last state and never blocks relaying. Revocations can also travel as kind `8173` control events.
 - Receivers (this publisher included) check the chain at the post's `created_at` **and** at the current time, require the `import` role plus `importer` and `organization` blocks, require the original `(botDid, type)` to be inside both the importer block and the local selection, and refuse `revoked`/`revoked-later` chains.
 
-## Files produced by `identity-cli.mjs`
+## Issuing an importer
 
-All output goes to the private directory (`./private/` or `MOSIMO_PRIVATE_DIR`, mode 0700, Git-ignored). Signed objects are stored as unpadded Base64 of their canonical CBOR.
+```sh
+# 1. A new did:plc identity for the node (PLC rotation key, atproto key, Nostr key). The file is new and mode 0600.
+node identity-cli.mjs importer-create https://pds.example.org --out=importer-secret.json
+# 2. The parent signs the node's Nostr key; the DID, atproto key and PLC rotation key go to the node's _importer/ directory.
+mosimo-ca issue PARENT NAME --leaf --owner-name 'BSAF importer' --org-id ... --org-name ... --preset jma --preset kikikuru \
+  --importer-identity importer-secret.json --days 730
+rm importer-secret.json   # holds the PLC rotation secret in plain text
+# 3. The key directory for the server (below), then deploy it.
+mosimo-ca credentials PARENT/NAME --out ./deploy
+```
 
-| Command | Writes | Deploy to |
+`identity-cli.mjs receiver-export --anchor=ca/keys/<root>/anchor.json --domain=<issuerDomain> [--jma] [--kikikuru] --out=DIR` writes the receivers' public configuration (`pds-public-information.json`, `mosimo-public-trust.json`).
+
+## Key placement
+
+The publisher is the only Mosimo server that holds private keys (the PDS, AppView and the revocation list endpoint hold none). It gets exactly the importer's two signing keys, never a root, CA, operator or PLC rotation key.
+
+| File (written by `mosimo-ca credentials`) | Host path | Format |
 |---|---|---|
-| `root-create [--name=]` | `root-secret.json`, `roots.json` (public root settings) | `roots.json` → publisher `trustFile`; PDS `publicInformation.roots` via `receiver-export` |
-| `ca-create DOMAIN [--jma] [--kikikuru]` | `ca-secret.json`, `ca-attestation.json`, `ca-revocation-notice.json` (pre-issued) | nothing (CA secret stays offline) |
-| `importer-create HTTPS_PDS` | `importer-secret.json` (incl. PLC rotation key), `importer-request.json` | nothing |
-| `issue [--jma] [--kikikuru] [--days=730] [--org-id=] [--org-name=]` | `leaf-attestation.json`, `leaf-revocation-notice.json` | nothing |
-| `assemble` | `credentials.json` = `{importer:{did,atprotoSecret,nostrSecret}, chain}` | publisher `credentialsFile` only |
-| `revocation-list` | `revocations.cbor` (signed by the CA; empty until `revoke`) | `https://DOMAIN/.well-known/mosimo/attest/revocations` |
-| `revoke PUBKEY_HEX [--reason=code]` | appends to `revocations.json`; rerun `revocation-list` | republish `revocations.cbor` |
-| `receiver-export [--jma] [--kikikuru]` | `pds-public-information.json`, `mosimo-public-trust.json` | PDS settings / client assets |
-| `verify` | prints the chain status of `credentials.json` against `roots.json` | — |
+| `identity.json` | `/var/lib/mosimo-importer/identity.json` | `{did, nostrPubkey, atprotoPubkey}` (public) |
+| `chain.cbor` | `/var/lib/mosimo-importer/chain.cbor` | canonical CBOR array of KeyAttestation, root-issued first, importer leaf last |
+| `nostr.pem` | `/var/lib/mosimo-importer/nostr.pem` | PKCS#8 PEM, secp256k1: the attested importer key (signs Nostr events) |
+| `atproto.pem` | `/var/lib/mosimo-importer/atproto.pem` | PKCS#8 PEM, secp256k1: the DID's atproto signing key (signs commits) |
+| `roots.json` | `/var/lib/mosimo-importer/roots.json` | public root settings for the publisher's self-check (`trustFile`) |
 
-The worker receives **only** `credentials.json` (through `LoadCredential`) and `roots.json`. Root, CA and PLC rotation secrets never leave the private directory.
+- `/var/lib/mosimo-importer` is `root:root 0700`, every file `root:root 0600`. The PEM files are unencrypted because the service starts unattended; the host directory, systemd credentials and backups are what protect them. Do not place them under `/nix/store` or in a Nix expression.
+- `services.mosimo-bsaf.publisher.credentialsDirectory` points at the host directory. The module passes the four key files with systemd `LoadCredential` (`identity.json:<dir>/identity.json`, ...), so the worker reads them from `/run/credentials/mosimo-bsaf-publisher.service/` and has no access to the host directory itself.
+- The worker refuses to start unless `nostr.pem` and `atproto.pem` are unencrypted secp256k1 PKCS#8 keys matching `identity.json`, the two keys differ, and the chain's leaf is the Nostr key.
+- Replace the files atomically (write `*.next`, then rename) and restart the publisher. Delete the `--out` directory on the workstation after deploying.
 
 ## Explicit opt-in and fixed defaults
 
@@ -53,7 +69,7 @@ services.mosimo-bsaf = {
     enable = true;
     selectJmaDefaults = true;
     selectKikikuruDefaults = true;
-    credentialsFile = "/var/lib/mosimo-importer/credentials.json"; # string, NOT a Nix path literal
+    credentialsDirectory = "/var/lib/mosimo-importer"; # string, NOT a Nix path literal
     trustFile = "/var/lib/mosimo-importer/roots.json";
     relayUrl = "wss://pds.oriom.dev/"; # PDS Nostr endpoint is the root WebSocket path
     maxOriginalAgeSeconds = 3600;
@@ -61,7 +77,7 @@ services.mosimo-bsaf = {
 };
 ```
 
-Direct execution: `PUBLISHER_CONFIG_FILE=/absolute/publisher.json node publisher.mts`. JSON fields: `enabled`, `databasePath`, `credentialsPath`, `trustPath`, `relayUrl`, `selection`, `maxOriginalAgeSeconds` (1..86400), optional `jmaPriorityPolicy` (default true), optional `priority` (0..3 override).
+Direct execution: `PUBLISHER_CONFIG_FILE=/absolute/publisher.json node publisher.mts`. JSON fields: `enabled`, `databasePath`, `credentialsDirectory` (directory with the four key files), `trustPath`, `relayUrl`, `selection`, `maxOriginalAgeSeconds` (1..86400), optional `jmaPriorityPolicy` (default true), optional `priority` (0..3 override).
 
 ## Runtime behaviour
 
@@ -91,7 +107,5 @@ Receivers still cap unauthorized hints at 1 and evaluate `effectivePriority` wit
 ```sh
 cd appview/bsaf && npm ci && npm ci --prefix ../../pds
 npm test && npm run typecheck
-MOSIMO_PRIVATE_DIR=$(mktemp -d) node identity-cli.mjs root-create && node identity-cli.mjs ca-create pds.example.org --jma --kikikuru \
-  && node identity-cli.mjs importer-create https://pds.example.org && node identity-cli.mjs issue --jma --kikikuru \
-  && node identity-cli.mjs assemble && node identity-cli.mjs revocation-list && node identity-cli.mjs verify
+nix develop ../../ca -c cargo test --manifest-path ../../ca/Cargo.toml   # mosimo-ca: issuance, revocation, credentials directory
 ```
