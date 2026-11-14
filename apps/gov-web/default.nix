@@ -50,6 +50,12 @@ in
         encode zstd gzip
         # Vite fingerprints everything under assets/.
         header /assets/* Cache-Control "public, max-age=31536000, immutable"
+        # Store files all have mtime 1, so Last-Modified never changes: browsers
+        # cache index.html heuristically and every revalidation gets a 304 for the
+        # old build. Ignore validators and keep it out of the cache.
+        @page not path /assets/*
+        request_header @page -If-Modified-Since
+        header @page Cache-Control no-store
         file_server
       '';
     };
