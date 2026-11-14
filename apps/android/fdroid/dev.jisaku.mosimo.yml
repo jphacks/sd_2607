@@ -59,7 +59,7 @@ Builds:
     gradleprops:
       - mosimoAbi=x86_64
 
-AutoUpdateMode: Version mosimo-v%v
+AutoUpdateMode: Version
 UpdateCheckMode: Tags ^mosimo-v[0-9.]+$
 VercodeOperation:
   - 10*%c+1
