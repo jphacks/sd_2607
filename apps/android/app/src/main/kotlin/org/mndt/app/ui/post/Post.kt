@@ -31,8 +31,8 @@ private val prefix = Regex("^\\s*[［\\[]([^］\\]]{1,8})[］\\]]\\s*")
 fun PostView.category(): Category? = prefix.find(content)?.groupValues?.get(1)?.let { l -> Category.entries.firstOrNull { it.label == l } }
 fun PostView.body(): String = if (category() != null) content.replaceFirst(prefix, "") else content
 
-/** A re-posted BSAF alert (`original` present); native BSAF posts of our own are ordinary posts. */
-val PostView.isPublic get() = ext.bsaf?.imported == true
+/** A re-posted BSAF alert (`original` present) or JMA XML message; native BSAF posts of our own are ordinary posts. */
+val PostView.isPublic get() = ext.bsaf?.imported == true || ext.jma != null
 
 /**
  * importer §3: the post's own chain, confirmed now against the local roots, ends in an importer authorized for its
@@ -56,6 +56,9 @@ private val bsafLabels = mapOf(
     "weather-info" to "気象情報",
 )
 fun bsafLabel(type: String?) = type?.let { bsafLabels[it] ?: it } ?: "公的情報"
+
+/** Heading label of a re-post: the BSAF type, or the JMA `Control/Title` as sent. */
+fun PostView.publicLabel(): String = ext.jma?.title ?: bsafLabel(ext.bsaf?.type)
 
 /** #priority colors: 3 urgent → danger, 2 important → warning, else neutral. Unauthorized is capped at 1 by protocol. */
 fun PostView.priorityColor(): Color = when (if (importerAuthorized) ext.priority else minOf(ext.priority, 1)) {

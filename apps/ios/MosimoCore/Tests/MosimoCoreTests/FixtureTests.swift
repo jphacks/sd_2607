@@ -26,12 +26,13 @@ final class FixtureTests: XCTestCase {
         XCTAssertNotNil(try MeshEngine().accept(bytes, nowMillis: 0, elapsedMillis: 0))
     }
 
-    /// The shipped trust asset holds only the production root and its Bot/type selections.
+    /// The shipped trust asset holds only the production root, its Bot/type selections and any jma-xml feed selections.
     func testShippedTrustAssetHasProductionRoot() throws {
         let json = try fixture("apps/android/mesh-android/src/main/assets/mosimo-public-trust.json").serialized
         let config = try PublicIngress.config(json)
         XCTAssertEqual(config.roots.filter(\.enabled).map(\.pubkeyHex), ["3b92115866d54bb1799529ac39312bcd60bbfc1f5235b5785f4f7db748c62510"])
         XCTAssertEqual(config.roots.count, 1)
-        XCTAssertEqual(config.selected.count, 28)
+        XCTAssertEqual(config.selected.filter { $0.botDid != nil }.count, 28)
+        XCTAssertTrue(config.selected.allSatisfy { $0.botDid != nil || $0.feed == PublicIngress.jmaFeed })
     }
 }

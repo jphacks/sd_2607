@@ -579,7 +579,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         }
         loaded.onSuccess { (config, entries) -> publicConfig = config; trustEntries = entries }
         mutableState.update { it.copy(publicStatus = loaded.fold(
-            { (c, _) -> "公的情報: 有効 root ${c.roots.count { r -> r.enabled }} / 選択 Bot/type ${c.selected.size}（未設定は投入不可）" },
+            { (c, _) -> "公的情報: 有効 root ${c.roots.count { r -> r.enabled }} / 選択 Bot・フィード/type ${c.selected.size}（未設定は投入不可）" },
             { "公的情報: config 読込失敗 / fail closed（既存鍵・失効履歴は保持）" })) }
     }
     private fun trustChoices() = PublicIngress.TrustChoices.parse(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TRUST_CHOICES, null))

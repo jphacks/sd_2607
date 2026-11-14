@@ -123,6 +123,38 @@
     {
       "botDid": "did:plc:vwi7zhfyamyvrg5v6ycjgzxi",
       "type": "tsunami"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "震源・震度に関する情報"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（大雨）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（土砂）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（高潮）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（暴風）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（波浪）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（大雪）"
+    },
+    {
+      "feed": "jma-xml",
+      "type": "気象警報・注意報（Ｒ０６）（その他注意報）"
     }
   ]
 }

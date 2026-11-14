@@ -57,6 +57,41 @@ internal fun parseGattAdvert(data: ByteArray?): GattAdvert? {
 internal fun nameAdvert(name: String?): GattAdvert? =
     name?.takeIf { it.matches(Regex("[0-9a-f]{16}")) }?.let { GattAdvert(it, peripheralOnly = false, nameOnly = true) }
 
+/**
+ * A backgrounded iOS app advertises its service UUIDs only in Apple's "overflow area": manufacturer data (company 0x004C)
+ * with a type-0x01 record whose 16-byte bitmap has one hash-chosen bit per UUID. Apple does not document the hash; the
+ * bit for [GattLink.SERVICE_UUID] was measured from backgrounded iPhone/iPad adverts. Other UUIDs can share the bit, so a
+ * match is only a candidate: the GATT service check after connecting decides.
+ */
+internal const val OVERFLOW_BYTE = 10
+internal const val OVERFLOW_MASK = 0x04
+
+/** True when Apple manufacturer data carries the overflow record with our bit set. Records other than 0x01 are type, length, value. */
+internal fun overflowAdvert(apple: ByteArray?): Boolean {
+    if (apple == null) return false
+    var i = 0
+    while (i < apple.size) {
+        val type = apple[i].toInt() and 255
+        if (type == 1) return i + 1 + OVERFLOW_BYTE < apple.size && apple[i + 1 + OVERFLOW_BYTE].toInt() and OVERFLOW_MASK != 0
+        if (i + 1 >= apple.size) return false
+        i += 2 + (apple[i + 1].toInt() and 255)
+    }
+    return false
+}
+
+/**
+ * Scan filters for the overflow record. Controllers match manufacturer data at fixed offsets, so we cover the record
+ * alone and after the 7-byte Nearby Info record (0x10, length 5) that iOS often puts first.
+ */
+internal fun overflowFilters(): List<ScanFilter> = listOf(0, 7).map { at ->
+    val data = ByteArray(at + 1 + 16); val mask = ByteArray(data.size)
+    if (at == 7) { data[0] = 0x10; data[1] = 5; mask[0] = -1; mask[1] = -1 }
+    data[at] = 1; mask[at] = -1
+    data[at + 1 + OVERFLOW_BYTE] = OVERFLOW_MASK.toByte(); mask[at + 1 + OVERFLOW_BYTE] = OVERFLOW_MASK.toByte()
+    ScanFilter.Builder().setManufacturerData(APPLE, data, mask).build()
+}
+private const val APPLE = 0x004C
+
 internal fun gattServiceData(node: String, flags: Int = 0, summary: ByteArray? = null, extFlags: Int = 0): ByteArray {
     val head = ByteArray(9) { if (it < 8) node.substring(it * 2, it * 2 + 2).toInt(16).toByte() else flags.toByte() }
     return if (summary == null) head else head + summary.copyOf(3) + byteArrayOf(extFlags.toByte())
@@ -125,6 +160,8 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
     private val lastSeen = HashMap<String, Long>()
     /** Last reconciliation per node; a peer without an advertised summary is not redialed sooner than [RESYNC_MS]. */
     private val lastSyncedAt = HashMap<String, Long>()
+    /** The same for node-less (backgrounded iOS) peers, by device address. */
+    private val lastSyncedAddress = HashMap<String, Long>()
     /** mesh.adv: our candidate summary and flags, the last advertised summary per node, and the pair recorded at the last sync. */
     private var summary = ByteArray(3)
     private var extFlags = 0
@@ -222,6 +259,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
             val p = peers[peer] ?: return
             p.synced = true
             backoff.remove(p.device.address)
+            lastSyncedAddress[p.device.address] = SystemClock.elapsedRealtime()
             val n = p.node ?: return
             lastSyncedAt[n] = SystemClock.elapsedRealtime()
             lastAdvertSummary[n]?.let { lastSynced[n] = it to summary.copyOf() }
@@ -273,6 +311,23 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         Log.i(TAG, "connecting to node ${ad.node} ($addr)")
         val gatt = device.connectGatt(context, false, clientCallback(g, h), BluetoothDevice.TRANSPORT_LE) ?: return
         val p = Peer(h, device, gatt, ad.node)
+        peers[h] = p
+        main.postDelayed({ locked(g) { if (!p.connected) drop(p) } }, CONNECT_TIMEOUT_MS)
+    }
+
+    /**
+     * A backgrounded iOS peer shows neither node nor summary (it cannot dial us reliably either), so we dial it, at most
+     * once per [RESYNC_MS] after a reconciliation, and learn its node at HELLO. Lab isolation needs the node: skipped then.
+     */
+    private fun connectBackgroundIos(g: Int, device: BluetoothDevice) {
+        val addr = device.address
+        val now = SystemClock.elapsedRealtime()
+        if (peers.size >= MAX_LINKS || allowedPeerNode != null || peers.values.any { it.device.address == addr }) return
+        if (now - (lastSyncedAddress[addr] ?: Long.MIN_VALUE / 2) < RESYNC_MS || (backoff[addr]?.second ?: 0) > now) return
+        val h = "c:$addr"
+        Log.i(TAG, "connecting to backgrounded iOS ($addr)")
+        val gatt = device.connectGatt(context, false, clientCallback(g, h), BluetoothDevice.TRANSPORT_LE) ?: return
+        val p = Peer(h, device, gatt, null)
         peers[h] = p
         main.postDelayed({ locked(g) { if (!p.connected) drop(p) } }, CONNECT_TIMEOUT_MS)
     }
@@ -372,9 +427,10 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 locked(g) {
                     // Results without the scan response lack the node id; the merged one follows.
-                    val ad = parseGattAdvert(result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)))
-                        ?: nameAdvert(result.scanRecord?.deviceName) ?: return
-                    connect(g, result.device, ad)
+                    val record = result.scanRecord
+                    val ad = parseGattAdvert(record?.getServiceData(ParcelUuid(SERVICE_UUID))) ?: nameAdvert(record?.deviceName)
+                    if (ad != null) connect(g, result.device, ad)
+                    else if (overflowAdvert(record?.getManufacturerSpecificData(APPLE))) connectBackgroundIos(g, result.device)
                 }
             }
             override fun onScanFailed(errorCode: Int) { Log.w(TAG, "scan failed: $errorCode") }
@@ -383,7 +439,7 @@ internal class GattLink(private val context: Context, private val allowedPeerNod
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
         scanCb = cb
-        scanner?.startScan(listOf(filter), settings, cb)
+        scanner?.startScan(listOf(filter) + overflowFilters(), settings, cb)
     }
 
     private fun service() = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {

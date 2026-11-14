@@ -19,14 +19,19 @@ import org.mndt.mesh.PostView
 import org.mndt.mesh.Region
 import java.time.Duration
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToLong
 import org.mndt.app.ui.post.latLng
+import org.mndt.app.ui.post.allClear
 import org.mndt.app.ui.post.officialHazard
 import org.mndt.mesh.HazardKind
+import org.mndt.mesh.Jma
 
 /** An official hazard notice: shown at every zoom and above ordinary pins. A user's own hazard claim is an ordinary post. */
-val PostView.alert get() = ext.hazard != null && officialHazard
+val PostView.alert get() = ext.hazard?.takeIf { officialHazard }?.allClear == false
+/** An official all-clear: the danger is over, so it is an ordinary pin and its area is not drawn. */
+val PostView.allClearNotice get() = ext.hazard?.takeIf { officialHazard }?.allClear == true
 
 /**
  * Where a post's pin goes: its own position, else for a hazard the epicentre / volcano / cyclone centre it carries,
@@ -43,10 +48,53 @@ fun PostView.mapPoint(): Pair<Double, Double>? = latLng() ?: ext.hazard?.let { h
         ?: ext.regions.filterIsInstance<Region.Circle>().firstOrNull()?.let { it.lat / 1e6 to it.lon / 1e6 }
 }
 
-/** Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail). */
+/**
+ * Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its
+ * detail) and JMA posts a newer one of the same series replaces ([supersededJma]).
+ */
 fun mapPosts(posts: List<PostView>): List<PostView> {
     val ids = posts.mapTo(HashSet()) { it.id }
-    return posts.filter { it.mapPoint() != null && it.ext.annotation?.targetEventId !in ids }
+    val superseded = supersededJma(posts)
+    return posts.filter { it.id !in superseded && it.mapPoint() != null && it.ext.annotation?.targetEventId !in ids }
+}
+
+private const val R06 = "気象警報・注意報（Ｒ０６）（"
+
+/**
+ * jma §5.3: official JMA posts that a newer official post of the same series replaces on the map. Display only: the
+ * timeline and detail keep them, and delivery is unchanged. Newer means a later `Control/DateTime`; one that does not
+ * parse never replaces nor is replaced. Earthquakes (series Title + Status + EventID) are replaced by a newer post of the
+ * same Pref or a newer whole one; R06 warnings (weather §7.1, series Title + Status + 府県予報区等 code) by any newer post.
+ */
+fun supersededJma(posts: List<PostView>): Set<String> {
+    fun series(j: Jma): List<String>? = when {
+        j.earthquake -> listOf("earthquake", j.title, j.status, j.eventId)
+        j.title.startsWith(R06) -> j.forecastArea?.let { listOf("r06", j.title, j.status, it) }
+        else -> null
+    }
+    class Entry(val id: String, val jma: Jma, val at: Instant)
+    return posts.mapNotNull { p ->
+        p.ext.jma?.takeIf { p.officialHazard }?.let { j -> runCatching { OffsetDateTime.parse(j.dateTime).toInstant() }.getOrNull()?.let { Entry(p.id, j, it) } }
+    }.groupBy { series(it.jma) }.filterKeys { it != null }.values.flatMap { group ->
+        group.filter { old -> group.any { new -> new.at > old.at && (!new.jma.earthquake || new.jma.whole || (new.jma.pref != null && new.jma.pref == old.jma.pref)) } }
+    }.mapTo(HashSet()) { it.id }
+}
+
+/** Shindo values in order (hazard §5 `jp.jma.shindo`) and the zoom from which an earthquake of that shindo shows; unlisted: every zoom. */
+private val shindoOrder = listOf("0", "1", "2", "3", "4", "5-", "5+", "6-", "6+", "7")
+private val shindoZoom = mapOf("0" to 8.0, "1" to 8.0, "2" to 8.0, "3" to 6.0, "4" to 5.0)
+/** Zooms at which some alert appears or disappears ([minZoom]); the area layer is rebuilt only when the camera crosses one. */
+val ALERT_ZOOM_STEPS = listOf(0.0, 5.0, 6.0, 8.0)
+
+/**
+ * The lowest zoom at which a post's pin and area show. Ordinary posts from [POST_MIN_ZOOM]; alerts at every zoom, except
+ * an earthquake with a shindo scale: 1–2 from zoom 8, 3 from 6, 4 from 5, 5- and above everywhere (the highest shindo counts).
+ */
+val PostView.minZoom: Double get() {
+    if (!alert) return POST_MIN_ZOOM
+    val hazard = ext.hazard?.takeIf { it.kind is HazardKind.Earthquake } ?: return 0.0
+    val top = hazard.scales.filter { it.scheme == "jp.jma.shindo" }.map { shindoOrder.indexOf(it.value) }.filter { it >= 0 }.maxOrNull() ?: return 0.0
+    return shindoZoom[shindoOrder[top]] ?: 0.0
 }
 
 class MapViewModel(private val mesh: MeshCoordinator, val location: LocationRepository, private val context: Context) : ViewModel() {

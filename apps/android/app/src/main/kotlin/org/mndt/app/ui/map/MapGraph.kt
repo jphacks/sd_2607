@@ -107,9 +107,15 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     val handle = remember { MapHandle() }
     val all = remember(state.posts) { mapPosts(state.posts) }
     val shown = remember(all, vm.filter) { if (vm.filter.isEmpty()) all else all.filter { it.category() in vm.filter } }
+    // Alert areas follow their pin's [minZoom]; the alert layers have none of their own, so the features are rebuilt
+    // whenever the camera crosses one of those zooms (ordinary areas are cut by the post layers' minzoom).
+    val alertStep by remember { derivedStateOf {
+        handle.tick.intValue
+        handle.map?.cameraPosition?.zoom?.let { z -> ALERT_ZOOM_STEPS.lastOrNull { z >= it } } ?: 0.0
+    } }
     // An area is a fill plus one outline of its perimeter: geohash cells are filled without edges and traced as a whole.
-    val regions = remember(shown) {
-        featureCollection(shown.flatMap { p ->
+    val regions = remember(shown, alertStep) {
+        featureCollection(shown.filterNot { it.allClearNotice || (it.alert && it.minZoom > alertStep) }.flatMap { p ->
             val color = (p.ext.hazard?.takeIf { p.officialHazard }?.color(true) ?: p.category()?.color ?: Mosimo.info).hex()
             val (fill, line) = if (p.alert) "alert-fill" to "alert-line" else "post-fill" to "post-line"
             val circles = p.ext.regions.filterIsInstance<Region.Circle>().map { circleRing(it.lat / 1e6, it.lon / 1e6, it.r / 1000.0) }
@@ -136,7 +142,7 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         if (focus == null || focus == vm.handledFocus || map == null) return@LaunchedEffect
         val post = state.posts.firstOrNull { it.id == focus } ?: return@LaunchedEffect
         vm.handledFocus = focus
-        post.mapPoint()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, if (post.alert) 8.0 else 15.0, 0.5) }
+        post.mapPoint()?.let { (lat, lng) -> vm.centered = true; handle.moveTo(lat, lng, if (post.alert || post.allClearNotice) 8.0 else 15.0, 0.5) }
         vm.stack = listOf(focus); vm.selected = focus
     }
     val selected = vm.selected?.let { id -> state.posts.firstOrNull { it.id == id } }

@@ -74,7 +74,7 @@ struct KindLabel: View {
         if let hazard = post.ext.hazard { HazardBadge(post: post, hazard: hazard) } else { plain }
     }
     private var plain: some View {
-        let (icon, color, label) = post.isPublic ? ("info.circle", post.priorityColor, bsafLabel(post.ext.bsaf?.type))
+        let (icon, color, label) = post.isPublic ? ("info.circle", post.priorityColor, post.publicLabel)
             : ("mappin.and.ellipse", Mosimo.info, "周辺の投稿")
         return HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 14)).foregroundStyle(color)
@@ -90,7 +90,7 @@ struct BsafVerification: View {
     var body: some View {
         // The importer may be named whenever its chain is confirmed now; it re-posts, it is not the source.
         let importer = post.chain.flatMap { $0.confirmedNow ? $0.name : nil }
-        let bot = post.ext.bsaf?.botDid.map { shortDid($0, "") } ?? "Bot"
+        let bot = post.ext.jma != nil ? "気象庁防災情報XML" : post.ext.bsaf?.botDid.map { shortDid($0, "") } ?? "Bot"
         VStack(alignment: .leading, spacing: 2) {
             if post.importerAuthorized {
                 HStack(spacing: 2) {

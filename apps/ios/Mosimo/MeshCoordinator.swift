@@ -219,7 +219,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             reloadPublicConfig()
         } catch {
             fatal = true
-            issue("暗号化状態を開けません。鍵は再生成せず停止しました")
+            issue("暗号化状態を開けません。鍵は再生成せず停止しました（\(error)）")
         }
         refresh()
     }
@@ -552,16 +552,16 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         note("中継を停止。保存済み投稿とリレー設定は保持")
     }
 
-    /// The Bot/type pairs selected for ingress by the shipped config, as shown in settings (roots are in `state.trustRoots`).
+    /// The Bot/type and feed/type pairs selected for ingress by the shipped config, as shown in settings (roots are in `state.trustRoots`).
     func trustSources() -> [TrustSource] {
         guard let json = Self.trustAsset("mosimo-public-trust"), let n = try? Json.parse(json) else { return [] }
         var order = [String](), types = [String: [String]]()
         for s in n["selected"]?.array ?? [] {
-            guard let d = s["botDid"]?.string, let t = s["type"]?.string else { continue }
+            guard let d = s["botDid"]?.string ?? s["feed"]?.string.map({ "フィード \($0)" }), let t = s["type"]?.string else { continue }
             if types[d] == nil { order.append(d) }
             types[d, default: []].append(t)
         }
-        return order.map { TrustSource(botDid: $0, types: types[$0]!) }
+        return order.map { TrustSource(name: $0, types: types[$0]!) }
     }
 
     /// A trust config bundled with the app; Debug builds alone also bundle `mosimo-public-trust-test` (project.yml).
@@ -697,6 +697,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         forwarded = forwarded.filter { live.contains($0.key) }
         s.forwardedTo = forwarded.mapValues(\.count)
         s.hideExpired = hideExpired
+        // The snapshot is rebuilt every second; only a changed post list can bring a hazard notification due.
+        if s.posts != state.posts { HazardNotifier.shared.check(s.posts, me: author?.nostrPubkey) }
         if s != state { state = s }
     }
 
@@ -745,7 +747,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             // Development builds alone ship the test-post root; release builds have no such resource.
             let test = Self.trustAsset(Self.testTrustAsset).flatMap { try? PublicIngress.config($0) }
             (publicConfig, trustEntries) = PublicIngress.effective(builtin, test, trustChoices())
-            state.publicStatus = "公的情報: 有効 root \(publicConfig.roots.filter(\.enabled).count) / 選択 Bot/type \(publicConfig.selected.count)（未設定は投入不可）"
+            state.publicStatus = "公的情報: 有効 root \(publicConfig.roots.filter(\.enabled).count) / 選択 Bot・フィード/type \(publicConfig.selected.count)（未設定は投入不可）"
         } catch {
             state.publicStatus = "公的情報: config 読込失敗 / fail closed（既存鍵・失効履歴は保持）"
         }

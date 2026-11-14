@@ -3,7 +3,8 @@ import MapKit
 import MosimoCore
 import SwiftUI
 
-/// Ordinary posts and their areas appear from this web-mercator zoom (a city or so); official alerts show at every zoom.
+/// Ordinary posts and their areas appear from this web-mercator zoom (a city or so); official alerts show at every zoom
+/// (earthquakes by their shindo, [PostView.minZoom]).
 let postMinZoom = 10.0
 
 /// Web-mercator zoom level of [v]'s current camera (MapKit has no zoom of its own; derived from the longitude span).
@@ -124,7 +125,7 @@ struct GsiMapView: UIViewRepresentable {
         tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
         controller.view = map
-        context.coordinator.zoomedIn = webZoom(map) >= postMinZoom
+        context.coordinator.zoom = webZoom(map)
         DispatchQueue.main.async { controller.ready = true }
         return map
     }
@@ -143,6 +144,7 @@ struct GsiMapView: UIViewRepresentable {
     }
 
     fileprivate static func regionOverlays(_ p: PostView) -> [MKOverlay] {
+        if p.allClearNotice { return [] }
         // An official hazard tints its area by severity; user claims keep the default colour.
         let color = UIColor(p.hazardAreaColor ?? p.category?.color ?? Mosimo.info)
         let alert = p.alert
@@ -170,8 +172,8 @@ struct GsiMapView: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: GsiMapView
-        /// The camera is at [postMinZoom] or closer: ordinary posts and their areas are shown, not only alerts.
-        var zoomedIn = false
+        /// Web-mercator zoom of the camera at the last sync; each post shows from its [PostView.minZoom].
+        var zoom = 0.0
         /// Region overlays on the map, keyed by post (id and the flags that change its look).
         private var shownRegions = [String: [MKOverlay]]()
         init(_ parent: GsiMapView) { self.parent = parent }
@@ -180,7 +182,7 @@ struct GsiMapView: UIViewRepresentable {
 
         /// Puts on the map the pins and areas of the posts visible at the current zoom, adding and removing only the difference.
         @MainActor func sync(_ map: MKMapView) {
-            let visible = zoomedIn ? parent.posts : parent.posts.filter(\.alert)
+            let visible = parent.posts.filter { zoom >= $0.minZoom }
             var wanted = [String: (CLLocationCoordinate2D, PostView)]()
             for p in visible where wanted[p.id] == nil { if let c = p.mapPoint { wanted[p.id] = (c, p) } }
             let existing = map.annotations.compactMap { $0 as? PostAnnotation }
@@ -203,10 +205,12 @@ struct GsiMapView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ map: MKMapView) {
-            let z = webZoom(map) >= postMinZoom
-            guard z != zoomedIn else { return }
-            zoomedIn = z
-            sync(map)
+            // Re-sync only when the camera crosses a step at which some post appears or disappears.
+            func step(_ z: Double) -> Int { mapZoomSteps.filter { z >= $0 }.count }
+            let z = webZoom(map)
+            let crossed = step(z) != step(zoom)
+            zoom = z
+            if crossed { sync(map) }
         }
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {

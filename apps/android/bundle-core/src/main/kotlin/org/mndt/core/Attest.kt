@@ -57,14 +57,19 @@ object Attest {
         val issuerDomain: String? = blocks[ISSUER_DOMAIN]?.let { text(it["domain"]).lowercase() }
         val trustLevel: Long? = blocks[TRUST_LEVEL]?.let { number(it["level"]).also { l -> require(l <= 3) } }
         val revocationSubkey: ByteArray? = blocks[SUBKEY]?.let { publicKey(it["key"]) }
-        /** importer block: botDid → types. Null when the block is absent. */
-        val importerSources: Map<String, Set<String>>? = blocks[IMPORTER]?.let { block ->
-            val sources = block["sources"] as? List<*> ?: error("Expected sources")
-            require(sources.size <= 16)
-            val parsed = sources.map { s -> map(s).let { text(it["botDid"]).also { d -> require(AtRepository.didPattern.matches(d)) } to sortedTexts(it["types"], 32, min = 1).toSet() } }
-            require(parsed.zipWithNext().all { (a, b) -> lexical.compare(a.first, b.first) < 0 }) { "Unsorted sources" }
-            require(parsed.sumOf { it.second.size } <= 64)
-            parsed.toMap()
+        /** importer block: botDid → types. Null when the block is absent; empty when the block has no `sources`. */
+        val importerSources: Map<String, Set<String>>?
+        /** importer block: feed → types (importer §1.1). Null when the block is absent; empty when the block has no `feeds`. */
+        val importerFeeds: Map<String, Set<String>>?
+        init {
+            val block = blocks[IMPORTER]
+            importerSources = block?.let { b -> pairs(b["sources"], "botDid", 16) { require(AtRepository.didPattern.matches(it)) } }
+            importerFeeds = block?.let { b -> pairs(b["feeds"], "feed", 8) { require(utf8(it).size in 1..MAX_TEXT_BYTES) } }
+            if (block != null) {
+                // importer §1: sources, feeds or both, each non-empty; §4: at most 64 pairs in all.
+                require(block["sources"] != null || block["feeds"] != null) { "importer needs sources or feeds" }
+                require(importerSources!!.values.sumOf { it.size } + importerFeeds!!.values.sumOf { it.size } <= 64)
+            }
         }
         /** Display name for `identity`: the organization if any, else the owner. */
         val displayName: String get() = orgName ?: ownerName
@@ -133,6 +138,7 @@ object Attest {
         var parentUntil: Instant? = null
         var parentOrg: String? = null
         var parentSources: Map<String, Set<String>>? = null
+        var parentFeeds: Map<String, Set<String>>? = null
         for ((i, a) in attestations.withIndex()) {
             val leaf = i == attestations.lastIndex
             fun invalid(why: String) = ChainResult(ChainState.INVALID, "attestation $i: $why", root)
@@ -145,15 +151,22 @@ object Attest {
             if (a.maxDepth > parentDepth - 1) return invalid("delegation depth exceeds the issuer's")
             if (!leaf && a.maxDepth < 1) return invalid("intermediate without delegation")
             if (parentOrg != null && a.orgId != parentOrg) return invalid("organization differs from the issuer's")
+            // importer §1: each child pair lies in the issuer's pairs of the same kind; an issuer block without `feeds` allows
+            // no child feeds (likewise `sources`). A child of a block-less issuer is unconstrained.
             val sources = a.importerSources
-            if (parentSources != null && sources != null && !sources.all { (bot, types) -> parentSources!![bot]?.containsAll(types) == true }) return invalid("importer sources exceed the issuer's")
+            val feeds = a.importerFeeds
+            if (parentSources != null && sources != null && !within(sources, parentSources)) return invalid("importer sources exceed the issuer's")
+            if (parentFeeds != null && feeds != null && !within(feeds, parentFeeds)) return invalid("importer feeds exceed the issuer's")
             parentRoles = a.roles.toSet(); parentDepth = a.maxDepth; parentFrom = a.validFrom; parentUntil = a.validUntil
-            parentOrg = a.orgId ?: parentOrg; parentSources = sources // importer §1: a child of a block-less issuer is unconstrained
+            parentOrg = a.orgId ?: parentOrg; parentSources = sources; parentFeeds = feeds
         }
         if (now == null) return ChainResult(ChainState.UNKNOWN_TIME, "clock unknown", root, attestations)
         if (!attestations.all { it.validAt(createdAt) }) return ChainResult(ChainState.EXPIRED, "outside validity at creation", root, attestations)
         return ChainResult(ChainState.VERIFIED, "verified", root, attestations, expiredNow = !attestations.all { it.validAt(now) })
     }
+
+    private fun within(child: Map<String, Set<String>>, parent: Map<String, Set<String>>) =
+        child.all { (name, types) -> parent[name]?.containsAll(types) == true }
 
     /**
      * attest.chain §1: a 32-byte leaf is the Nostr key itself; a 33-byte leaf is the atproto key, bound to the Nostr
@@ -291,6 +304,15 @@ object Attest {
     private fun lexicographic(x: ByteArray, y: ByteArray): Int {
         for (i in 0 until minOf(x.size, y.size)) { val c = (x[i].toInt() and 255).compareTo(y[i].toInt() and 255); if (c != 0) return c }
         return x.size.compareTo(y.size)
+    }
+    /** `[{<key>: Text, types: Text[]}]` sorted by key without duplicates; absent → empty. Present means non-empty. */
+    private fun pairs(v: Any?, key: String, max: Int, check: (String) -> Unit): Map<String, Set<String>> {
+        if (v == null) return emptyMap()
+        val list = v as? List<*> ?: error("Expected $key list")
+        require(list.size in 1..max)
+        val parsed = list.map { e -> map(e).let { text(it[key]).also(check) to sortedTexts(it["types"], 32, min = 1).toSet() } }
+        require(parsed.zipWithNext().all { (a, b) -> lexical.compare(a.first, b.first) < 0 }) { "Unsorted $key list" }
+        return parsed.toMap()
     }
     private fun sortedTexts(v: Any?, max: Int, min: Int = 0): List<String> = (v as? List<*> ?: error("Expected array")).map { text(it).also { t -> require(utf8(t).size <= MAX_TEXT_BYTES) } }
         .also { require(it.size in min..max && it.zipWithNext().all { (a, b) -> lexicographic(utf8(a), utf8(b)) < 0 }) { "Unsorted/duplicate/oversized list" } }

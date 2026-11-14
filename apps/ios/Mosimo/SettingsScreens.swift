@@ -5,6 +5,7 @@ import UIKit
 struct SettingsScreen: View {
     @EnvironmentObject private var mesh: MeshCoordinator
     @EnvironmentObject private var nav: Navigator
+    @ObservedObject private var alerts = HazardNotifier.shared
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -14,6 +15,18 @@ struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("設定").font(.titleLarge).foregroundStyle(Mosimo.textPrimary).padding(.top, 16).padding(.bottom, 8)
                 LocationCard()
+                Header(text: "通知")
+                if alerts.anyOn && alerts.status == .denied {
+                    Text("通知が許可されていません。設定アプリで許可してください").font(.bodySmall).foregroundStyle(Mosimo.warning)
+                }
+                Group_ {
+                    ForEach(Array(alertRows.enumerated()), id: \.offset) { i, row in
+                        if i > 0 { Line() }
+                        SwitchRow(icon: row.icon, tint: row.tint, title: row.title, subtitle: row.subtitle,
+                                  isOn: Binding(get: { alerts.genres.contains(row.genre) }, set: { alerts.set(row.genre, $0) }),
+                                  id: "settings.hazardAlerts.\(row.genre.rawValue)")
+                    }
+                }
                 Header(text: "通信（もしもプロトコル）")
                 Group_ {
                     SettingRow(icon: "checkmark.shield", tint: Mosimo.safe, title: "公式情報とみなす発信元",
@@ -52,6 +65,15 @@ struct SettingsScreen: View {
         }
         .background(Mosimo.bgBase)
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// One switch per notification genre (HazardAlerts.due has the rules).
+    private var alertRows: [(genre: HazardAlerts.Genre, icon: String, tint: Color, title: String, subtitle: String)] {
+        let official = "公式情報。現在地が範囲内なら「警戒」以上、範囲や現在地が分からなければ「極めて重大」のみ"
+        return [(.earthquake, "waveform.path.ecg", Mosimo.danger, "地震", official),
+                (.weather, "cloud.rain.fill", Mosimo.warning, "気象警報・注意報", official),
+                (.otherOfficial, "exclamationmark.triangle.fill", Mosimo.warning, "その他の公式情報（津波・火山など）", official),
+                (.nearbyDanger, "person.wave.2", Mosimo.info, "近くの危険情報", "現在地から2km以内の「危険」の投稿（1時間以内・利用者の投稿で未確認）")]
     }
 
     private func unique(_ items: [String]) -> [String] { items.reduce(into: []) { if !$0.contains($1) { $0.append($1) } } }
@@ -258,11 +280,11 @@ struct TrustScreen: View {
                 }
             }
             AddRootSection()
-            Header(text: "取り込みを選択した Bot と種別")
+            Header(text: "取り込みを選択した Bot・フィードと種別")
             if sources.isEmpty { Group_ { NoneText() } }
             ForEach(sources) { source in
                 Group_ {
-                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.botDid, value: "\(source.types.count)種別")
+                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.name, value: "\(source.types.count)種別")
                     Line()
                     detail(source.types.map(bsafLabel).joined(separator: "・"))
                 }
