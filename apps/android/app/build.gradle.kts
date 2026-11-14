@@ -53,7 +53,7 @@ android {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Without a keystore (F-Droid's build server, which signs with its own key) the release APK stays unsigned.
-            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
+            signingConfig = signingConfigs.findByName("release")?.takeIf { it.storeFile != null }
         }
     }
     // The dependency blob is encrypted for Google; F-Droid rejects it in APKs. The Play AAB keeps it.
