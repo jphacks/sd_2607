@@ -52,7 +52,7 @@ type Feed = {
 
 | ブロック | 意味 | 包含規則 |
 |---|---|---|
-| `dev.jisaku.mosimo.attest.importer` | 転載してよい `(botDid, type)` と `(feed, origin, type)` の組 | 子の各組は親の同じ種類の組に含まれる（§1.3）。親のブロックが `feeds` を持たなければ子は `feeds` を持てない（`sources` も同様）。親にブロックがなければ、親が `import` 役割を持つ限り任意 |
+| `dev.jisaku.mosimo.attest.importer` | 転載してよい `(botDid, type)` と `(feed, origin, type)` の組 | 子の各組は、チェーン上で最も近い祖先のブロックの同じ種類の組に含まれる（§1.3）。そのブロックが `feeds` を持たなければ子は `feeds` を持てない（`sources` も同様）。ブロックを持たない中間の鍵は範囲を広げない。祖先のどれもブロックを持たなければ、直前の親が `import` 役割を持つ限り任意 |
 | `dev.jisaku.mosimo.attest#organization` | 転載サーバーを運営する組織 | 鍵署名プロトコルの規則 |
 
 - `owner` は転載サーバーの運営者を表す。認可に通った投稿の発信者表示には `organization.orgName` を用いる。
