@@ -1,0 +1,26 @@
+[package]
+name = "mosimo-ca"
+version = "0.1.0"
+edition = "2021"
+description = "Issuer-side implementation of dev.jisaku.mosimo.attest (key attestations and revocation)"
+license = "MIT"
+publish = false
+
+[dependencies]
+age = { version = "0.11", features = ["armor"] }
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+libc = "0.2"
+k256 = { version = "0.13", features = ["schnorr", "ecdsa", "pkcs8", "pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rpassword = "7"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+ureq = "2"
+zeroize = "1"
+
+[profile.release]
+strip = true
