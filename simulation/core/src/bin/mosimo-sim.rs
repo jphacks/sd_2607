@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use mosimo_sim_core::spec::builtin_scenarios;
+use mosimo_sim_core::spec::{builtin_scenarios, SiteKind};
 use mosimo_sim_core::sweep::{run_sweep, SweepRequest, SweepTarget};
 use mosimo_sim_core::{Sim, SimParams};
 
@@ -13,7 +13,7 @@ fn main() {
         eprintln!("usage: mosimo-sim <shelter|kawauchi|noto> [adoption ...] [--seeds N] [--hours H] [--scale S] [--direct]");
         std::process::exit(2);
     };
-    let spec = builtin_scenarios().into_iter().find(|s| &s.id == id).unwrap_or_else(|| {
+    let mut spec = builtin_scenarios().into_iter().find(|s| &s.id == id).unwrap_or_else(|| {
         eprintln!("unknown scenario {id}");
         std::process::exit(2);
     });
@@ -24,6 +24,7 @@ fn main() {
     let mut target = SweepTarget::All;
     let mut trace = false;
     let mut series = false;
+    let mut diag = false;
     let mut it = args.iter().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -42,6 +43,22 @@ fn main() {
             "--adoption" => params.adoption = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0),
             "--trace" => trace = true,
             "--series" => series = true,
+            "--diag" => {
+                trace = true;
+                diag = true;
+            }
+            // Multiplies the Starlink Direct beam capacity.
+            "--beam" => spec.starlink_direct.beam_msgs_per_min *= it.next().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0),
+            // Brings every site's Starlink forward to at most H hours after the quake.
+            "--starlink-by" => {
+                let h: f64 = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                for site in &mut spec.sites {
+                    if site.kind == SiteKind::Shelter || site.kind == SiteKind::Hq {
+                        site.starlink_from_h = Some(site.starlink_from_h.map_or(h, |x| x.min(h)));
+                    }
+                }
+            }
+            "--starlink-cap" => params.starlink_capacity_factor = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0),
             "--residents" => target = SweepTarget::Residents,
             v => adoptions.push(v.parse().expect("adoption must be a number")),
         }
@@ -56,8 +73,72 @@ fn main() {
             p.adoption = a;
             let mut sim = Sim::new(spec.clone(), p);
             let end = hours.map(|h| (h * 60.0) as f32).unwrap_or(sim.end);
+            // Hourly watch: Starlink Direct demand, and when unknown shelters fill and become known.
+            let mut sd_peak = 0.0f64;
+            let mut sd_over_steps = 0u32;
+            let mut sl_peak = 0.0f32;
+            let mut shelter_seen: Vec<(f32, f32)> = vec![(f32::INFINITY, f32::INFINITY); sim.sites.len()];
+            let mut next_h = 0.0f32;
             while sim.t < end {
                 sim.step();
+                sd_peak = sd_peak.max(if sim.sd_capacity > 0.0 { sim.sd_demand / sim.sd_capacity } else { 0.0 });
+                sd_over_steps += (sim.sd_capacity > 0.0 && sim.sd_demand > sim.sd_capacity) as u32;
+                sl_peak = sl_peak.max(sim.starlink_load);
+                if diag && sim.t >= next_h {
+                    next_h += 60.0;
+                    for (k, site) in sim.sites.iter().enumerate() {
+                        if site.kind != SiteKind::Shelter || site.known_initially {
+                            continue;
+                        }
+                        if site.present >= 10 && shelter_seen[k].0.is_infinite() {
+                            shelter_seen[k].0 = sim.t;
+                        }
+                        if (site.hq_known || site.ops_known) && shelter_seen[k].1.is_infinite() {
+                            shelter_seen[k].1 = sim.t;
+                        }
+                    }
+                }
+            }
+            if diag {
+                let sm = sim.summary();
+                let med = |l: &mosimo_sim_core::metrics::Latency| l.median_h.map_or("-".into(), |h| format!("{h:.2}h"));
+                println!(
+                    "  trapped->HQ {} / road cut->ops {} / isolated->ops {} / needs->ops {} / anpi HQ 24h {:.0}% 72h {:.0}%",
+                    med(&sm.trapped_to_hq),
+                    med(&sm.road_cut_to_ops),
+                    med(&sm.isolated_to_ops),
+                    med(&sm.needs_to_ops),
+                    sm.anpi_hq_24h * 100.0,
+                    sm.anpi_hq_72h * 100.0
+                );
+                let c = &sim.counters;
+                println!(
+                    "  Starlink Direct: sent {} dropped {} / beam demand peak {:.0}% of capacity, {} steps over / Starlink cell load peak {:.0}%",
+                    c.sd_sent,
+                    c.sd_dropped,
+                    sd_peak * 100.0,
+                    sd_over_steps,
+                    sl_peak * 100.0
+                );
+                println!("  calls ok {} failed {} / 119 ok {} busy {} / gateway uploads {} / mesh exchanges {}", c.calls_ok, c.calls_failed, c.calls_119_ok, c.calls_119_busy, c.gateway_uploads, c.mesh_exchanges);
+                let fmt = |x: f32| if x.is_finite() { format!("{:.0}h", x / 60.0) } else { "-".into() };
+                println!("  isolated settlements: name zone pop | isolated_at hq_at ops_at | residents with app");
+                for (k, st) in sim.settlements.iter().enumerate() {
+                    if !st.isolated_since.is_finite() && st.isolated_msg == u32::MAX {
+                        continue;
+                    }
+                    let m = st.isolated_msg;
+                    let (hq, ops) = if m != u32::MAX { (sim.msgs[m as usize].hq_at, sim.msgs[m as usize].ops_at) } else { (f32::INFINITY, f32::INFINITY) };
+                    let apps = sim.agents.iter().filter(|a| a.settlement == k as u32 && a.app).count();
+                    println!("    {} {} {} | {} {} {} | {}", st.name, sim.zones[st.zone as usize].name, st.pop, fmt(st.isolated_since), fmt(hq), fmt(ops), apps);
+                }
+                println!("  shelters unknown at first: name zone | 10+ people at, known at, people now");
+                for (k, site) in sim.sites.iter().enumerate() {
+                    let (seen, known) = shelter_seen[k];
+                    if seen.is_finite() {
+                        println!("    {} {} | {} {} {}", site.name, sim.zones[site.zone as usize].name, fmt(seen), fmt(known), site.present);
+                    }
+                }
             }
             let mut groups: std::collections::BTreeMap<String, u32> = Default::default();
             for e in &sim.events {
