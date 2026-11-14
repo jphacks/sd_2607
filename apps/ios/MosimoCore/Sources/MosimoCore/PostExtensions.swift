@@ -12,7 +12,8 @@ public enum Region: Equatable, Sendable {
     case geohash(String)
 }
 /// geo#area: the union of [regions]; [approximation] marks a covering approximation of an original area.
-public struct Area: Equatable, Sendable { public let regions: [Region]; public let approximation: Bool }
+/// [complete] is false when an element could not be read, so a point outside [regions] is unknown, not outside (geo §4.2).
+public struct Area: Equatable, Sendable { public let regions: [Region]; public let approximation: Bool; public var complete = true }
 /// validity: `from <= t < until`; an absent bound is unknown, never inferred.
 public struct Validity: Equatable, Sendable { public let from: String?; public let until: String? }
 /// BSAF original tags; `time:` is the source event time, not the import time.
@@ -157,7 +158,9 @@ public enum Extensions {
             p.origin = Origin(lat: lat, lon: lon, acc: m["acc"]?.int, at: m["at"]?.text)
         }
         p.areas = ext.filter { $0["$type"] == .text(area) }.map { m in
-            Area(regions: (m["regions"]?.array ?? []).compactMap { region($0.map) }, approximation: m["approximation"] == .bool(true))
+            let raw = m["regions"]?.array ?? []
+            let regions = raw.compactMap { region($0.map) }
+            return Area(regions: regions, approximation: m["approximation"] == .bool(true), complete: regions.count == raw.count)
         }
         if let m = first(validity) {
             let v = Validity(from: m["from"]?.text, until: m["until"]?.text)

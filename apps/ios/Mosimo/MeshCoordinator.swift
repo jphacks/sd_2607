@@ -696,6 +696,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         forwarded = forwarded.filter { live.contains($0.key) }
         s.forwardedTo = forwarded.mapValues(\.count)
         s.hideExpired = hideExpired
+        // The snapshot is rebuilt every second; only a changed post list can bring a hazard notification due.
+        if s.posts != state.posts { HazardNotifier.shared.check(s.posts, me: author?.nostrPubkey) }
         if s != state { state = s }
     }
 

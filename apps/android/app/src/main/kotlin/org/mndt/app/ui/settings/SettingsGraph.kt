@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.EntryProviderScope
@@ -40,6 +41,8 @@ import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 import org.koin.dsl.module
 import dev.jisaku.mosimo.BuildConfig
+import org.mndt.app.alert.AlertGenre
+import org.mndt.app.alert.HazardNotifier
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.Navigator
 import org.mndt.app.ui.SettingsKey
@@ -81,6 +84,7 @@ private fun SettingsScreen(nav: Navigator) {
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("設定", Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleLarge, color = Mosimo.textPrimary)
         LocationCard(nav)
+        AlertSwitch()
         Header("通信（もしもプロトコル）")
         Group {
             SettingRow(Icons.Outlined.VerifiedUser, Mosimo.safe, "公式情報とみなす発信元",
@@ -158,6 +162,39 @@ private fun LocationCard(nav: Navigator) {
             }
             ActionButton(Icons.Outlined.Map, "地図で確認") {
                 nav.select(Tab.MAP)
+            }
+        }
+    }
+}
+
+/** Hazard notifications per genre ([HazardNotifier]); switching one on asks for POST_NOTIFICATIONS when it is missing (Android 13+). */
+@Composable
+private fun AlertSwitch() {
+    val context = LocalContext.current
+    val on = remember { mutableStateMapOf(*AlertGenre.entries.map { it to HazardNotifier.enabled(context, it) }.toTypedArray()) }
+    var allowed by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    LifecycleResumeEffect(Unit) {
+        allowed = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        onPauseOrDispose { }
+    }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = it }
+    Header("通知")
+    if (!allowed && on.values.any { it }) Text("通知が許可されていないため届きません", Modifier.padding(start = 4.dp),
+        style = MaterialTheme.typography.bodySmall, color = Mosimo.warning)
+    Group {
+        AlertGenre.entries.forEachIndexed { i, genre ->
+            if (i > 0) Line()
+            val (icon, subtitle) = when (genre) {
+                AlertGenre.EARTHQUAKE -> Icons.Outlined.Vibration to "公式の地震情報"
+                AlertGenre.WEATHER -> Icons.Outlined.Thunderstorm to "公式の気象警報・注意報、台風情報"
+                AlertGenre.OTHER_OFFICIAL -> Icons.Outlined.Campaign to "公式の津波・火山などの情報"
+                AlertGenre.NEARBY_DANGER -> Icons.Outlined.WarningAmber to "現在地から2km以内の利用者の「危険」投稿（未確認）"
+            }
+            SwitchRow(icon, Mosimo.danger, genre.label, subtitle, on[genre] == true) {
+                on[genre] = it; HazardNotifier.setEnabled(context, genre, it)
+                if (it && !allowed) {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) ask.launch(Manifest.permission.POST_NOTIFICATIONS) else openAppSettings(context)
+                }
             }
         }
     }

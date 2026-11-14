@@ -59,10 +59,17 @@ private fun AnimatedContentTransitionScope<*>.slide(forward: Boolean): ContentTr
     return slideIntoContainer(direction, slideSpec) togetherWith slideOutOfContainer(direction, slideSpec)
 }
 
+/** [openPost]: a post to show in the timeline tab (from a notification); [onOpened] clears it once pushed. */
 @Composable
-fun MosimoApp() {
+fun MosimoApp(openPost: String? = null, onOpened: () -> Unit = {}) {
     val nav = rememberNavigator()
     FirstLaunchPermissions()
+    LaunchedEffect(openPost) {
+        if (openPost == null) return@LaunchedEffect
+        nav.select(Tab.TIMELINE)
+        nav.push(PostKey(openPost))
+        onOpened()
+    }
     val mesh = koinInject<MeshCoordinator>()
     val error = mesh.state.collectAsStateWithLifecycle().value.error
     val snackbar = remember { SnackbarHostState() }
