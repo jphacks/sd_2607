@@ -122,6 +122,7 @@ Google Play とは別の経路です。Play 用の `android.yml`・`fastlane/`�
 
 - **バージョン**: `app/build.gradle.kts` の `versionCode`（毎回 1 ずつ増やす）と `versionName` をリリースごとに上げる。F-Droid はタグ時点のこの値を読むため、`versionCode = 48` のような数値リテラルのまま書く。Play の CI は従来どおり実行番号で上書きするので、Play の versionCode とは無関係。
 - **掲載情報**: リポジトリ直下の `fastlane/metadata/android/`（F-Droid 用）。リリースごとに `ja-JP` と `en-US` の `changelogs/<versionCode>.txt` を追加する。
+- **ABI 分割**: F-Droid は `-PmosimoAbi=<abi>` で ABI ごとに APK を作り、versionCode は `ソースの値×10 + n`（armeabi-v7a=1、x86=2、arm64-v8a=3、x86_64=4）になる。Play の AAB と GitHub Releases の APK は全 ABI 入りのまま。
 - **署名**: F-Droid は自分の鍵で署名し直す。GitHub Releases の APK は Play のアップロード鍵とは別の専用鍵（`secrets/github-release.sops.yaml`、証明書 SHA-256 `7e4503339f67aa0334f7046f98f369f74da7c870faa2b30d080ff06f93f8ae27`）で署名する。鍵を失うと更新できなくなるため、この暗号化ファイルを消さない。
 
 ### リリース手順

@@ -16,15 +16,55 @@ Repo: https://github.com/jphacks/sd_2607.git
 
 Builds:
   - versionName: 0.3.0
-    versionCode: 48
+    versionCode: 481
     commit: mosimo-v0.3.0
     subdir: apps/android/app
     gradle:
       - yes
     scandelete:
       - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=armeabi-v7a
+
+  - versionName: 0.3.0
+    versionCode: 482
+    commit: mosimo-v0.3.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=x86
+
+  - versionName: 0.3.0
+    versionCode: 483
+    commit: mosimo-v0.3.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=arm64-v8a
+
+  - versionName: 0.3.0
+    versionCode: 484
+    commit: mosimo-v0.3.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=x86_64
 
 AutoUpdateMode: Version mosimo-v%v
 UpdateCheckMode: Tags ^mosimo-v[0-9.]+$
+VercodeOperation:
+  - 10*%c+1
+  - 10*%c+2
+  - 10*%c+3
+  - 10*%c+4
 CurrentVersion: 0.3.0
-CurrentVersionCode: 48
+CurrentVersionCode: 484

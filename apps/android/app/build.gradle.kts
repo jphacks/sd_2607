@@ -18,6 +18,13 @@ android {
         versionName = "0.3.0"
         // The Play CI passes its Actions run number instead; Play versionCodes are independent of the source value.
         providers.gradleProperty("mosimoVersionCode").orNull?.let { versionCode = it.toInt() }
+        // F-Droid builds one APK per ABI with -PmosimoAbi=<abi> and versionCode*10 + n; Play and GitHub stay universal.
+        providers.gradleProperty("mosimoAbi").orNull?.let { abi ->
+            val n = listOf("armeabi-v7a", "x86", "arm64-v8a", "x86_64").indexOf(abi) + 1
+            require(n > 0) { "Unknown mosimoAbi: $abi" }
+            versionCode = versionCode!! * 10 + n
+            ndk { abiFilters += abi }
+        }
         manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
