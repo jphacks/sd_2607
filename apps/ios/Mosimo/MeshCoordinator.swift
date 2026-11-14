@@ -101,6 +101,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var timer: Timer?
     private let pathMonitor = NWPathMonitor()
     private var network = false
+    #if DEBUG
+    /// Lab-only `-mosimo.test.post` text, published on the first path update so its connectivity extension is known.
+    private var labPost: String?
+    #endif
 
     // Public information download and importer ingress (attest.importer §3).
     private var publicConfig = PublicIngress.Config()
@@ -173,11 +177,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         // Background relaunch (Core Bluetooth restoration) never shows UI: resume relaying here when already authorized.
         if relayEnabled && GattLink.authorized { start() }
         #if DEBUG
-        // Lab-only: `-mosimo.test.post "text"` publishes one located post at launch (device mesh test loop).
-        if let text = defaults.string(forKey: "mosimo.test.post") {
-            publish("［安全］" + text, extensions: [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125))],
-                    deliveryExpiresAtSeconds: Self.now() / 1000 + 3600)
-        }
+        // Lab-only: `-mosimo.test.post "text"` publishes one located post at launch (device mesh test loop), in networkChanged.
+        labPost = defaults.string(forKey: "mosimo.test.post")
         // `-mosimo.test.report <id prefix>` / `-mosimo.test.delete <id prefix>` act on a held event.
         if let p = defaults.string(forKey: "mosimo.test.report"), let e = engine.entries().first(where: { $0.event.id.hasPrefix(p) }) {
             report(e.event.id, type: "spam", comment: "試験", block: false)
@@ -713,6 +714,13 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         let fresh = up && !network
         network = up
         defer { refresh() }
+        #if DEBUG
+        if let text = labPost {
+            labPost = nil
+            publish("［安全］" + text, extensions: [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125)), connectivity(online: up)],
+                    deliveryExpiresAtSeconds: Self.now() / 1000 + 3600)
+        }
+        #endif
         guard up, !fatal, disk != nil else { return }
         if fresh, socket != nil { closeRelay(graceful: false) }
         relayFailures.removeAll(); relayRetryAt.removeAll(); relayDeferred.removeAll(); relayIndex = 0; registrationRetryAt = 0
