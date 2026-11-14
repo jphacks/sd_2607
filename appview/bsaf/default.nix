@@ -27,7 +27,9 @@ let
     enabled = cfg.publisher.enable;
     inherit (cfg) databasePath;
     credentialsDirectory = "/run/credentials/mosimo-bsaf-publisher.service";
-    trustPath = toString cfg.publisher.trustFile;
+    # Interpolation (not toString) copies a Nix path into the store and keeps its string context, so the
+    # file is part of the system closure on the target host.
+    trustPath = "${cfg.publisher.trustFile}";
     inherit (cfg.publisher) relayUrl maxOriginalAgeSeconds priority jmaPriorityPolicy;
     inherit selection;
   });
@@ -163,7 +165,8 @@ in {
       environment.PUBLISHER_CONFIG_FILE = publisherSettings;
       serviceConfig = hardening // {
         Type = "simple";
-        LoadCredential = lib.mapAttrsToList (name: file: "${name}:${toString file}") credentialFiles;
+        # Interpolation, not toString: public files given as Nix paths must end up in the closure.
+        LoadCredential = lib.mapAttrsToList (name: file: "${name}:${file}") credentialFiles;
         ExecStart = "${pkgs.nodejs_24}/bin/node --max-old-space-size=64 ${runtime}/publisher.mts";
         Restart = "on-failure";
         RestartSec = 5;

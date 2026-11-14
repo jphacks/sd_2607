@@ -90,12 +90,18 @@ assert !(empty.systemd.services ? mosimo-bsaf);
 assert !(empty.systemd.services ? mosimo-bsaf-publisher);
 assert publisher.serviceConfig.LoadCredential == [
   "atproto.pem:/run/secrets/mosimo_importer_atproto_pem" "chain.cbor:/etc/mosimo-importer/chain.cbor"
-  "identity.json:${toString ./tests.nix}" "nostr.pem:/run/secrets/mosimo_importer_nostr_pem"
+  "identity.json:${./tests.nix}" "nostr.pem:/run/secrets/mosimo_importer_nostr_pem"
 ];assert builtins.match ".*publisher.mts" publisher.serviceConfig.ExecStart != null;
 assert publisher.serviceConfig.MemoryMax == "128M";
 assert publishing.services.mosimo-bsaf.publisher.priority == null;
 assert !publishing.services.mosimo-bsaf.publisher.selectKikikuruDefaults;
 assert failedAssertions mixed == failedAssertions both + 1;
+# A public file given as a Nix path must be copied into the store with string context; with
+# toString it would point into the flake source, which is not part of the deployed closure.
+assert builtins.all (entry: builtins.hasContext entry)
+  (builtins.filter (entry: builtins.substring 0 14 entry == "identity.json:") publisher.serviceConfig.LoadCredential);
+assert builtins.match "identity.json:/nix/store/[a-z0-9]{32}-tests.nix" (builtins.head
+  (builtins.filter (entry: builtins.substring 0 14 entry == "identity.json:") publisher.serviceConfig.LoadCredential)) != null;
 assert failedAssertions storeKey == failedAssertions publishing + 1;
 assert failedAssertions sameKey == failedAssertions publishing + 1;
 assert publishing.services.mosimo-bsaf.publisher.jmaPriorityPolicy;
