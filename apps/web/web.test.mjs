@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { runWeb } from './web-harness.mjs';
 
 const did = 'did:plc:synthetic';
-// Deterministic 13-char TID per id so the client can derive createdAt from the rkey and dedupe by URI.
+// Deterministic 13-char TID per id so URIs are well-formed and dedupe by URI.
 const tidFor = id => '3' + (id + 'aaaaaaaaaaaa').slice(0, 12).toLowerCase().replace(/[^234567a-z]/g, 'a');
 const post = (id, extra = {}) => ({
   $type: 'dev.jisaku.mosimo.post', uri: `at://${did}/dev.jisaku.mosimo.post/${tidFor(id)}`,
-  text: `<script>not HTML ${id}</script>`,
+  text: `<script>not HTML ${id}</script>`, created: '2020-01-01T00:00:00.000Z',
   exp: '2020-01-02T00:00:00Z', ext: [{ $type: 'example.unknown.ext', future: true }], ...extra,
 });
 const json = data => ({ ok: true, json: async () => data });
@@ -60,6 +60,18 @@ test('DID/URI diagnostic filters, single record response, and BSAF is not presen
   assert.equal(client.articles().length, 1);
   assert.ok(client.articles()[0].querySelectorAll('.time').some(e => e.textContent.includes('BSAF 原投稿')));
   assert.equal(client.more.hidden, true);
+});
+
+test('without `created`, the time is the AppView first arrival labelled 受信, never the TID (core §6.2)', async () => {
+  const seen = post('recv', { created: undefined });
+  const client = await runWeb(async input => {
+    if (new URL(input).hostname === 'plc.directory') return json({});
+    return json({ records: [seen, post('untimed', { created: undefined })], provenance: { [seen.uri]: { firstSeenAt: '2020-01-01T00:00:00Z' } } });
+  });
+  assert.equal(client.articles().length, 1);
+  const time = client.articles()[0].querySelector('.time');
+  assert.match(time.textContent, /^受信 /);
+  assert.equal(time.title, '2020-01-01T00:00:00Z');
 });
 
 test('optional public client key and override survive every page and refresh without leaking to PLC', async () => {

@@ -64,7 +64,7 @@ test('an endorsement by Nostr event ID folds under the atproto post', async () =
     uri: 'at://did:plc:other/dev.jisaku.mosimo.post/3n2aruvk3dsah', text: '確認しました', $type: `${NS}.post`, exp: '2026-11-15T05:38:52Z',
     ext: [{ $type: `${NS}.annotation`, relation: 'endorsement', target: { network: 'nostr', eventId: { $bytes: bytes } } }],
   })!;
-  expect(endorse.annotation).toEqual({ relation: 'endorsement', eventId: EVENT.id });
+  expect(endorse.annotation).toEqual({ relation: 'endorsement', nostr: true, eventId: EVENT.id });
   expect(buildThreads([endorse, target]).map(t => t.orphan)).toEqual([true, false]);
   await resolveNostrTargets([endorse, target], 'wss://relay', { open: relay([EVENT]) });
   expect(endorse.annotation?.target).toBe(URI);

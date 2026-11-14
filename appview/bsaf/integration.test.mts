@@ -235,10 +235,11 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
     assert.equal(combined.cursor, undefined);
     assert.deepEqual(combined.provenance[bsafUri], {
       did: author, cid: created.commit.cid, collection: COLLECTION,
-      indexedAt: stored.indexed_at, retrievedAt: metadata.fetched_at, source,
+      indexedAt: stored.indexed_at, firstSeenAt: stored.created_at, retrievedAt: metadata.fetched_at, source,
     });
     assert.deepEqual(combined.provenance[mosimoUri], {
       did: author, cid: mosimoCid, collection: mosimoCollection, indexedAt: mosimoRow!.indexed_at,
+      firstSeenAt: mosimoRow!.created_at,
     });
     const first = await feed({ limit: '1' });
     assert.deepEqual(first.records, [combined.records[0]]);
