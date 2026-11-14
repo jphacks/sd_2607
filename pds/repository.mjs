@@ -113,9 +113,18 @@ export function isBsafImport(event) {
   } catch { return true; }
 }
 
-/** importer §2: feed re-posts (any JMA XML extension, importer §1.1) are Nostr-only too; the importer DID hosts no repository. */
-export const isFeedImport = event => event.tags.some(tag => tag[0] === `${EXT_PREFIX}dev.jisaku.mosimo.public.jma.earthquake`
-  || tag[0] === `${EXT_PREFIX}dev.jisaku.mosimo.public.jma.weather`);
+/** importer §2: feed re-posts (a `public#source` declaring `feed`, importer §1.2) are Nostr-only too; the importer DID
+ * hosts no repository. Like isBsafImport, an undecodable source fails closed for atproto. */
+export function isFeedImport(event) {
+  return event.tags.filter(tag => tag[0] === `${EXT_PREFIX}dev.jisaku.mosimo.public#source`).some(tag => {
+    try {
+      requireValue(tag.length === 2, 'Invalid source extension tag');
+      const fields = decodeCbor(decodeBytes(tag[1]));
+      requireValue(object(fields), 'Invalid source fields');
+      return Object.hasOwn(fields, 'feed');
+    } catch { return true; }
+  });
+}
 /** Routing for both import kinds: never published to atproto. */
 export const isNostrOnlyImport = event => isBsafImport(event) || isFeedImport(event);
 

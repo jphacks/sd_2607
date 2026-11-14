@@ -54,7 +54,9 @@ export function receiverConfigurations(root, domains, selection) {
     // issuer domains for revocation lists come from the chains themselves.
     android: { roots: [{ pubkey: publicRoot.pubkey, name: publicRoot.name ?? 'Mosimo BSAF trust root', roles: publicRoot.roles,
       maxDepth: publicRoot.maxDepth, enabled: publicRoot.enabled }],
-      selected: selection.flatMap(e => e.types.map(type => e.feed ? { feed: e.feed, type } : { botDid: e.botDid, type })) },
+      // Feed entries keep their origin; a feed entry without types selects every type (importer §1.3).
+      selected: selection.flatMap(e => e.botDid ? e.types.map(type => ({ botDid: e.botDid, type }))
+        : (e.types ?? [undefined]).map(type => ({ feed: e.feed, ...(e.origin ? { origin: e.origin } : {}), ...(type ? { type } : {}) }))) },
   };
 }
 
