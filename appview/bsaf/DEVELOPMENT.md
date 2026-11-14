@@ -55,7 +55,7 @@ collectorには独立したDB・HTTPサーバー・著者秘密鍵・管理API�
 `dev.jisaku.mosimo.getFeed` の `limit`・`cursor`・`did`・`uri` を使います。一覧は `records`、単件は `record` を返し、原レコードに `uri` を付けた形式です。
 
 - BSAFは `$type: "app.bsky.feed.post"` のまま返します。クライアントはMosimo投稿と型を分け、BSAFに `exp` や `ext` を要求しないでください。
-- `provenance` は投稿URIをキーとする別のメタデータです。CID・著者・索引時刻、BSAFの取得元・取得時刻を含みます。
+- `provenance` は投稿URIをキーとする別のメタデータです。CID・著者・索引時刻、初回到着時刻 `firstSeenAt`、BSAFの取得元・取得時刻を含みます。索引時刻はbackfillで書き換わるため、到着の遅れは `firstSeenAt` で判断してください。
 - 単件指定で対象がない場合、現状は404ではなくquery scriptのエラー応答になります。
 
 ## テスト

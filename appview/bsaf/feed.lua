@@ -1,4 +1,4 @@
--- mosimo-bsaf-feed:v1 (managed by appview/bsaf/prepare.mts)
+-- mosimo-bsaf-feed:v2 (managed by appview/bsaf/prepare.mts)
 function handle()
   local limit = tonumber(params.limit or "20")
   local offset = tonumber(params.cursor or "0")
@@ -50,9 +50,10 @@ function handle()
     local value = json.decode(row.record)
     value.uri = row.uri
     table.insert(records, value)
+    -- firstSeenAt is the first local arrival (created_at); indexedAt is rewritten by backfills.
     provenance[row.uri] = {
       did = row.did, cid = row.cid, collection = row.collection,
-      indexedAt = row.indexed_at
+      indexedAt = row.indexed_at, firstSeenAt = row.created_at
     }
     if row.collection == "app.bsky.feed.post" then
       provenance[row.uri].retrievedAt = row.fetched_at
