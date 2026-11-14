@@ -1,0 +1,4 @@
+- Notify important information received from other devices, grouped by category.
+- Show Japan Meteorological Agency information as official, and de-emphasize cancelled, superseded, and distant earthquake reports on the map.
+- Connect to iPhones running in the background.
+- Fix the app stopping with "cannot open encrypted state" after updating from an older version.

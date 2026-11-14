@@ -14,8 +14,8 @@ android {
         targetSdk = 36
         // Bump both on every source release (versionCode +1 each time). F-Droid reads these
         // literals from the tagged commit, so keep them as plain `versionCode = <number>` / `versionName = "<text>"`.
-        versionCode = 48
-        versionName = "0.3.0"
+        versionCode = 49
+        versionName = "0.4.0"
         // The Play CI passes its Actions run number instead; Play versionCodes are independent of the source value.
         providers.gradleProperty("mosimoVersionCode").orNull?.let { versionCode = it.toInt() }
         // F-Droid builds one APK per ABI with -PmosimoAbi=<abi> and versionCode*10 + n; Play and GitHub stay universal.
