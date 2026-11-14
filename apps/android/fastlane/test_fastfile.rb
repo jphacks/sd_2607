@@ -56,6 +56,11 @@ class FastfileTest < Minitest::Test
     assert_equal({ package_name: "dev.jisaku.mosimo", track: "alpha", skip_upload_apk: true }, @runner.calls[2].last)
   end
 
+  def test_track_option_sends_the_release_to_open_testing
+    @runner.internal(app: "mosimo", track: "beta")
+    assert_equal "beta", @runner.calls[2].last.fetch(:track)
+  end
+
   def test_gradle_failure_prevents_upload
     @runner.fail_gradle = true
     assert_raises(RuntimeError) { @runner.internal(app: "mosimo") }
