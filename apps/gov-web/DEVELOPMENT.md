@@ -25,7 +25,9 @@ npm run dev
 
 ## テスト
 
-拡張の解析、geohashのデコード、有効状態の判定、訂正・補足・追認のまとめ方をテストします。`App.test.tsx`は、地図を差し替えた画面を`react-dom/server`で描画し、不正な投稿で画面が落ちないことと、対応状況の引き継ぎを確かめます。
+拡張の解析、geohashのデコードと外周、BSAF投稿の都道府県範囲、有効状態の判定、訂正・補足・追認のまとめ方をテストします。`App.test.tsx`は、地図を差し替えた画面を`react-dom/server`で描画し、不正な投稿で画面が落ちないことと、対応状況の引き継ぎを確かめます。
+
+`src/prefectures.json`は`protocol/mosimo/public/bsaf/hazard/prefectures.json`の写しです。Nixのビルドはこのディレクトリだけを取り込むためです。protocol側が変わったら写しを置き換えてください。違いがあると`npm test`が失敗します。
 
 ```sh
 npm test

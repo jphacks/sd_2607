@@ -1,5 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { APPVIEW, buildThreads, CLIENT_KEY, decodeGeohash, delayText, parsePost, resolveHandle, validityState, type Post } from './mosimo';
+import protocolCovers from '../../../protocol/mosimo/public/bsaf/hazard/prefectures.json';
+import { APPVIEW, buildThreads, CLIENT_KEY, decodeGeohash, delayText, geohashOutline, parsePost, resolveHandle, validityState, type Post } from './mosimo';
+import covers from './prefectures.json';
 
 test('arrival delay uses firstSeenAt only, never the backfill-rewritten indexedAt', () => {
   const rec = { uri: 'at://did:plc:a/app.bsky.feed.post/1', $type: 'app.bsky.feed.post', text: 't', createdAt: '2026-11-01T00:00:00Z' };
@@ -108,6 +110,45 @@ test('B7 BSAF tags survive verbatim', () => {
   expect(post('at://did:plc:a/p/1').bsafTags).toEqual([]);
 });
 
+// The Nix build sees only apps/gov-web, so the protocol's prefecture covers are copied; the copy must not drift.
+test('the bundled prefecture covers equal protocol/mosimo/public/bsaf/hazard/prefectures.json', () => {
+  expect(covers).toEqual(protocolCovers);
+});
+
+// public/bsaf/hazard §1, §2.3: what the publisher would add as geo#area, derived from the raw record.
+test('a Kikikuru per-prefecture post gets its prefecture cover as an approximate area; nothing else does', () => {
+  const K = 'did:plc:kxwz5cz7o6g4jlmxh6doyfsm', J = 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi';
+  const bsaf = (did: string, tags: string[]) => parsePost({ $type: 'app.bsky.feed.post', uri: `at://${did}/app.bsky.feed.post/1`, text: 't', tags })!;
+  const tags = (target: string, type = 'tornado-warning', value = 'warning') => ['bsaf:v1', `type:${type}`, `value:${value}`, 'time:2026-11-14T01:23:00.000Z', target, 'source:jma'];
+  const chiba = bsaf(K, tags('target:jp-chiba'));
+  expect(chiba.areaApprox).toBe(true);
+  expect(chiba.areas.map(a => a.shape === 'rect' && a.hash)).toEqual(covers['jp-chiba']);
+  expect(chiba.areaIncomplete).toBeUndefined();
+  for (const p of [
+    bsaf(J, tags('target:jp-kanto')), bsaf(J, tags('target:jp-chiba')), // §2.3: JMA Bot's target is only the first region
+    bsaf(K, tags('target:jp')), // national typhoon information
+    bsaf(K, [...tags('target:jp-chiba'), 'target:jp-tokyo']), // §3.1: repeated core tags are not resolved
+    bsaf(K, tags('target:jp-chiba', 'new-kind-warning')), bsaf(K, tags('target:jp-chiba', 'wind-warning', 'level9')), // §1: not in the tables
+    bsaf(K, tags('target:__proto__')), bsaf(K, tags('target:constructor')),
+    // A repost by someone else carries the tags but is not the Bot's own post.
+    parsePost(newWire([{ $type: N + 'public.bsaf', tags: tags('target:jp-chiba'), original: { uri: `at://${K}/app.bsky.feed.post/1` } }]))!,
+  ]) expect([p.areas, p.areaApprox]).toEqual([[], undefined]);
+  // A converted post's own geo#area keeps working, flag included (geo §4.3).
+  const own = parsePost(newWire([{ $type: N + 'geo#area', regions: [{ shape: 'geohash', hash: 'xn5q' }], approximation: true }]))!;
+  expect(own).toMatchObject({ areas: [{ hash: 'xn5q' }], areaApprox: true });
+});
+
+test('connectivity is read when online is a boolean, and repeats adopt none', () => {
+  const c = (online: unknown) => ({ $type: 'dev.jisaku.bosai.connectivity', online });
+  const on = (...ext: unknown[]) => parsePost(newWire(ext))!;
+  expect(on().online).toBeUndefined();
+  expect(on(c(true))).toMatchObject({ online: true, unknownTypes: [], conflicts: [] });
+  expect(on(c(false)).online).toBe(false);
+  expect([on(c('false')).online, on(c('false')).unknownTypes]).toEqual([undefined, []]);
+  expect(on({ $type: 'dev.jisaku.bosai.connectivity' }).online).toBeUndefined();
+  expect([on(c(true), c(false)).online, on(c(true), c(false)).conflicts]).toEqual([undefined, ['connectivity']]);
+});
+
 test('validityState: unknown without an end, pending before the start, end exclusive (B13)', () => {
   const now = Date.parse('2026-11-01T12:00:00Z');
   expect(validityState(undefined, now)).toBe('unknown');
@@ -133,6 +174,18 @@ test('decodeGeohash matches the reference cell', () => {
   expect([s, w, n, e].map(v => +v.toFixed(4))).toEqual([35.5078, 139.5703, 35.6836, 139.9219]);
   expect(decodeGeohash('a')).toBeUndefined();
   expect(decodeGeohash('')).toBeUndefined();
+});
+
+test('geohashOutline keeps only the outer sides of a union (same cases as the apps\' GeohashTests)', () => {
+  const sides = (...h: string[]) => geohashOutline(h.map(x => decodeGeohash(x)!));
+  expect(sides('xn7')).toHaveLength(4);
+  expect(sides('xn76', 'xn77')).toHaveLength(6);
+  expect(sides('xn76', 'xn7d')).toHaveLength(6);
+  expect(sides('xn76', 'xn7m')).toHaveLength(8);
+  // A 2×2 block is a square of 8 cell sides, a column of 4 has 10; a prefecture cover loses its inner sides.
+  expect(sides('xn76', 'xn77', 'xn7d', 'xn7e')).toHaveLength(8);
+  expect(sides('xn76', 'xn77', 'xn7k', 'xn7m')).toHaveLength(10);
+  expect(sides(...covers['jp-chiba']).length).toBeLessThan(covers['jp-chiba'].length * 4);
 });
 
 test('buildThreads folds annotation chains under the root', () => {

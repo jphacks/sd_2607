@@ -2,6 +2,9 @@
 // and the pre-cutover old wire (dev.oriom.mosimo.post with `extensions` of dev.oriom.mosimo.defs#*).
 // No time is read from the TID rkey: core §6.2 forbids using it as the posting time.
 // Extension shapes follow protocol/mosimo/{geo,validity,annotation,priority,hazard,public/bsaf}/.
+// A copy of protocol/mosimo/public/bsaf/hazard/prefectures.json: the Nix build sees only this directory. mosimo.test.ts fails if it drifts.
+import prefectures from './prefectures.json';
+
 const OLD = 'dev.oriom.mosimo.defs#', NEW = 'dev.jisaku.mosimo.';
 export const APPVIEW: string = import.meta.env.VITE_APPVIEW_URL || 'https://appview.oriom.dev';
 // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
@@ -28,10 +31,12 @@ export type Post = {
   origin?: LatLng;
   areas: Area[];
   areaIncomplete?: boolean;
+  areaApprox?: boolean;
   validity?: Validity;
   annotation?: { relation: Relation; target?: string; nostr?: boolean };
   priority?: number;
   hazardStatus?: string;
+  online?: boolean;
   conflicts: string[];
   unknownTypes: string[];
 };
@@ -64,6 +69,21 @@ export function decodeGeohash(hash: string): [LatLng, LatLng] | undefined {
   return hash ? [[lat[0], lon[0]], [lat[1], lon[1]]] : undefined;
 }
 
+// The outer sides of a geohash union, so it reads as one shape (as the apps outline it): a side is on the perimeter unless a
+// same-size cell lies across it. Cell corners are exact binary fractions, so they compare exactly.
+export function geohashOutline(cells: [LatLng, LatLng][]): [LatLng, LatLng][] {
+  const corners = new Set(cells.map(([sw]) => String(sw)));
+  const free = (s: number, w: number) => !corners.has(`${s},${w}`);
+  return cells.flatMap(([[s, w], [n, e]]) => {
+    const sides: [LatLng, LatLng][] = [];
+    if (free(n, w)) sides.push([[n, w], [n, e]]);
+    if (free(2 * s - n, w)) sides.push([[s, w], [s, e]]);
+    if (free(s, e)) sides.push([[s, e], [n, e]]);
+    if (free(s, 2 * w - e)) sides.push([[s, w], [n, w]]);
+    return sides;
+  });
+}
+
 // geo#region: the lexicon's properties (lat/lon/r) win over its stale description.
 // The lexicon sets no maximum radius; past half the Earth's circumference a circle covers it all, so clamp there and keep map bounds finite.
 const MAX_RADIUS_MM = 2e10;
@@ -89,7 +109,25 @@ const KIND = new Map([
   [OLD + 'priority', 'priority'], [NEW + 'priority', 'priority'],
   [NEW + 'hazard', 'hazard'],
   [OLD + 'bsafV1', 'bsaf'], [NEW + 'public.bsaf', 'bsaf'],
+  ['dev.jisaku.bosai.connectivity', 'connectivity'],
 ]);
+
+export const JMA_BOT = 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi', KIKIKURU_BOT = 'did:plc:kxwz5cz7o6g4jlmxh6doyfsm';
+// Exactly one tag per core key; repeated core tags are never resolved to one (public/bsaf §3.1).
+export const bsafTag = (tags: string[], key: string) => {
+  const t = tags.filter(t => t.startsWith(key + ':'));
+  return t.length === 1 ? t[0].slice(key.length + 1) : undefined;
+};
+// public/bsaf/hazard §1, §2.3: the publisher gives the Kikikuru Bot's own per-prefecture posts, when their type: and value:
+// are in its tables (§4.1, §4.2), that prefecture's cells as an approximate geo#area. The apps get it on the converted post;
+// a raw record gets the same here. JMA Bot's target: names only the first region, so it gets none.
+const KIKIKURU_TYPES = new Set(['heavy-rain-warning', 'heavy-rain', 'linear-rainband-warning', 'flood-warning', 'landslide-warning',
+  'storm-surge-warning', 'wind-warning', 'wave-warning', 'snow-warning', 'significant-snowfall-warning', 'tornado-warning',
+  'thunderstorm-warning', 'melting-snow-warning', 'dense-fog-warning', 'dry-air-warning', 'avalanche-warning',
+  'low-temperature-warning', 'frost-warning', 'icing-warning', 'snow-accretion-warning', 'weather-info', 'typhoon', 'other-warning']);
+const KIKIKURU_VALUES = new Set(['level2', 'level3', 'level4', 'level5', 'advisory', 'warning', 'special-warning', 'cancelled',
+  'violent', 'very-strong', 'strong', 'tropical-storm', 'info']);
+const COVERS: Record<string, string[]> = prefectures;
 
 export function parsePost(record: Record<string, unknown>, provenance?: Record<string, unknown>): Post | undefined {
   const uri = str(record.uri), text = str(record.text);
@@ -111,6 +149,12 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
     conflicts: [],
     unknownTypes: [],
   };
+  const target = bsaf && post.did === KIKIKURU_BOT && KIKIKURU_TYPES.has(bsafTag(post.bsafTags, 'type') ?? '')
+    && KIKIKURU_VALUES.has(bsafTag(post.bsafTags, 'value') ?? '') ? bsafTag(post.bsafTags, 'target') : undefined;
+  if (target && Object.hasOwn(COVERS, target)) {
+    post.areas = COVERS[target].flatMap(hash => parseArea({ shape: 'geohash', hash }, true) ?? []);
+    post.areaApprox = true;
+  }
   const byKind = new Map<string, Record<string, unknown>[]>();
   const exts = record.ext ?? record.extensions;
   for (const ext of Array.isArray(exts) ? exts : []) {
@@ -140,6 +184,8 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
           if (area) post.areas.push(area);
           else post.areaIncomplete = true;
         }
+        // geo §4.3: a covering approximation must stay distinguishable from an exact area.
+        if (e.approximation === true) post.areaApprox = true;
         break;
       case 'validity':
         post.validity = isNew ? { startsAt: str(e.from), endsAt: str(e.until) } : { startsAt: str(e.startsAt), endsAt: str(e.endsAt) };
@@ -167,6 +213,10 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
         post.bsafTags = strs(e.tags);
         post.repostOf = str(obj(e.original)?.uri);
         post.repostCid = str(obj(e.original)?.cid);
+        break;
+      case 'connectivity':
+        // The Mosimo Bosai apps' own extension (apps/lexicons/dev/jisaku/bosai/connectivity.json): whether the author's device had a network when signing.
+        if (typeof e.online === 'boolean') post.online = e.online;
         break;
     }
   }

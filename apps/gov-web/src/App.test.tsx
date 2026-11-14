@@ -7,7 +7,7 @@ vi.hoisted(() => {
   Object.assign(globalThis, { document: { title: 'Mosimo' }, location: { search: '', href: 'http://localhost/' } });
 });
 const h = vi.hoisted(() => ({ threads: undefined as unknown, store: {} as Record<string, string> }));
-vi.mock('./MapView', () => ({ default: () => null, postBounds: () => undefined, insetFocus: '' }));
+vi.mock('./MapView', () => ({ default: () => null, postParts: () => [], insetFocus: '' }));
 // SSR runs no effects, so the feed never loads; inject the threads App would build from the loaded posts.
 vi.mock('./mosimo', async orig => {
   const actual = await orig<typeof import('./mosimo')>();
@@ -83,4 +83,17 @@ test('L2 a Kikikuru post without exactly one known type: tag gets no value label
     expect(html, tags.join(' ')).not.toContain('>警報</span>');
     expect(html, tags.join(' ')).not.toContain('>竜巻注意情報</span>');
   }
+});
+
+// D11: the apps' connectivity extension in the user's wording, a neutral badge; nothing when the post has none.
+test('connectivity shows 直接投稿 or mesh経由で投稿, and nothing when absent', () => {
+  const p = (k: string, ext: unknown[]) => ({ post: parsePost({ $type: N + 'post', uri: `at://did:plc:a/dev.jisaku.mosimo.post/${k}`, text: k, exp: '2026-11-15T00:00:00Z', ext })!,
+    replies: [], corrected: false, endorsers: 0, orphan: false });
+  const c = (online: unknown) => ({ $type: 'dev.jisaku.bosai.connectivity', online });
+  h.threads = [p('on', [c(true)]), p('off', [c(false)])];
+  const html = render();
+  expect(html).toContain('>直接投稿</span>');
+  expect(html).toContain('>mesh経由で投稿</span>');
+  h.threads = [p('none', []), p('bad', [c('yes')])];
+  expect(render()).not.toMatch(/直接投稿|mesh経由/);
 });

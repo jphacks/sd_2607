@@ -1,7 +1,7 @@
 import type { LatLngBounds } from 'leaflet';
 import { Component, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import MapView, { insetFocus, postBounds } from './MapView';
-import { APPVIEW, buildThreads, CLIENT_KEY, delayText, fetchFeed, resolveHandle, validityState, type Area, type Post, type Relation, type Thread, type ValidityState } from './mosimo';
+import MapView, { insetFocus, postParts } from './MapView';
+import { APPVIEW, bsafTag, buildThreads, CLIENT_KEY, delayText, fetchFeed, JMA_BOT, KIKIKURU_BOT, resolveHandle, validityState, type Area, type Post, type Relation, type Thread, type ValidityState } from './mosimo';
 
 const POLL_MS = 10_000;
 // ponytail: a burst longer than this many pages per poll leaves a gap that さらに読み込む fills at the end of the list; a keyset cursor (AppView B21) would let polling resume.
@@ -21,10 +21,10 @@ const PRIORITY: Record<number, string | undefined> = { 2: '重要', 3: '緊急' 
 const HAZARD_STATUS = new Map([['Exercise', '訓練'], ['Test', '試験'], ['Unknown', '状態不明']]);
 const KIND: Record<string, string | undefined> = {
   origin: '発信地点', area: '影響範囲', validity: '有効期間', annotation: '注釈', priority: '優先度', hazard: '災害種別', bsaf: 'BSAF',
+  connectivity: '投稿経路',
 };
 // public/bsaf §5.1, hazard §1: a `value:` means what its own bot defines for that `type:`, so only (bot, type, value)
 // triples listed here get a label (hazard §3, §4; wording checked against the bots' own headings). Anything else gets none.
-const JMA_BOT = 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi', KIKIKURU_BOT = 'did:plc:kxwz5cz7o6g4jlmxh6doyfsm';
 const pairs = (bot: string, types: string[], values: Record<string, string>) =>
   types.flatMap(t => Object.entries(values).map(([v, label]) => [`${bot} ${t} ${v}`, label] as const));
 const BSAF_VALUE = new Map<string, string>([
@@ -45,10 +45,8 @@ const BSAF_VALUE = new Map<string, string>([
   ...pairs(KIKIKURU_BOT, ['linear-rainband-warning'], { level4: '直前予測', level5: '発生' }),
   ...pairs(KIKIKURU_BOT, ['typhoon'], { violent: '猛烈な台風', 'very-strong': '非常に強い台風', strong: '強い台風' }),
 ]);
-// Exactly one type: and one value:; repeated core tags are never resolved to one (public/bsaf §3.1).
 const bsafValue = (p: Post) => {
-  const one = (k: string) => { const t = p.bsafTags.filter(t => t.startsWith(k + ':')); return t.length === 1 ? t[0].slice(k.length + 1) : undefined; };
-  const type = one('type'), value = one('value');
+  const type = bsafTag(p.bsafTags, 'type'), value = bsafTag(p.bsafTags, 'value');
   return type && value ? BSAF_VALUE.get(`${p.did} ${type} ${value}`) : undefined;
 };
 const STATUS_KEY = 'mosimo-gov-web:status';
@@ -162,6 +160,7 @@ function PostBadges({ post, now, target, list }: { post: Post; now: number; targ
       {(post.annotation || post.repostOf) && <Badge tone="blue">{relationText(post, target)}</Badge>}
       {v !== 'unknown' && <Badge tone={v === 'valid' ? 'green' : 'gray'}>{VALIDITY[v]}</Badge>}
       <PriorityBadge post={post} />
+      {post.online != null && <Badge>{post.online ? '直接投稿' : 'mesh経由で投稿'}</Badge>}
       {delay && <Badge>{delay}</Badge>}
       {post.conflicts.length > 0 && <Badge tone="orange">複数指定</Badge>}
       {/* BSAF never carries coordinates, so its rows are not flagged; an unreadable area is not "none" either. */}
@@ -319,7 +318,8 @@ function Detail({ post, thread, status, now, onStatus, onSelect, onAuthor }: {
             <a href={`https://maps.gsi.go.jp/#16/${post.origin[0]}/${post.origin[1]}/`} target="_blank" rel="noreferrer" className="text-key-900 underline">地理院地図</a>
           </Row>
         )}
-        {post.areas.length > 0 && <Row label="影響範囲">{post.areas.map(areaText).join('、')}</Row>}
+        {/* geo §4.3: a covering approximation (a BSAF prefecture's cells) is not the exact target, and says so. */}
+        {post.areas.length > 0 && <Row label="影響範囲">{post.areaApprox ? '範囲' : post.areas.map(areaText).join('、')}</Row>}
       </dl>
 
       {isRoot && thread.replies.length > 0 && (
@@ -472,7 +472,7 @@ export default function App() {
       (validity === 'all' || validityState(post.validity, now) === validity) &&
       (!q || [post, ...replies].some(p => p.text.toLowerCase().includes(q))));
     // Any post in a thread places it. A thread without geometry is neither in nor out of view, so it is excluded (geo §4.2).
-    const geo = (t: Thread) => [t.post, ...t.replies].flatMap(p => postBounds(p) ?? []);
+    const geo = (t: Thread) => [t.post, ...t.replies].flatMap(postParts);
     const inBounds = (t: Thread) => !inView || (!!bounds && geo(t).some(b => bounds.intersects(b)));
     const counts: Record<Status, number> = { todo: 0, doing: 0, done: 0 };
     for (const t of base) if (inBounds(t)) counts[statusOf(t)]++;
