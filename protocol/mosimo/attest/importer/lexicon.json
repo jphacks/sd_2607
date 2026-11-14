@@ -4,9 +4,6 @@
   "defs": {
     "main": {
       "type": "object",
-      "required": [
-        "sources"
-      ],
       "properties": {
         "sources": {
           "type": "array",
@@ -16,9 +13,40 @@
           },
           "maxLength": 16,
           "description": "Sorted by botDid, no duplicates."
+        },
+        "feeds": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "#feed"
+          },
+          "maxLength": 8,
+          "description": "Sorted by feed, no duplicates. Verifiers that predate this field reject the block."
         }
       },
-      "description": "Block in a key attestation listing the (botDid, type) pairs an importer may re-publish."
+      "description": "Block in a key attestation listing the (botDid, type) and (feed, type) pairs an importer may re-publish. Holds sources, feeds or both, each non-empty."
+    },
+    "feed": {
+      "type": "object",
+      "required": [
+        "feed",
+        "types"
+      ],
+      "properties": {
+        "feed": {
+          "type": "string",
+          "description": "Registered feed name, e.g. jma-xml."
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Information type defined per feed; for jma-xml the original Control/Title."
+          },
+          "minLength": 1,
+          "maxLength": 32
+        }
+      }
     },
     "source": {
       "type": "object",

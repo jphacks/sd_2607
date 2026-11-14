@@ -4,7 +4,9 @@
 
 ## 目的
 
-転載サーバー（importer）は、他者が発表した情報を取得し、自身の鍵で署名し直して Mosimo の投稿として流すサーバーである。転載サーバーの署名は転載の証言であり、原発表者の署名ではない。本拡張は、鍵署名の `import` 役割と `importer`・`organization` ブロックによって「誰が、どの情報源を転載してよいか」を表し、受信者がそれとローカルの選択に基づいて、転載を認可済み発信者の投稿として扱う（表示・実効優先度・置換）規則を定める。転載する情報の形式は本拡張の対象外であり、BSAF は [public.bsaf](../../public/bsaf/README.md) が定める。
+転載サーバー（importer）は、他者が発表した情報を取得し、自身の鍵で署名し直して Mosimo の投稿として流すサーバーである。転載サーバーの署名は転載の証言であり、原発表者の署名ではない。本拡張は、鍵署名の `import` 役割と `importer`・`organization` ブロックによって「誰が、どの情報源を転載してよいか」を表し、受信者がそれとローカルの選択に基づいて、転載を認可済み発信者の投稿として扱う（表示・実効優先度・置換）規則を定める。転載する情報の形式は本拡張の対象外であり、BSAF は [public.bsaf](../../public/bsaf/README.md)、気象庁防災情報 XML は [public.jma](../../public/jma/README.md) が定める。
+
+情報源は 2 種類ある。原投稿の著者 DID で識別する **Bot**（`sources`。BSAF 等の atproto 投稿の転載）と、原著者 DID を持たない公開配信を登録済みの名前で識別する **フィード**（`feeds`、§1.1）である。
 
 ## 前提
 
@@ -13,6 +15,7 @@
 | [`dev.jisaku.mosimo.attest.chain`](../chain/README.md) | 投稿に同梱するチェーンと検証 |
 | [`dev.jisaku.mosimo.attest`](../README.md) | 鍵署名、役割、`organization` ブロック |
 | [`dev.jisaku.mosimo.public.bsaf`](../../public/bsaf/README.md) | 転載する投稿の形式と原投稿参照 |
+| [`dev.jisaku.mosimo.public.jma`](../../public/jma/README.md) | フィード `jma-xml` の転載する投稿の形式 |
 | [`dev.jisaku.mosimo.attest.revocation`](../revocation/README.md) | 失効状態 |
 | [`dev.jisaku.mosimo.priority`](../../priority/README.md) | 著者の優先度ヒント |
 
@@ -32,23 +35,40 @@ flowchart LR
 ```ts
 type ImporterBlock = {
   $type: "dev.jisaku.mosimo.attest.importer";
-  sources: Source[];           // botDid の UTF-8 辞書順、重複なし
-};
+  sources?: Source[];          // botDid の UTF-8 辞書順、重複なし
+  feeds?: Feed[];              // feed の UTF-8 辞書順、重複なし
+};                             // sources と feeds の少なくとも一方を持ち、持つものは空でない
 type Source = {
   botDid: Did;                 // 原投稿の著者 DID
   types: Text[];               // 情報種別。bsaf の `type:` タグの値。辞書順、重複なし
+};
+type Feed = {
+  feed: Text;                  // §1.1 の登録済みフィード名
+  types: Text[];               // 情報種別。フィードごとに §1.1 が定める値。辞書順、重複なし
 };
 ```
 
 | ブロック | 意味 | 包含規則 |
 |---|---|---|
-| `dev.jisaku.mosimo.attest.importer` | 転載してよい `(botDid, type)` の組 | 子の各組は親の組に含まれる。親にブロックがなければ、親が `import` 役割を持つ限り任意 |
+| `dev.jisaku.mosimo.attest.importer` | 転載してよい `(botDid, type)` と `(feed, type)` の組 | 子の各組は親の同じ種類の組に含まれる。親のブロックが `feeds` を持たなければ子は `feeds` を持てない（`sources` も同様）。親にブロックがなければ、親が `import` 役割を持つ限り任意 |
 | `dev.jisaku.mosimo.attest#organization` | 転載サーバーを運営する組織 | 鍵署名プロトコルの規則 |
 
 - `owner` は転載サーバーの運営者を表す。認可に通った投稿の発信者表示には `organization.orgName` を用いる。
 - `botDid` は `did:plc:[a-z2-7]{24}`。`types` は `type:` 接頭辞を除いた原値で、`*` はリテラルである。
 - 転載サーバーの鍵は 32 バイトの Nostr 鍵を推奨する。転載は Nostr 専用であり（§2）、atproto 鍵と `binding` なしで成立する。
 - 認証局は転載サーバーに `attest` を与えない。
+
+### 1.1 フィード
+
+| `feed` | 情報源 | `types` の値 | 投稿の拡張 |
+|---|---|---|---|
+| `jma-xml` | 気象庁防災情報 XML（[PULL 型](https://xml.kishou.go.jp/xmlpull.html)等で取得した原電文） | 原電文の `Control/Title` の文字列そのもの（例: `震源・震度に関する情報`、`気象警報・注意報（Ｒ０６）（土砂）`） | `public.jma.earthquake` または `public.jma.weather` のちょうど 1 個と `public#source` |
+
+- `types` は原文字列を全角・半角を含めて変えずに用いる。表記の似た別名称へ広げてはならない。
+- 投稿の `(feed, type)` は投稿の拡張から定める。`public.jma.earthquake` と `public.jma.weather` の合計がちょうど 1 個で、`public.bsaf` を持たないとき、`feed` は `jma-xml`、`type` はその拡張の `message.control.title` である。それ以外は `jma-xml` の転載ではない。
+- フィード名の追加は本表の改訂で行う。未知の `feed` を持つ組は、受信者がその組で転載を認可しないだけで、同じブロックの既知の組の認可を妨げない。
+
+**互換性。** `feeds` は本版で追加した。追加前の検証器は `feeds` を持つブロックを不正とし、そのチェーン全体を検証しない。このため、追加前の検証器にも認可させる必要があるチェーンには、`feeds` を持つ鍵署名を含めない。`sources` だけの転載サーバーでも、認証局が `feeds` を持てばそのチェーンは追加前の検証器で検証されない。既存の検証器は検証できないチェーンの投稿を通常投稿として扱い、通常どおり保持・中継する。
 
 ## 2. 投稿
 
@@ -57,8 +77,11 @@ type Source = {
 | 拡張 | 個数 | 内容 |
 |---|---|---|
 | `attest.chain` | 1 以上 | 末端が転載サーバーの鍵 |
-| `public.bsaf` | ちょうど 1 | `original` 必須。原投稿の URI・CID・作成時刻 |
+| `public.bsaf` | ちょうど 1 | `original` 必須。原投稿の URI・CID・作成時刻（Bot の転載） |
+| フィードの拡張 | §1.1 | フィードの転載。`public.bsaf` とは併用しない |
 | `priority` | 0 または 1 | 著者ヒント |
+
+次の各項の BSAF に関する規則は Bot の転載に適用する。フィードの転載の本文・投稿単位は各形式の拡張（`jma-xml` は [public.jma](../../public/jma/README.md)）が定める。フィードの転載も Nostr 専用とし、PDS の atproto 公開・リポジトリ公開・firehose へ投入してはならない。転載サーバーの DID はリポジトリを公開しないためである。PDS は投稿の拡張から §1.1 の判定で振り分ける。
 
 - 本文は原レコードの `text` と一致させる。説明を追記してはならない。原文との一致が転載の検証可能性の根拠であるためである。
 - `original` を持つ転載は Nostr 専用とし、PDS の atproto 公開・リポジトリ公開・firehose へ投入してはならない。転載を atproto へ再公開すると、原投稿とは別の著者による同内容のレコードが原投稿と並んで配信され、帰属が混乱するためである。
@@ -72,11 +95,11 @@ type Source = {
 ```mermaid
 flowchart TD
   e[投稿を受信] --> lim[資源上限・Nostr 署名・基本タグ]
-  lim --> sel{ローカルで選択した<br/>botDid, type か}
+  lim --> sel{ローカルで選択した<br/>botDid, type または feed, type か}
   sel -->|否| no[通常投稿として扱う<br/>実効優先度は 1 以下]
   sel --> ch[attest.chain のチェーン検証<br/>created_at と現在時刻の両方で有効]
   ch -->|verified 以外| no
-  ch --> role{末端に import 役割<br/>importer と organization があり<br/>原投稿の botDid, type が importer に含まれるか}
+  ch --> role{末端に import 役割<br/>importer と organization があり<br/>投稿の組が importer に含まれるか}
   role -->|否| no
   role --> rev{失効状態}
   rev -->|revoked / unknown| no
@@ -84,7 +107,7 @@ flowchart TD
   dedup --> go[認可済みとして扱う<br/>認可記録を保存]
 ```
 
-- **ローカル選択が前提である。** 受信者の運用者・利用者が選んだ `(botDid, type)` の組だけを対象とする。初期値は空であり、鍵署名の `importer` ブロックが選択を自動で有効にすることはない。
+- **ローカル選択が前提である。** 受信者の運用者・利用者が選んだ `(botDid, type)` と `(feed, type)` の組だけを対象とする。初期値は空であり、鍵署名の `importer` ブロックが選択を自動で有効にすることはない。
 - **チェーンは作成時刻と現在時刻の両方で有効であること。** 期限切れの鍵署名と、未来の `created_at` を持つ投稿は認可してはならない。時計を確信できない受信者は認可を保留し、その間は通常投稿として扱う。
 - **失効は手元の通知で判定する。** `not-revoked-as-known` で認可してよい。インターネットに接続している受信者は、定期的にチェーン上の `issuerDomain` の失効リストを取得することを推奨する。取得の失敗は認可を妨げない。
 - **取り込んだ情報の更新・取消も同じ認可で扱う。** 原情報の続報・訂正・取消を転載した投稿が認可されたとき、受信者はその `(botDid, type)` について先に転載された旧版の新たな拡散を止めてよい。原情報のどの投稿が旧版に当たるかは各形式の拡張が定める。
@@ -101,7 +124,7 @@ flowchart TD
 
 ## 4. 資源上限
 
-`sources` は 16 件以下、各 `types` は 32 件以下、全体の `(botDid, type)` は 64 組以下を推奨する。これは BSAF の Kikikuru Bot 23 種と JMA Bot 5 種を同時に表現できる値である。超過は unsupported として扱う。
+`sources` は 16 件以下、`feeds` は 8 件以下、各 `types` は 32 件以下、`(botDid, type)` と `(feed, type)` の合計は 64 組以下を推奨する。これは BSAF の Kikikuru Bot 23 種と JMA Bot 5 種を同時に表現できる値である。超過は unsupported として扱う。
 
 ## 5. 適合チェック
 
