@@ -55,7 +55,7 @@ class DmCodec(private val me: String, private val secret: (String) -> ByteArray)
         const val LIFETIME_SECONDS = 86400L
         const val MAX_TEXT_BYTES = 2000
         const val MAX_NAME = 40
-        private val TOPIC = listOf("t", "mosimo.oriom.dev")
+        private val TOPIC = listOf("t", "mosimo.jisaku.dev")
         private val json = ObjectMapper()
 
         fun delivery(createdAt: Long, nowSeconds: Long, relayed: Boolean, delivered: Boolean) = when {

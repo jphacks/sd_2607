@@ -1,6 +1,7 @@
 package org.mndt.app.ui.map
 
 import androidx.compose.ui.unit.IntOffset
+import org.mndt.mesh.Region
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
@@ -11,6 +12,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 private const val BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
 
@@ -30,6 +32,35 @@ fun geohashBounds(hash: String): DoubleArray {
     }
     return doubleArrayOf(lat[0], lng[0], lat[1], lng[1])
 }
+
+/** Great-circle distance in meters on the same sphere as [circleRing]. */
+fun distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLng = Math.toRadians(lng2 - lng1)
+    val a = sin(dLat / 2).pow(2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2).pow(2)
+    return 2 * 6_371_008.8 * asin(minOf(1.0, sqrt(a)))
+}
+
+/** Whether a point lies in a geo#area union: inside a geohash cell (south/west edges inclusive) or within a circle. */
+fun regionsContain(regions: List<Region>, lat: Double, lng: Double): Boolean = regions.any { r ->
+    when (r) {
+        is Region.Geohash -> runCatching { geohashBounds(r.hash) }.getOrNull()?.let { b -> lat >= b[0] && lng >= b[1] && lat < b[2] && lng < b[3] } == true
+        is Region.Circle -> distanceMeters(r.lat / 1e6, r.lon / 1e6, lat, lng) <= r.r / 1000.0
+    }
+}
+
+/**
+ * Meters from a point to the nearest edge of a geo#area union, 0 inside; null when no region is readable. A geohash cell
+ * is measured to its nearest point by clamping (fine for the small cells and short distances this is used for).
+ */
+fun regionsDistanceMeters(regions: List<Region>, lat: Double, lng: Double): Double? = regions.mapNotNull { r ->
+    when (r) {
+        is Region.Geohash -> runCatching { geohashBounds(r.hash) }.getOrNull()?.let { b ->
+            distanceMeters(lat.coerceIn(b[0], b[2]), lng.coerceIn(b[1], b[3]), lat, lng)
+        }
+        is Region.Circle -> (distanceMeters(r.lat / 1e6, r.lon / 1e6, lat, lng) - r.r / 1000.0).coerceAtLeast(0.0)
+    }
+}.minOrNull()
 
 /** Closed ring of (lat, lng) [radiusMeters] around a centre on a sphere; fine for the few-km circles posts carry. */
 fun circleRing(lat: Double, lng: Double, radiusMeters: Double, steps: Int = 48): List<Pair<Double, Double>> {

@@ -17,8 +17,8 @@ import { COLLECTION, openStore, type Store } from './store.mts';
 
 const image = process.env.HAPPYVIEW_IMAGE;
 const podman = process.env.PODMAN || 'podman';
-const mosimoCollection = 'dev.oriom.mosimo.post';
-const query = 'dev.oriom.mosimo.getFeed';
+const mosimoCollection = 'dev.jisaku.mosimo.post';
+const query = 'dev.jisaku.mosimo.getFeed';
 const author = 'did:plc:syntheticapprovedbsaf';
 const stranger = 'did:plc:syntheticunapprovedbsaf';
 const source = 'wss://synthetic-jetstream.invalid/subscribe';
@@ -126,9 +126,8 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
   const mosimo = {
     $type: mosimoCollection,
     text: 'SYNTHETIC TEST ONLY — not a real alert or signed repository record',
-    createdAt: '2020-01-01T00:00:00.000Z',
-    deliveryExpiresAt: '2020-01-02T00:00:00.000Z',
-    extensions: [],
+    exp: '2020-01-02T00:00:00Z',
+    ext: [],
   };
   let mosimoRow: ReturnType<ReturnType<DatabaseSync['prepare']>['get']>;
   try {
@@ -170,7 +169,7 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
       (id,lexicon_json,backfill,target_collection) VALUES(?,?,0,?)`);
     for (const id of [mosimoCollection, query]) {
       const file = id === query ? 'getFeed' : 'post';
-      const lexicon = JSON.parse(readFileSync(new URL(`../../lexicons/dev/oriom/mosimo/${file}.json`, import.meta.url), 'utf8'));
+      const lexicon = JSON.parse(readFileSync(new URL(`../../protocol/mosimo/${file}.json`, import.meta.url), 'utf8'));
       insertLexicon.run(id, JSON.stringify(lexicon), id === query ? mosimoCollection : null);
     }
     db.prepare(`INSERT INTO happyview_instance_settings(key,value,updated_at)
@@ -236,10 +235,11 @@ test('real HappyView 2.16: isolated BSAF ingestion and combined HTTP feed', {
     assert.equal(combined.cursor, undefined);
     assert.deepEqual(combined.provenance[bsafUri], {
       did: author, cid: created.commit.cid, collection: COLLECTION,
-      indexedAt: stored.indexed_at, retrievedAt: metadata.fetched_at, source,
+      indexedAt: stored.indexed_at, firstSeenAt: stored.created_at, retrievedAt: metadata.fetched_at, source,
     });
     assert.deepEqual(combined.provenance[mosimoUri], {
       did: author, cid: mosimoCid, collection: mosimoCollection, indexedAt: mosimoRow!.indexed_at,
+      firstSeenAt: mosimoRow!.created_at,
     });
     const first = await feed({ limit: '1' });
     assert.deepEqual(first.records, [combined.records[0]]);

@@ -1,0 +1,19 @@
+{
+  "lexicon": 1,
+  "id": "dev.jisaku.bosai.connectivity",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Mosimo post extension (an element of dev.jisaku.mosimo.post ext) set by the Mosimo Bosai apps: whether the authoring device's OS reported a usable network connection when the post was signed. Signed by the author like any extension; relays must not add or change it. Not proof of Internet reachability, nor of how or when the post was delivered: a post signed offline may reach relays later. Omit the extension when unknown.",
+      "required": [
+        "online"
+      ],
+      "properties": {
+        "online": {
+          "type": "boolean",
+          "description": "True when the OS had a default network at signing time (Android: an active network; iOS: a satisfied network path), false otherwise."
+        }
+      }
+    }
+  }
+}

@@ -10,9 +10,19 @@ import java.time.Instant
 object PublicIngress {
     const val BSAF = "dev.jisaku.mosimo.public.bsaf"
     const val PRIORITY = "dev.jisaku.mosimo.priority"
+    const val JMA_EARTHQUAKE = "dev.jisaku.mosimo.public.jma.earthquake"
+    const val JMA_WEATHER = "dev.jisaku.mosimo.public.jma.weather"
+    /** importer §1.1: the feed of re-posted JMA disaster-information XML; its types are the original `Control/Title`. */
+    const val FEED_JMA_XML = "jma-xml"
     const val MAX_ROOTS = 8
+    /** importer §4: (botDid, type) and (feed, type) pairs together. */
     const val MAX_SELECTED = 64
-    data class Selection(val botDid: String, val type: String)
+    /** One re-post source a receiver may select (importer §3): a Bot's `(botDid, type)` or a feed's `(feed, type)`. */
+    sealed interface Selection {
+        val type: String
+        data class Bot(val botDid: String, override val type: String) : Selection { override fun toString() = "bot=$botDid type=$type" }
+        data class Feed(val feed: String, override val type: String) : Selection { override fun toString() = "feed=$feed type=$type" }
+    }
     data class Config(val roots: List<Attest.Root> = emptyList(), val selected: Set<Selection> = emptySet())
 
     /** Verified revocations held locally, keyed by subject key (hex). Never rolled back. */
@@ -36,7 +46,7 @@ object PublicIngress {
     data class ChainView(val state: Attest.ChainState, val expiredNow: Boolean?, val revocation: Attest.RevocationState?, val name: String?,
         val orgId: String?, val roles: List<String>, val trustLevel: Long?, val reason: String,
         /** importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
-         *  (Bot DID, type), and that pair locally selected. Decided from the post alone, however it arrived. */
+         *  (Bot DID, type) or (feed, type), and that pair locally selected. Decided from the post alone, however it arrived. */
         val importAuthorized: Boolean = false) {
         val identity: Boolean get() = Attest.ROLE_IDENTITY in roles
         val publicInformation: Boolean get() = Attest.ROLE_PUBLIC_INFORMATION in roles
@@ -44,9 +54,9 @@ object PublicIngress {
     }
 
     /** Authorization record kept with an inserted post (importer §3): never "official", only who re-posted what. */
-    data class Receipt(val rootPubkey: String, val leafId: String, val botDid: String, val type: String, val orgId: String, val orgName: String,
+    data class Receipt(val rootPubkey: String, val leafId: String, val source: Selection, val orgId: String, val orgName: String,
         val priority: Int, val checkedAt: String, val leafValidUntil: String?) {
-        override fun toString() = "root=${rootPubkey.take(8)} leaf=${leafId.take(8)} org=$orgName($orgId) bot=$botDid type=$type priority=$priority checked=$checkedAt"
+        override fun toString() = "root=${rootPubkey.take(8)} leaf=${leafId.take(8)} org=$orgName($orgId) $source priority=$priority checked=$checkedAt"
     }
     data class Decision(val receipt: Receipt?, val chain: ChainView?, val reason: String)
 
@@ -63,8 +73,14 @@ object PublicIngress {
         require(roots.map { it.pubkeyHex }.distinct().size == roots.size) { "Duplicate root" }
         require(node["selected"].isArray && node["selected"].size() <= MAX_SELECTED)
         val selected = node["selected"].map { s ->
-            s.exactFields(setOf("botDid", "type"))
-            Selection(s["botDid"].string().also { require(AtRepository.didPattern.matches(it)) }, s["type"].string().also { require(utf8(it).size in 1..128) })
+            val type = s["type"]?.string()?.also { require(utf8(it).size in 1..128) } ?: error("Expected type")
+            if (s.has("feed")) {
+                s.exactFields(setOf("feed", "type"))
+                Selection.Feed(s["feed"].string().also { require(utf8(it).size in 1..128) }, type)
+            } else {
+                s.exactFields(setOf("botDid", "type"))
+                Selection.Bot(s["botDid"].string().also { require(AtRepository.didPattern.matches(it)) }, type)
+            }
         }
         require(selected.distinct().size == selected.size) { "Duplicate selection" }
         return Config(roots, selected.toSet())
@@ -156,6 +172,26 @@ object PublicIngress {
     }
 
     /**
+     * The pair a re-post claims to carry (importer §1.1, §2): `public.bsaf` with `original` gives (botDid, type); otherwise
+     * exactly one `public.jma.earthquake` / `public.jma.weather` gives (`jma-xml`, its `message.control.title`).
+     * Throws when the post is neither.
+     */
+    fun importSelection(event: NostrEvent): Selection {
+        val ext = AtRepository.extensions(event)
+        if (ext.any { it["\$type"] == BSAF }) return bsafOriginal(event).let { Selection.Bot(it.botDid, it.type) }
+        val jma = ext.filter { it["\$type"] == JMA_EARTHQUAKE || it["\$type"] == JMA_WEATHER }.singleOrNull() ?: error("Not a bsaf or jma-xml re-post")
+        val title = Attest.text(Attest.map(Attest.map(jma["message"])["control"])["title"])
+        require(utf8(title).size in 1..128) { "Invalid Control/Title" }
+        return Selection.Feed(FEED_JMA_XML, title)
+    }
+
+    /** importer §1: the leaf's `importer` block lists [s] among its pairs of the same kind. */
+    fun covers(leaf: Attest.Attestation, s: Selection): Boolean = when (s) {
+        is Selection.Bot -> leaf.importerSources?.get(s.botDid)?.contains(s.type) == true
+        is Selection.Feed -> leaf.importerFeeds?.get(s.feed)?.contains(s.type) == true
+    }
+
+    /**
      * Evaluates every chain of [event] against [roots]; the first chain whose leaf belongs to the event decides.
      * [now] null means the clock is untrusted: the result is UNKNOWN_TIME, never VERIFIED.
      */
@@ -164,7 +200,7 @@ object PublicIngress {
         val chains = runCatching { Attest.chains(event) }.getOrElse { return ChainView(Attest.ChainState.INVALID, null, null, null, null, emptyList(), null, "malformed chain: ${it.message}") }
         if (chains.isEmpty()) return null
         val createdAt = Instant.ofEpochSecond(event.createdAt)
-        val original = runCatching { bsafOriginal(event) }.getOrNull()?.takeIf { Selection(it.botDid, it.type) in selected }
+        val selection = runCatching { importSelection(event) }.getOrNull()?.takeIf { it in selected }
         var best: ChainView? = null
         for (chain in chains) {
             val leaf = chain.attestations.last()
@@ -172,8 +208,8 @@ object PublicIngress {
             val result = if (bound.isFailure) Attest.ChainResult(Attest.ChainState.INVALID, "leaf: ${bound.exceptionOrNull()?.message}")
                 else Attest.verifyChain(chain.attestations, roots, createdAt, now)
             val revocation = if (result.root != null) Attest.revocationState(result, revocations::of, createdAt, seenAt) else null
-            val imported = original != null && result.state == Attest.ChainState.VERIFIED && Attest.ROLE_IMPORT in leaf.roles &&
-                leaf.orgId != null && leaf.importerSources?.get(original.botDid)?.contains(original.type) == true
+            val imported = selection != null && result.state == Attest.ChainState.VERIFIED && Attest.ROLE_IMPORT in leaf.roles &&
+                leaf.orgId != null && covers(leaf, selection)
             val view = ChainView(result.state, result.expiredNow, revocation, result.leaf?.displayName, result.leaf?.orgId,
                 result.leaf?.roles.orEmpty(), result.leaf?.trustLevel, result.reason, imported)
             if (view.confirmedNow) return view
@@ -187,16 +223,15 @@ object PublicIngress {
 
     /**
      * importer §3: local selection, a chain verified at both creation and now whose leaf has the `import` role, an
-     * `importer` block covering (botDid, type) and an `organization`, and no known revocation.
+     * `importer` block covering (botDid, type) or (feed, type) and an `organization`, and no known revocation.
      */
     fun verify(event: NostrEvent, config: Config, revocations: RevocationStore, now: Instant?, seenAt: Instant = now ?: Instant.ofEpochSecond(event.createdAt)): Decision {
         return try {
             require(event.tags.size <= 64 && event.tags.count { it.firstOrNull()?.startsWith(AtRepository.EXT_PREFIX) == true } <= 16) { "Event resource limit" }
             require(event.verify()) { "Invalid author signature" }
             require(EventCodec.encode(event).size <= MeshPolicy.MAX_PAYLOAD_BYTES && AtRepository.verifyEnvelope(event)) { "Invalid envelope/resource limit" }
-            val original = bsafOriginal(event)
-            val selection = Selection(original.botDid, original.type)
-            require(selection in config.selected) { "Bot/type not selected" }
+            val selection = importSelection(event)
+            require(selection in config.selected) { "Source/type not selected" }
             require(now != null) { "Clock unknown" }
             val createdAt = Instant.ofEpochSecond(event.createdAt)
             require(!createdAt.isAfter(now) && AtRepository.deliveryExpiresAt(event)?.isAfter(now) == true) { "Future event or past deadline" }
@@ -214,11 +249,11 @@ object PublicIngress {
                 if (result.state != Attest.ChainState.VERIFIED) { failure = result.reason; continue }
                 if (result.expiredNow == true) { failure = "chain expired now"; continue }
                 if (Attest.ROLE_IMPORT !in leaf.roles) { failure = "leaf lacks import role"; continue }
-                val sources = leaf.importerSources ?: run { failure = "leaf lacks importer block"; null } ?: continue
+                if (leaf.importerSources == null) { failure = "leaf lacks importer block"; continue }
                 val org = leaf.orgId ?: run { failure = "leaf lacks organization"; null } ?: continue
-                if (sources[original.botDid]?.contains(original.type) != true) { failure = "importer block does not cover ${original.botDid}/${original.type}"; continue }
+                if (!covers(leaf, selection)) { failure = "importer block does not cover $selection"; continue }
                 if (revocation != Attest.RevocationState.NOT_REVOKED_AS_KNOWN) { failure = "revocation: $revocation"; continue }
-                val receipt = Receipt(result.root!!.pubkeyHex, hex(leaf.id), original.botDid, original.type, org, leaf.orgName ?: leaf.ownerName,
+                val receipt = Receipt(result.root!!.pubkeyHex, hex(leaf.id), selection, org, leaf.orgName ?: leaf.ownerName,
                     priority(event), now.toString(), leaf.validUntil?.toString())
                 return Decision(receipt, view, "Authorized importer testimony; original Bot signature/inclusion not verified")
             }

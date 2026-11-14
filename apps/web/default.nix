@@ -25,8 +25,9 @@ in
       example = "https://appview.example.org";
     };
     clientKey = lib.mkOption {
-      type = lib.types.nonEmptyStr;
-      description = "Public HappyView client key used by the timeline.";
+      type = lib.types.nullOr lib.types.nonEmptyStr;
+      default = null;
+      description = "Public HappyView client key used by the timeline; null queries without a key. HappyView rate-limits per key, shared by every viewer, and not keyless queries.";
       example = "hvc_0123456789abcdef";
     };
   };

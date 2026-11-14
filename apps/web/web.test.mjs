@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import { runWeb } from './web-harness.mjs';
 
 const did = 'did:plc:synthetic';
+// Deterministic 13-char TID per id so URIs are well-formed and dedupe by URI.
+const tidFor = id => '3' + (id + 'aaaaaaaaaaaa').slice(0, 12).toLowerCase().replace(/[^234567a-z]/g, 'a');
 const post = (id, extra = {}) => ({
-  $type: 'dev.oriom.mosimo.post', uri: `at://${did}/dev.oriom.mosimo.post/${id}`,
-  text: `<script>not HTML ${id}</script>`, createdAt: '2020-01-01T00:00:00Z',
-  deliveryExpiresAt: '2020-01-02T00:00:00Z', extensions: [{ $type: 'example.unknown.ext', future: true }], ...extra,
+  $type: 'dev.jisaku.mosimo.post', uri: `at://${did}/dev.jisaku.mosimo.post/${tidFor(id)}`,
+  text: `<script>not HTML ${id}</script>`, created: '2020-01-01T00:00:00.000Z',
+  exp: '2020-01-02T00:00:00Z', ext: [{ $type: 'example.unknown.ext', future: true }], ...extra,
 });
 const json = data => ({ ok: true, json: async () => data });
 
@@ -22,7 +24,7 @@ test('actual client paginates, keeps arrival order and expired/unknown-extension
     assert.equal(options.cache, 'no-store');
     if (fail) throw new Error('offline');
     if (url.searchParams.has('cursor')) return json({ records: [post('one'), post('old')] });
-    return json({ records: removed ? [post('new')] : [post('one'), post('two', { createdAt: '2026-01-01T00:00:00Z' })], cursor: '2' });
+    return json({ records: removed ? [post('new')] : [post('one'), post('two')], cursor: '2' });
   });
   assert.equal(client.articles().length, 2);
   assert.match(client.articles()[0].querySelector('.text').textContent, /not HTML one/);
@@ -53,17 +55,30 @@ test('DID/URI diagnostic filters, single record response, and BSAF is not presen
     if (url.hostname === 'plc.directory') return json({});
     assert.equal(url.searchParams.get('did'), did);
     assert.equal(url.searchParams.get('uri'), uri);
-    return json({ record: post('one', { uri, $type: 'app.bsky.feed.post' }) });
+    return json({ record: post('one', { uri, $type: 'app.bsky.feed.post', createdAt: '2020-01-01T00:00:00Z' }) });
   }, `?did=${did}&uri=${encodeURIComponent(uri)}`);
   assert.equal(client.articles().length, 1);
   assert.ok(client.articles()[0].querySelectorAll('.time').some(e => e.textContent.includes('BSAF 原投稿')));
   assert.equal(client.more.hidden, true);
 });
 
-test('public client key and override survive every page and refresh without leaking to PLC', async () => {
-  for (const [key, search, apiOrigin] of [
+test('without `created`, the time is the AppView first arrival labelled 受信, never the TID (core §6.2)', async () => {
+  const seen = post('recv', { created: undefined });
+  const client = await runWeb(async input => {
+    if (new URL(input).hostname === 'plc.directory') return json({});
+    return json({ records: [seen, post('untimed', { created: undefined })], provenance: { [seen.uri]: { firstSeenAt: '2020-01-01T00:00:00Z' } } });
+  });
+  assert.equal(client.articles().length, 1);
+  const time = client.articles()[0].querySelector('.time');
+  assert.match(time.textContent, /^受信 /);
+  assert.equal(time.title, '2020-01-01T00:00:00Z');
+});
+
+test('optional public client key and override survive every page and refresh without leaking to PLC', async () => {
+  for (const [key, search, apiOrigin, clientKey = 'hvc_test_default'] of [
     ['hvc_test_default', `?did=${did}`, 'https://appview.example.org'],
     ['hvc_regression_override', `?did=${did}&client_key=hvc_regression_override&appview=https://custom-appview.invalid`, 'https://custom-appview.invalid'],
+    [null, `?did=${did}`, 'https://appview.example.org', null],
   ]) {
     const calls = [];
     const client = await runWeb(async input => {
@@ -73,7 +88,7 @@ test('public client key and override survive every page and refresh without leak
       return json(url.searchParams.has('cursor')
         ? { records: [post('older')] }
         : { records: [post('one')], cursor: '1' });
-    }, search);
+    }, search, { appviewUrl: 'https://appview.example.org', clientKey });
     await client.morePosts();
     await client.refresh();
     assert.equal(client.articles().length, 2);
@@ -82,8 +97,8 @@ test('public client key and override survive every page and refresh without leak
     assert.deepEqual(apiCalls.map(url => url.searchParams.get('cursor')), [null, null, '1', null, '1']);
     for (const url of apiCalls) {
       assert.equal(url.origin, apiOrigin);
-      assert.equal(url.pathname, '/xrpc/dev.oriom.mosimo.getFeed');
-      assert.deepEqual(url.searchParams.getAll('client_key'), [key]);
+      assert.equal(url.pathname, '/xrpc/dev.jisaku.mosimo.getFeed');
+      assert.deepEqual(url.searchParams.getAll('client_key'), key ? [key] : []);
       assert.equal(url.searchParams.get('did'), did);
       assert.equal(url.searchParams.get('limit'), '50');
     }
@@ -114,4 +129,27 @@ test('invalid API response is an error, not a false empty-feed success; next ref
   await client.refresh();
   assert.match(client.status.textContent, /最終取得/);
   assert.match(client.feed.children[0].textContent, /投稿はまだありません/);
+});
+
+test('hide-alerts toggle hides BSAF originals and hazard/official-source posts, and restores them', async () => {
+  const bsaf = { $type: 'app.bsky.feed.post', uri: `at://${did}/app.bsky.feed.post/one`, text: 'bsaf alert', createdAt: '2020-01-01T00:00:00Z' };
+  const hazard = post('hazard', { text: 'hazard', ext: [{ $type: 'dev.jisaku.mosimo.hazard', type: 'earthquake' }] });
+  const repost = post('repost', { text: 'repost', ext: [{ $type: 'dev.jisaku.mosimo.public.bsaf' }] });
+  const plain = post('plain', { text: 'plain', ext: [{ $type: 'dev.jisaku.mosimo.geo#origin', lat: 1, lon: 2 }] });
+  let records = [bsaf, hazard, repost, plain];
+  const client = await runWeb(async input => {
+    if (new URL(input).hostname === 'plc.directory') return json({});
+    return json({ records });
+  });
+  const texts = () => client.articles().map(a => a.querySelector('.text').textContent);
+  assert.deepEqual(texts(), ['bsaf alert', 'hazard', 'repost', 'plain']);
+  client.toggleAlerts(true);
+  assert.deepEqual(texts(), ['plain']);
+  await client.refresh();
+  assert.deepEqual(texts(), ['plain'], 'stays hidden across polling');
+  records = [bsaf];
+  await client.refresh();
+  assert.match(client.feed.children[0].textContent, /警報・注意報を隠しています/);
+  client.toggleAlerts(false);
+  assert.deepEqual(texts(), ['bsaf alert']);
 });

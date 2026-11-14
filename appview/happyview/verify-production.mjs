@@ -10,7 +10,7 @@ if (!process.argv[2]) rkeys.push('3my4mwtyipcmx', '3my4mwu34osmx');
 const pds = process.env.PDS_URL ?? 'https://pds.oriom.dev';
 const relay = process.env.RELAY_URL ?? 'https://bsky.network';
 const appview = process.env.APPVIEW_URL ?? 'https://appview.oriom.dev';
-const collection = 'dev.oriom.mosimo.post';
+const collection = 'dev.jisaku.mosimo.post';
 const origin = 'http://localhost:8080';
 async function get(base, method, params) {
   const url = new URL(`/xrpc/${method}`, base);
@@ -28,7 +28,7 @@ try {
   const indexed = new Map();
   let cursor;
   for (let page = 0; page < 100; page++) {
-    const data = await get(appview, 'dev.oriom.mosimo.getFeed', { did, limit: '100', ...(cursor ? { cursor } : {}) });
+    const data = await get(appview, 'dev.jisaku.mosimo.getFeed', { did, limit: '100', ...(cursor ? { cursor } : {}) });
     assert.ok(Array.isArray(data.records));
     for (const record of data.records) {
       if (record.$type === collection) indexed.set(record.uri, { record, provenance: data.provenance?.[record.uri] });

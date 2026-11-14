@@ -216,35 +216,14 @@ impl Sim {
             return;
         }
         let t = self.t;
-        // One search per HQ over roads open to vehicles; a settlement is isolated if its HQ cannot reach it.
-        let reach: Vec<Vec<bool>> = (0..self.zones.len())
-            .map(|z| {
-                let hq = self.zones[z].hq;
-                let start = if hq != NONE { self.sites[hq as usize].node } else { NONE };
-                let mut seen = vec![false; self.nodes.len()];
-                if start == NONE {
-                    return seen;
-                }
-                let mut stack = vec![start];
-                seen[start as usize] = true;
-                while let Some(u) = stack.pop() {
-                    for &(e, v) in &self.adj[u as usize] {
-                        if !seen[v as usize] && !self.edges[e as usize].cut_at(t) {
-                            seen[v as usize] = true;
-                            stack.push(v);
-                        }
-                    }
-                }
-                seen
-            })
-            .collect();
+        // A settlement is isolated when no vehicle can reach it from outside help (any HQ, the depot or off the map).
+        let reach = self.reachable_from_outside(t);
         for s in 0..self.settlements.len() {
             let st = &self.settlements[s];
-            let hq = self.zones[st.zone as usize].hq;
-            if hq == NONE || st.node == NONE || self.sites[hq as usize].node == NONE {
+            if st.node == NONE {
                 continue;
             }
-            let reachable = reach[st.zone as usize][st.node as usize];
+            let reachable = reach[st.node as usize];
             let st = &mut self.settlements[s];
             if reachable {
                 st.isolated_since = INF;

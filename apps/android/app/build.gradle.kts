@@ -12,9 +12,19 @@ android {
         applicationId = "dev.jisaku.mosimo"
         minSdk = 26
         targetSdk = 36
-        // CI passes the Actions run number; local builds fall back to the manual value.
-        versionCode = providers.gradleProperty("mosimoVersionCode").orNull?.toInt() ?: 4
-        versionName = "0.3.0"
+        // Bump both on every source release (versionCode +1 each time). F-Droid reads these
+        // literals from the tagged commit, so keep them as plain `versionCode = <number>` / `versionName = "<text>"`.
+        versionCode = 49
+        versionName = "0.4.0"
+        // The Play CI passes its Actions run number instead; Play versionCodes are independent of the source value.
+        providers.gradleProperty("mosimoVersionCode").orNull?.let { versionCode = it.toInt() }
+        // F-Droid builds one APK per ABI with -PmosimoAbi=<abi> and versionCode*10 + n; Play and GitHub stay universal.
+        providers.gradleProperty("mosimoAbi").orNull?.let { abi ->
+            val n = listOf("armeabi-v7a", "x86", "arm64-v8a", "x86_64").indexOf(abi) + 1
+            require(n > 0) { "Unknown mosimoAbi: $abi" }
+            versionCode = versionCode!! * 10 + n
+            ndk { abiFilters += abi }
+        }
         manifestPlaceholders["mosimoTestPeerNode"] = providers.gradleProperty("mosimoTestPeerNode").orElse("").get()
         manifestPlaceholders["mosimoTestAuthor"] = providers.gradleProperty("mosimoTestAuthor").orElse("").get()
         manifestPlaceholders["mosimoTestNode"] = providers.gradleProperty("mosimoTestNode").orElse("").get()
@@ -42,8 +52,14 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // Without a keystore (F-Droid's build server, which signs with its own key) the release APK stays unsigned.
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
         }
+    }
+    // The dependency blob is encrypted for Google; F-Droid rejects it in APKs. The Play AAB keeps it.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = true
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {

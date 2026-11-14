@@ -51,6 +51,7 @@ final class MapModel: ObservableObject {
         if areaMeters > 0 { ext.append(Extensions.circle(lat: micro(point.latitude), lon: micro(point.longitude), r: Int64(areaMeters) * 1000)) }
         // validity is independent of the delivery deadline, which keeps the app default.
         ext.append(Extensions.validity(until: Instant(epochSecond: ends).description))
+        ext.append(connectivity(online: mesh.state.network))
         sentAttempt = mesh.state.publishAttempt
         sentId = mesh.state.lastPublishedId
         sending = true
@@ -303,7 +304,7 @@ struct MapScreen: View {
               let post = mesh.state.posts.first(where: { $0.id == id }) else { return }
         vm.handledFocus = nav.focusToken
         // An alert usually covers a prefecture or more, so it opens zoomed out.
-        if let c = post.mapPoint { vm.centered = true; map.moveTo(c, zoom: post.alert ? 8 : 15, bottomFraction: 0.5) }
+        if let c = post.mapPoint { vm.centered = true; map.moveTo(c, zoom: post.alert || post.allClearNotice ? 8 : 15, bottomFraction: 0.5) }
         vm.stack = [id]; vm.selected = id
     }
 

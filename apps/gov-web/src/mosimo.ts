@@ -1,24 +1,51 @@
-// Mosimo feed parsing. Extension shapes follow protocol/0004, 0011 and 0020.
-const DEFS = 'dev.oriom.mosimo.defs#';
+// Mosimo feed parsing. Reads the current wire (protocol/mosimo/README.md §4.1, §5: dev.jisaku.mosimo.post with `ext`)
+// and the pre-cutover old wire (dev.oriom.mosimo.post with `extensions` of dev.oriom.mosimo.defs#*).
+// No time is read from the TID rkey: core §6.2 forbids using it as the posting time.
+// Extension shapes follow protocol/mosimo/{geo,validity,annotation,priority,hazard,public/bsaf}/.
+// A copy of protocol/mosimo/public/bsaf/hazard/prefectures.json: the Nix build sees only this directory. mosimo.test.ts fails if it drifts.
+import prefectures from './prefectures.json';
+import { base64ToBytes, resolveEventUris, toHex } from './nostr';
+
+const OLD = 'dev.oriom.mosimo.defs#', NEW = 'dev.jisaku.mosimo.';
+const ALERT_EXT = /^dev\.jisaku\.mosimo\.(hazard|public)([.#]|$)/;
+export const APPVIEW: string = import.meta.env.VITE_APPVIEW_URL || 'https://appview.oriom.dev';
+// Public HappyView client key: an app identifier checked against allowed origins, not a secret.
+// Optional: HappyView rate-limits per key (shared by every viewer), not keyless queries.
+export const CLIENT_KEY: string = import.meta.env.VITE_CLIENT_KEY ?? '';
+// Nostr relay used to map annotation targets given as Nostr event IDs (Android) to atproto posts.
+export const RELAY: string = import.meta.env.VITE_RELAY_URL || 'wss://pds.oriom.dev';
 
 export type LatLng = [number, number];
-export type Area = { shape: 'circle'; center: LatLng; radiusMeters: number } | { shape: 'rect'; bounds: [LatLng, LatLng] };
+export type Area = { shape: 'circle'; center: LatLng; radiusMeters: number } | { shape: 'rect'; bounds: [LatLng, LatLng]; hash: string };
 export type Relation = 'correction' | 'supplement' | 'endorsement';
 export type Validity = { startsAt?: string; endsAt?: string };
-export type ValidityState = 'valid' | 'expired' | 'unknown';
+export type ValidityState = 'valid' | 'expired' | 'pending' | 'unknown';
 
 export type Post = {
   uri: string;
   did: string;
   text: string;
-  createdAt: string;
-  indexedAt?: string;
+  createdAt?: string;
+  receivedAt?: string;
+  firstSeenAt?: string;
+  cid?: string;
   bsaf: boolean;
+  // 警報・注意報系: a BSAF original, or a post carrying hazard / official-source extensions (JMA, CAP, BSAF reposts).
+  alert: boolean;
+  bsafTags: string[];
+  repostOf?: string;
+  repostCid?: string;
   origin?: LatLng;
   areas: Area[];
+  areaIncomplete?: boolean;
+  areaApprox?: boolean;
   validity?: Validity;
-  annotation?: { relation: Relation; target?: string };
+  // target is an atproto URI; eventId (hex) is kept for Nostr targets until fetchFeed maps it to a URI.
+  annotation?: { relation: Relation; target?: string; nostr?: boolean; eventId?: string };
   priority?: number;
+  hazardStatus?: string;
+  online?: boolean;
+  conflicts: string[];
   unknownTypes: string[];
 };
 
@@ -26,9 +53,11 @@ const obj = (v: unknown): Record<string, unknown> | undefined =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 const int = (v: unknown) => (Number.isInteger(v) ? (v as number) : undefined);
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+const strs = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
+// Out-of-range coordinates violate the geo lexicon bounds and are dropped, not clamped.
 const micro = (lat: unknown, lon: unknown): LatLng | undefined => {
   const a = int(lat), b = int(lon);
-  return a == null || b == null ? undefined : [a / 1e6, b / 1e6];
+  return a == null || b == null || Math.abs(a) > 90e6 || Math.abs(b) > 180e6 ? undefined : [a / 1e6, b / 1e6];
 };
 
 const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
@@ -48,76 +77,181 @@ export function decodeGeohash(hash: string): [LatLng, LatLng] | undefined {
   return hash ? [[lat[0], lon[0]], [lat[1], lon[1]]] : undefined;
 }
 
-function parseArea(region: unknown): Area | undefined {
+// The outer sides of a geohash union, so it reads as one shape (as the apps outline it): a side is on the perimeter unless a
+// same-size cell lies across it. Cell corners are exact binary fractions, so they compare exactly.
+export function geohashOutline(cells: [LatLng, LatLng][]): [LatLng, LatLng][] {
+  const corners = new Set(cells.map(([sw]) => String(sw)));
+  const free = (s: number, w: number) => !corners.has(`${s},${w}`);
+  return cells.flatMap(([[s, w], [n, e]]) => {
+    const sides: [LatLng, LatLng][] = [];
+    if (free(n, w)) sides.push([[n, w], [n, e]]);
+    if (free(2 * s - n, w)) sides.push([[s, w], [s, e]]);
+    if (free(s, e)) sides.push([[s, e], [n, e]]);
+    if (free(s, 2 * w - e)) sides.push([[s, w], [n, w]]);
+    return sides;
+  });
+}
+
+// geo#region: the lexicon's properties (lat/lon/r) win over its stale description.
+// The lexicon sets no maximum radius; past half the Earth's circumference a circle covers it all, so clamp there and keep map bounds finite.
+const MAX_RADIUS_MM = 2e10;
+function parseArea(region: unknown, isNew: boolean): Area | undefined {
   const r = obj(region);
   if (r?.shape === 'circle') {
-    const center = micro(r.latitudeMicrodegrees, r.longitudeMicrodegrees);
-    const mm = int(r.radiusMillimeters);
-    return center && mm != null && mm >= 0 ? { shape: 'circle', center, radiusMeters: mm / 1000 } : undefined;
+    const center = isNew ? micro(r.lat, r.lon) : micro(r.latitudeMicrodegrees, r.longitudeMicrodegrees);
+    const mm = int(isNew ? r.r : r.radiusMillimeters);
+    return center && mm != null && mm >= 0 ? { shape: 'circle', center, radiusMeters: Math.min(mm, MAX_RADIUS_MM) / 1000 } : undefined;
   }
   if (r?.shape === 'geohash' && typeof r.hash === 'string') {
     const bounds = decodeGeohash(r.hash);
-    return bounds && { shape: 'rect', bounds };
+    return bounds && { shape: 'rect', bounds, hash: r.hash };
   }
 }
 
+// Both wires map onto one kind per extension; the kind is what `conflicts` reports.
+const KIND = new Map([
+  [OLD + 'origin', 'origin'], [NEW + 'geo#origin', 'origin'],
+  [OLD + 'area', 'area'], [NEW + 'geo#area', 'area'],
+  [OLD + 'validity', 'validity'], [NEW + 'validity', 'validity'],
+  [OLD + 'annotation', 'annotation'], [NEW + 'annotation', 'annotation'],
+  [OLD + 'priority', 'priority'], [NEW + 'priority', 'priority'],
+  [NEW + 'hazard', 'hazard'],
+  [OLD + 'bsafV1', 'bsaf'], [NEW + 'public.bsaf', 'bsaf'],
+  ['dev.jisaku.bosai.connectivity', 'connectivity'],
+]);
+
+export const JMA_BOT = 'did:plc:vwi7zhfyamyvrg5v6ycjgzxi', KIKIKURU_BOT = 'did:plc:kxwz5cz7o6g4jlmxh6doyfsm';
+// Exactly one tag per core key; repeated core tags are never resolved to one (public/bsaf §3.1).
+export const bsafTag = (tags: string[], key: string) => {
+  const t = tags.filter(t => t.startsWith(key + ':'));
+  return t.length === 1 ? t[0].slice(key.length + 1) : undefined;
+};
+// public/bsaf/hazard §1, §2.3: the publisher gives the Kikikuru Bot's own per-prefecture posts, when their type: and value:
+// are in its tables (§4.1, §4.2), that prefecture's cells as an approximate geo#area. The apps get it on the converted post;
+// a raw record gets the same here. JMA Bot's target: names only the first region, so it gets none.
+const KIKIKURU_TYPES = new Set(['heavy-rain-warning', 'heavy-rain', 'linear-rainband-warning', 'flood-warning', 'landslide-warning',
+  'storm-surge-warning', 'wind-warning', 'wave-warning', 'snow-warning', 'significant-snowfall-warning', 'tornado-warning',
+  'thunderstorm-warning', 'melting-snow-warning', 'dense-fog-warning', 'dry-air-warning', 'avalanche-warning',
+  'low-temperature-warning', 'frost-warning', 'icing-warning', 'snow-accretion-warning', 'weather-info', 'typhoon', 'other-warning']);
+const KIKIKURU_VALUES = new Set(['level2', 'level3', 'level4', 'level5', 'advisory', 'warning', 'special-warning', 'cancelled',
+  'violent', 'very-strong', 'strong', 'tropical-storm', 'info']);
+const COVERS: Record<string, string[]> = prefectures;
+
 export function parsePost(record: Record<string, unknown>, provenance?: Record<string, unknown>): Post | undefined {
-  const uri = str(record.uri), text = str(record.text), createdAt = str(record.createdAt);
-  if (!uri || text == null || !createdAt) return undefined;
+  const uri = str(record.uri), text = str(record.text);
+  if (!uri || text == null) return undefined;
+  const bsaf = record.$type === 'app.bsky.feed.post';
   const post: Post = {
     uri,
     did: uri.split('/')[2] ?? '',
     text,
-    createdAt,
-    indexedAt: str(provenance?.indexedAt),
-    bsaf: record.$type === 'app.bsky.feed.post',
+    // The new wire's canonical time is the Nostr created_at, which the AppView does not serve yet; never inferred from the TID (README §6.2).
+    createdAt: str(record.created) ?? str(record.createdAt),
+    // firstSeenAt is the AppView's first arrival; indexedAt (rewritten by backfills) only stands in until it is served.
+    receivedAt: str(provenance?.firstSeenAt) ?? str(provenance?.indexedAt),
+    firstSeenAt: str(provenance?.firstSeenAt),
+    cid: str(provenance?.cid),
+    bsaf,
+    alert: bsaf,
+    bsafTags: bsaf ? strs(record.tags) : [],
     areas: [],
+    conflicts: [],
     unknownTypes: [],
   };
-  for (const ext of Array.isArray(record.extensions) ? record.extensions : []) {
-    const e = obj(ext);
-    const type = str(e?.$type);
+  const target = bsaf && post.did === KIKIKURU_BOT && KIKIKURU_TYPES.has(bsafTag(post.bsafTags, 'type') ?? '')
+    && KIKIKURU_VALUES.has(bsafTag(post.bsafTags, 'value') ?? '') ? bsafTag(post.bsafTags, 'target') : undefined;
+  if (target && Object.hasOwn(COVERS, target)) {
+    post.areas = COVERS[target].flatMap(hash => parseArea({ shape: 'geohash', hash }, true) ?? []);
+    post.areaApprox = true;
+  }
+  const byKind = new Map<string, Record<string, unknown>[]>();
+  const exts = record.ext ?? record.extensions;
+  for (const ext of Array.isArray(exts) ? exts : []) {
+    const e = obj(ext), type = str(e?.$type);
     if (!e || !type) continue;
-    switch (type) {
-      case DEFS + 'origin':
-        post.origin = micro(e.latitudeMicrodegrees, e.longitudeMicrodegrees);
+    if (ALERT_EXT.test(type)) post.alert = true;
+    const kind = KIND.get(type);
+    if (kind) byKind.set(kind, [...(byKind.get(kind) ?? []), e]);
+    else post.unknownTypes.push(type);
+  }
+  for (const [kind, [e, ...rest]] of byKind) {
+    // Repeats are neither merged nor last-wins (README §5.3, priority §2, hazard §1): none is adopted.
+    if (rest.length) {
+      post.conflicts.push(kind);
+      if (kind === 'area') post.areaIncomplete = true;
+      continue;
+    }
+    const isNew = (e.$type as string).startsWith(NEW);
+    switch (kind) {
+      case 'origin':
+        post.origin = isNew ? micro(e.lat, e.lon) : micro(e.latitudeMicrodegrees, e.longitudeMicrodegrees);
         break;
-      case DEFS + 'area':
+      case 'area':
+        // A region we cannot read leaves containment 判定不明, never 範囲外 (geo §4.2).
+        if (!Array.isArray(e.regions)) post.areaIncomplete = true;
         for (const region of Array.isArray(e.regions) ? e.regions : []) {
-          const area = parseArea(region);
+          const area = parseArea(region, isNew);
           if (area) post.areas.push(area);
+          else post.areaIncomplete = true;
         }
+        // geo §4.3: a covering approximation must stay distinguishable from an exact area.
+        if (e.approximation === true) post.areaApprox = true;
         break;
-      case DEFS + 'validity':
-        post.validity = { startsAt: str(e.startsAt), endsAt: str(e.endsAt) };
+      case 'validity':
+        post.validity = isNew ? { startsAt: str(e.from), endsAt: str(e.until) } : { startsAt: str(e.startsAt), endsAt: str(e.endsAt) };
         break;
-      case DEFS + 'annotation': {
-        const relation = e.relation;
+      case 'annotation': {
+        const relation = e.relation, t = obj(e.target);
         if (relation === 'correction' || relation === 'supplement' || relation === 'endorsement') {
-          // Nostr targets have no AppView URI, so they always read as 参照先未取得.
-          post.annotation = { relation, target: str(obj(e.target)?.uri) };
+          post.annotation = { relation, target: str(t?.uri) };
+          // Nostr targets carry only an eventId; fetchFeed maps it to a URI via the relay (resolveNostrTargets).
+          if (t?.network === 'nostr' && !post.annotation.target) {
+            post.annotation.nostr = true;
+            const raw = str(obj(t.eventId)?.$bytes), bytes = raw ? base64ToBytes(raw) : undefined;
+            if (bytes?.length === 32) post.annotation.eventId = toHex(bytes);
+          }
         }
         break;
       }
-      case DEFS + 'priority': {
+      case 'priority': {
         const level = int(e.level);
         if (level != null && level >= 0 && level <= 3) post.priority = level;
         break;
       }
-      default:
-        post.unknownTypes.push(type);
+      case 'hazard':
+        // A missing or unknown status must never read as a real event (hazard §2.1).
+        if (e.status !== 'Actual') post.hazardStatus = str(e.status) ?? 'Unknown';
+        break;
+      case 'bsaf':
+        // Tags stay verbatim (public/bsaf §3.1); `original` marks an import of an existing BSAF post.
+        post.bsafTags = strs(e.tags);
+        post.repostOf = str(obj(e.original)?.uri);
+        post.repostCid = str(obj(e.original)?.cid);
+        break;
+      case 'connectivity':
+        // The Mosimo Bosai apps' own extension (apps/lexicons/dev/jisaku/bosai/connectivity.json): whether the author's device had a network when signing.
+        if (typeof e.online === 'boolean') post.online = e.online;
+        break;
     }
   }
   return post;
 }
 
-// A missing end means 不明 (0011), and a not-yet-started period is not 有効 either.
+// A missing end means 不明 (validity §3), but a future start alone is enough for 開始前; the period is from <= t < until.
 export function validityState(v: Validity | undefined, now = Date.now()): ValidityState {
-  const end = Date.parse(v?.endsAt ?? '');
-  if (!(end >= 0)) return 'unknown';
-  if (now > end) return 'expired';
-  const start = Date.parse(v?.startsAt ?? '');
-  return start > now ? 'unknown' : 'valid';
+  const start = Date.parse(v?.startsAt ?? ''), end = Date.parse(v?.endsAt ?? '');
+  if (!(end >= 0)) return start > now ? 'pending' : 'unknown';
+  if (now >= end) return 'expired';
+  return start > now ? 'pending' : 'valid';
+}
+
+// Needs both the author's creation time and the first arrival; indexedAt is never used (backfills rewrite it).
+export function delayText(post: Post): string | undefined {
+  const min = (Date.parse(post.firstSeenAt ?? '') - Date.parse(post.createdAt ?? '')) / 60000;
+  if (!(min >= 5)) return undefined;
+  if (min < 60) return `約${Math.round(min)}分遅れで到着`;
+  if (min < 2880) return `約${Math.round(min / 60)}時間遅れで到着`;
+  return `約${Math.round(min / 1440)}日遅れで到着`;
 }
 
 export type Thread = {
@@ -128,15 +262,17 @@ export type Thread = {
   orphan: boolean;
 };
 
-// Feed order is kept; annotations whose target is loaded fold under it.
+// Feed order is kept; annotations and BSAF reposts whose target is loaded fold under it.
 export function buildThreads(posts: Post[]): Thread[] {
   const byUri = new Map(posts.map(p => [p.uri, p]));
+  // public/bsaf §3.2, §10: a repost belongs to its original only when both URI and CID match.
+  const parent = (p: Post) => p.annotation?.target ?? (p.repostCid && byUri.get(p.repostOf ?? '')?.cid === p.repostCid ? p.repostOf : undefined);
   // Walk annotation chains up to the root so a supplement to a correction is not lost.
   // Posts on a cycle stay roots; a chain that runs into a cycle folds under the cycle member it reached.
   const targetOf = (p: Post) => {
     const seen = new Set([p.uri]);
     let root: Post | undefined;
-    for (let t = p.annotation?.target; t && byUri.has(t); t = root.annotation?.target) {
+    for (let t = parent(p); t && byUri.has(t); t = parent(root)) {
       if (t === p.uri) return undefined;
       if (seen.has(t)) break;
       seen.add(t);
@@ -159,26 +295,26 @@ export function buildThreads(posts: Post[]): Thread[] {
         replies: rs,
         // Only the original author can correct a post; others' corrections are listed but do not dim it.
         corrected: direct('correction').some(r => r.did === post.did),
-        endorsers: new Set(direct('endorsement').map(r => r.did)).size,
+        // Self-endorsement is no corroboration.
+        endorsers: new Set(direct('endorsement').map(r => r.did).filter(d => d !== post.did)).size,
         orphan: !!post.annotation && !byUri.has(post.annotation.target ?? ''),
       };
     });
 }
 
-export function delayText(post: Post): string | undefined {
-  const min = (Date.parse(post.indexedAt ?? '') - Date.parse(post.createdAt)) / 60000;
-  if (!(min >= 5)) return undefined;
-  if (min < 60) return `約${Math.round(min)}分遅れで到着`;
-  if (min < 2880) return `約${Math.round(min / 60)}時間遅れで到着`;
-  return `約${Math.round(min / 1440)}日遅れで到着`;
-}
-
 export type FeedPage = { posts: Post[]; cursor?: string };
 
-export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }): Promise<FeedPage> {
-  const url = new URL('/xrpc/dev.oriom.mosimo.getFeed', appview);
+// Fill in atproto URIs for annotations that target a Nostr event. Unresolved ones stay unfolded.
+export async function resolveNostrTargets(posts: Post[], relay: string, opts?: Parameters<typeof resolveEventUris>[2]): Promise<void> {
+  const pending = posts.filter(p => p.annotation?.eventId && !p.annotation.target);
+  if (!relay || !pending.length) return;
+  const uris = await resolveEventUris(relay, pending.map(p => p.annotation!.eventId!), opts).catch(() => new Map<string, string>());
+  for (const p of pending) p.annotation!.target = uris.get(p.annotation!.eventId!);
+}
+
+export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }, relay = ''): Promise<FeedPage> {
+  const url = new URL('/xrpc/dev.jisaku.mosimo.getFeed', appview);
   url.searchParams.set('limit', '50');
-  // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
   if (clientKey) url.searchParams.set('client_key', clientKey);
   for (const [k, v] of Object.entries(q)) if (v) url.searchParams.set(k, v);
   const res = await fetch(url, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
@@ -188,28 +324,44 @@ export async function fetchFeed(appview: string, clientKey: string, q: { cursor?
   if (!Array.isArray(rows)) throw new Error('Invalid feed response');
   const provenance = obj(data.provenance) ?? {};
   const posts = rows.flatMap(r => {
-    const rec = obj(r);
-    const post = rec && parsePost(rec, obj(provenance[str(rec.uri) ?? '']));
+    const rec = obj(r), uri = str(rec?.uri) ?? '';
+    // Own keys only: a record URI must not reach Object.prototype.
+    const post = rec && parsePost(rec, obj(Object.hasOwn(provenance, uri) ? provenance[uri] : undefined));
     return post ? [post] : [];
   });
   const cursor = data.cursor;
   if (cursor != null && (typeof cursor !== 'string' || cursor === q.cursor)) throw new Error('Invalid cursor');
+  await resolveNostrTargets(posts, relay);
   return { posts, cursor: cursor ?? undefined };
 }
 
+// 4xx is a definite answer and may be cached; 5xx, 429 and network errors are transient and throw.
+const getJson = (url: string | URL) =>
+  fetch(url, { signal: AbortSignal.timeout(10000) }).then(r => {
+    if (r.ok) return r.json();
+    if (r.status >= 500 || r.status === 429) throw new Error(String(r.status));
+    return null;
+  });
+
 const handles = new Map<string, Promise<string | undefined>>();
-// ponytail: shows the PLC alsoKnownAs handle without the bidirectional DNS/well-known check; add it if handles must be trusted.
+// The PLC alsoKnownAs claim is shown only when that handle resolves back to the same DID (bidirectional check).
+// The AppView resolves it, so no third-party origin is added; transient failures leave the cache so they retry.
 export function resolveHandle(did: string): Promise<string | undefined> {
   if (!did.startsWith('did:plc:')) return Promise.resolve(undefined);
   let p = handles.get(did);
   if (!p) {
-    p = fetch(`https://plc.directory/${encodeURIComponent(did)}`, { signal: AbortSignal.timeout(10000) })
-      .then(r => (r.ok ? r.json() : null))
-      .then(doc => {
-        const aka = (doc?.alsoKnownAs as string[] | undefined)?.find(a => a.startsWith('at://'));
-        return aka && '@' + aka.slice(5);
-      })
-      .catch(() => undefined);
+    p = (async () => {
+      const doc = await getJson(`https://plc.directory/${encodeURIComponent(did)}`);
+      const handle = strs(doc?.alsoKnownAs).find(a => a.startsWith('at://'))?.slice(5);
+      if (!handle) return undefined;
+      const url = new URL('/xrpc/com.atproto.identity.resolveHandle', APPVIEW);
+      url.searchParams.set('handle', handle);
+      if (CLIENT_KEY) url.searchParams.set('client_key', CLIENT_KEY);
+      return (await getJson(url))?.did === did ? '@' + handle : undefined;
+    })().catch(() => {
+      handles.delete(did);
+      return undefined;
+    });
     handles.set(did, p);
   }
   return p;

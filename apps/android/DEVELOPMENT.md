@@ -117,6 +117,25 @@ Gradleに次のプロパティを渡すと隔離試験に使える。いずれ�
 
 認証・本番アクセス制御の代替ではない。nodeはプロセスごとの一時値なので、現在のログで確認し、過去のallowlistを再利用しない。
 
+## F-Droid・GitHub Releases への公開
+
+Google Play とは別の経路です。Play 用の `android.yml`・`fastlane/`・Play の掲載情報には影響しません。
+
+- **バージョン**: `app/build.gradle.kts` の `versionCode`（毎回 1 ずつ増やす）と `versionName` をリリースごとに上げる。F-Droid はタグ時点のこの値を読むため、`versionCode = 48` のような数値リテラルのまま書く。Play の CI は従来どおり実行番号で上書きするので、Play の versionCode とは無関係。
+- **掲載情報**: リポジトリ直下の `fastlane/metadata/android/`（F-Droid 用）。リリースごとに `ja-JP` と `en-US` の `changelogs/<versionCode>.txt` を追加する。
+- **ABI 分割**: F-Droid は `-PmosimoAbi=<abi>` で ABI ごとに APK を作り、versionCode は `ソースの値×10 + n`（armeabi-v7a=1、x86=2、arm64-v8a=3、x86_64=4）になる。Play の AAB と GitHub Releases の APK は全 ABI 入りのまま。
+- **署名**: F-Droid は自分の鍵で署名し直す。GitHub Releases の APK は Play のアップロード鍵とは別の専用鍵（`secrets/github-release.sops.yaml`、証明書 SHA-256 `7e4503339f67aa0334f7046f98f369f74da7c870faa2b30d080ff06f93f8ae27`）で署名する。鍵を失うと更新できなくなるため、この暗号化ファイルを消さない。
+
+### リリース手順
+
+1. `versionCode`・`versionName` を上げ、changelog を追加して main にマージする。
+2. GitHub Actions の「Android GitHub release」を main で手動実行する。署名済み APK を作り、`mosimo-v<versionName>` タグと GitHub Release を作成する。ローカルでは `mise run github-release-apk` で同じ APK を作れる（復号鍵が必要）。
+3. F-Droid はタグを検出して自動でビルドを追加する（`fdroid/dev.jisaku.mosimo.yml` の `UpdateCheckMode`）。反映には数日かかる。
+
+### F-Droid への初回申請
+
+`fdroid/dev.jisaku.mosimo.yml` は fdroiddata に出すメタデータの下書き。初回のタグを作った後、`commit` をそのタグのコミットハッシュに置き換え、GitLab の `fdroid/fdroiddata` をフォークして `metadata/dev.jisaku.mosimo.yml` として追加し、マージリクエストを出す。
+
 ## 組み込み・変更箇所
 
 | モジュール | 責務 |
@@ -191,7 +210,7 @@ AppView のダウンロード・Bluesky record のクライアント変換は行
 3. 実験 UI の「端末時計を信頼」を有効にする。これは利用者の明示的判断であり、同期の証明ではない。既定・再起動時は `UNKNOWN`。HTTP Date・イベント時刻を信頼時計へ昇格しない。
 4. 「公的情報を取得」（SDK: `requestPublicInformation()`）を押す。自動ポーリングは行わない。validated Internet が必要で、30秒につき1回、同時に1 request worker のみ。
 
-独自 verb `MOSIMO-REQ`、`order: priority-v1`、kind `[1]`、`#t: [mosimo.oriom.dev]`、limit32 の有限取得。`CLOSED` または15秒の無応答時は `CLOSE` 後、**異なる subscription ID と新しい接続**の通常 `REQ` に1回だけ fallback（未知verbで接続を切るrelayも対象）。通常 `REQ` も15秒以内に EOSE が来なければ取得失敗（空成功ではない）。接続待ちは15秒。NIP-11自己申告を認可に使わず、通常 REQ の意味・順序は変更しない。
+独自 verb `MOSIMO-REQ`、`order: priority-v1`、kind `[1]`、`#t: [mosimo.jisaku.dev]`、limit32 の有限取得。`CLOSED` または15秒の無応答時は `CLOSE` 後、**異なる subscription ID と新しい接続**の通常 `REQ` に1回だけ fallback（未知verbで接続を切るrelayも対象）。通常 `REQ` も15秒以内に EOSE が来なければ取得失敗（空成功ではない）。接続待ちは15秒。NIP-11自己申告を認可に使わず、通常 REQ の意味・順序は変更しない。
 
 root→leaf **1証明のみ**を対応範囲とする。長い経路は unsupported として拒否し、中間を root 扱いしない。証明・root scope、ローカル選択、leaf DID/key、両 binding 署名、commit DID/low-S署名、Nostr ID/Schnorr署名、受信/作成時刻の証明期間、未来イベント、配送期限、fresh snapshot/失効を独立検証する。取得と暗号検証は mesh actor 外の worker で実行し、設定再読込・時計変更・オンライン停止で古い worker の結果を無効化する。投入直前も時計・証明・snapshot・配送期限と serial 履歴を確認する。
 
@@ -219,9 +238,6 @@ Scope は各 Bot 最大32個の明示的 type、合計64 Bot/type（最大16 Bot
 env JAVA_HOME='C:/Program Files/Microsoft/jdk-21.0.6.7-hotspot' \
   ANDROID_HOME='C:/Users/chiba/AppData/Local/Android/Sdk' \
   ./gradlew :bundle-core:test :mesh-android:testDebugUnitTest :app:assembleDebug
-node ../esp32/test_bundle/generate_server_fixture.mjs --check --combined
-node wire-v1-fixture.mjs
-node bundle-core/src/test/fixtures/server-publisher-fixture.mjs
 ```
 
 Node チェックは既存 `pds/node_modules` の DAG-CBOR/noble/multiformats を使う（Android に新規依存は追加しない）。`--write` はテスト専用固定鍵の共有fixtureを再生成する。Node/Kotlin が同じ certificate/identity/binding/post/commit/snapshot の canonical bytes・hash・certId・署名を検査する。Kotlinには unknown/disabled root、DID/key/binding/commit不一致、片署名、high-S/DER、非canonical/重複key、scope拡大/未選択、leaf再委任/長い経路、時刻境界/unknown、snapshot鮮度/rollback/equivocation/失効集合縮小、root/leaf失効、serial衝突、資源上限、priority自己申告の negative checks がある。MockWebServerで priority EOSE、CLOSED/timeout/切断 fallback、無応答失敗とフレーム上限を検証する。

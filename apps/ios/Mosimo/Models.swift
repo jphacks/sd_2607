@@ -76,8 +76,9 @@ struct MeshState: Equatable {
     var reported: Set<String> = []
 }
 
-/// One Bot DID selected for ingress, with the BSAF types selected for it.
+/// One Bot DID or feed selected for ingress, with the types selected for it (BSAF `type:` values, or JMA titles for `jma-xml`).
 struct TrustSource: Identifiable {
-    let botDid: String, types: [String]
-    var id: String { botDid }
+    /// The Bot DID, or 「フィード <name>」.
+    let name: String, types: [String]
+    var id: String { name }
 }

@@ -14,6 +14,7 @@ import java.io.File
 import java.security.KeyStore
 import java.time.Instant
 import java.util.Base64
+import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -72,10 +73,23 @@ internal fun readRevocations(node: JsonNode?): List<Attest.Revocation> = node?.l
     }
 }.orEmpty()
 
+private val STATE_AAD = "dev.jisaku.mosimo.state.v1".toByteArray()
+/** AAD before the dev.jisaku.mosimo rename: such state still opens, and the next save re-seals it under [STATE_AAD]. */
+private val LEGACY_STATE_AAD = "dev.oriom.mosimo.state.v1".toByteArray()
+
+/** Opens `1 ‖ nonce(12) ‖ ciphertext‖tag`; only a tag mismatch under the current AAD retries the legacy one. */
+internal fun openState(key: SecretKey, encrypted: ByteArray): ByteArray {
+    fun open(aad: ByteArray) = Cipher.getInstance("AES/GCM/NoPadding").run {
+        init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, encrypted.copyOfRange(1, 13)))
+        updateAAD(aad)
+        doFinal(encrypted, 13, encrypted.size - 13)
+    }
+    return try { open(STATE_AAD) } catch (_: BadPaddingException) { open(LEGACY_STATE_AAD) }
+}
+
 /** One authenticated ciphertext; keys, repository head and outbox commit together. */
 internal class EncryptedStore(context: Context) {
     private val file = AtomicFile(File(context.noBackupFilesDir, "mosimo-state.aesgcm"))
-    private val aad = "dev.oriom.mosimo.state.v1".toByteArray()
     private val base64 = Base64.getEncoder()
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -94,10 +108,7 @@ internal class EncryptedStore(context: Context) {
             input.readBounded(MAX_DISK_BYTES).also { require(it.size in 29..MAX_DISK_BYTES) }
         }
         require(encrypted[0] == 1.toByte())
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, encrypted.copyOfRange(1, 13)))
-        cipher.updateAAD(aad)
-        val plain = cipher.doFinal(encrypted, 13, encrypted.size - 13)
+        val plain = openState(key(), encrypted)
         try {
             val node = json.readTree(plain)
             require(node.isObject && node.path("v").asInt() == 1)
@@ -170,7 +181,7 @@ internal class EncryptedStore(context: Context) {
         val plain = json.writeValueAsBytes(node)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        cipher.updateAAD(aad)
+        cipher.updateAAD(STATE_AAD)
         val encrypted = try { byteArrayOf(1) + cipher.iv + cipher.doFinal(plain) } finally { plain.fill(0) }
         require(encrypted.size <= MAX_DISK_BYTES)
         val output = file.startWrite()

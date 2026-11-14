@@ -1,6 +1,6 @@
 """Copy the built installers into ../hp and update the download manifest.
 
-Run after `mise run build`. Only the installers found on this machine are replaced, so
+Run after `mise run build` (and `mise run build-mac-x64` for the Intel .dmg). Only the installers found on this machine are replaced, so
 running it on Windows updates the .msi/.exe entries and running it on macOS adds the .dmg
 without touching the others. The Linux bundles come from `mise run build-linux`, which
 builds in a container and writes to target/linux.
@@ -16,7 +16,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BUNDLES = [ROOT / "target" / "release" / "bundle", ROOT / "target" / "linux" / "release" / "bundle"]
+# host builds land in target/release; cross builds (--target) in target/<triple>/release
+# and the Linux container build in target/linux/release
+BUNDLES = [ROOT / "target" / "release" / "bundle", *(ROOT / "target").glob("*/release/bundle")]
 HP = ROOT.parent / "hp"
 OUT_DIR = HP / "public" / "downloads" / "simulator"
 MANIFEST = HP / "src" / "data" / "simulator-downloads.json"

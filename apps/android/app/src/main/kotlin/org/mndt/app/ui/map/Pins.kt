@@ -24,9 +24,9 @@ class PinGroup(val post: PostView, val lat: Double, val lng: Double, val ids: Li
 private val severityRank = listOf("Extreme", "Severe", "Moderate", "Minor")
 
 /**
- * Pins that would overlap at the current zoom collapse into one stack with a count badge. Official alerts show at every
- * zoom and win the top of a stack (most severe, then newest); ordinary posts appear from [POST_MIN_ZOOM], newest on top.
- * Regroups on every camera move.
+ * Pins that would overlap at the current zoom collapse into one stack with a count badge. Each pin shows from its
+ * [minZoom]: official alerts at every zoom (small earthquakes only closer in) and they win the top of a stack (most
+ * severe, then newest); ordinary posts appear from [POST_MIN_ZOOM], newest on top. Regroups on every camera move.
  */
 @Composable
 fun pinGroups(handle: MapHandle, posts: List<PostView>): List<PinGroup> {
@@ -39,8 +39,8 @@ fun pinGroups(handle: MapHandle, posts: List<PostView>): List<PinGroup> {
     val map = handle.map ?: return emptyList()
     val projection = map.projection
     handle.tick.intValue
-    val zoomedIn = map.cameraPosition.zoom >= POST_MIN_ZOOM
-    val pinned = if (zoomedIn) ranked else ranked.filter { it.first.alert }
+    val zoom = map.cameraPosition.zoom
+    val pinned = ranked.filter { zoom >= it.first.minZoom }
     val points = pinned.map { (_, ll) -> projection.toScreenLocation(LatLng(ll.first, ll.second)).let { IntOffset(it.x.roundToInt(), it.y.roundToInt()) } }
     val top = with(LocalDensity.current) { stacks(points, PIN_W.roundToPx(), PIN_H.roundToPx()) }
     return pinned.indices.filter { top[it] == it }.map { i ->

@@ -101,6 +101,10 @@ final class MeshCoordinator: ObservableObject, LinkListener {
     private var timer: Timer?
     private let pathMonitor = NWPathMonitor()
     private var network = false
+    #if DEBUG
+    /// Lab-only `-mosimo.test.post` text, published on the first path update so its connectivity extension is known.
+    private var labPost: String?
+    #endif
 
     // Public information download and importer ingress (attest.importer §3).
     private var publicConfig = PublicIngress.Config()
@@ -173,11 +177,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         // Background relaunch (Core Bluetooth restoration) never shows UI: resume relaying here when already authorized.
         if relayEnabled && GattLink.authorized { start() }
         #if DEBUG
-        // Lab-only: `-mosimo.test.post "text"` publishes one located post at launch (device mesh test loop).
-        if let text = defaults.string(forKey: "mosimo.test.post") {
-            publish("［安全］" + text, extensions: [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125))],
-                    deliveryExpiresAtSeconds: Self.now() / 1000 + 3600)
-        }
+        // Lab-only: `-mosimo.test.post "text"` publishes one located post at launch (device mesh test loop), in networkChanged.
+        labPost = defaults.string(forKey: "mosimo.test.post")
         // `-mosimo.test.report <id prefix>` / `-mosimo.test.delete <id prefix>` act on a held event.
         if let p = defaults.string(forKey: "mosimo.test.report"), let e = engine.entries().first(where: { $0.event.id.hasPrefix(p) }) {
             report(e.event.id, type: "spam", comment: "試験", block: false)
@@ -218,7 +219,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             reloadPublicConfig()
         } catch {
             fatal = true
-            issue("暗号化状態を開けません。鍵は再生成せず停止しました")
+            issue("暗号化状態を開けません。鍵は再生成せず停止しました（\(error)）")
         }
         refresh()
     }
@@ -551,16 +552,16 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         note("中継を停止。保存済み投稿とリレー設定は保持")
     }
 
-    /// The Bot/type pairs selected for ingress by the shipped config, as shown in settings (roots are in `state.trustRoots`).
+    /// The Bot/type and feed/type pairs selected for ingress by the shipped config, as shown in settings (roots are in `state.trustRoots`).
     func trustSources() -> [TrustSource] {
         guard let json = Self.trustAsset("mosimo-public-trust"), let n = try? Json.parse(json) else { return [] }
         var order = [String](), types = [String: [String]]()
         for s in n["selected"]?.array ?? [] {
-            guard let d = s["botDid"]?.string, let t = s["type"]?.string else { continue }
+            guard let d = s["botDid"]?.string ?? s["feed"]?.string.map({ "フィード \($0)" }), let t = s["type"]?.string else { continue }
             if types[d] == nil { order.append(d) }
             types[d, default: []].append(t)
         }
-        return order.map { TrustSource(botDid: $0, types: types[$0]!) }
+        return order.map { TrustSource(name: $0, types: types[$0]!) }
     }
 
     /// A trust config bundled with the app; Debug builds alone also bundle `mosimo-public-trust-test` (project.yml).
@@ -696,6 +697,8 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         forwarded = forwarded.filter { live.contains($0.key) }
         s.forwardedTo = forwarded.mapValues(\.count)
         s.hideExpired = hideExpired
+        // The snapshot is rebuilt every second; only a changed post list can bring a hazard notification due.
+        if s.posts != state.posts { HazardNotifier.shared.check(s.posts, me: author?.nostrPubkey) }
         if s != state { state = s }
     }
 
@@ -713,6 +716,13 @@ final class MeshCoordinator: ObservableObject, LinkListener {
         let fresh = up && !network
         network = up
         defer { refresh() }
+        #if DEBUG
+        if let text = labPost {
+            labPost = nil
+            publish("［安全］" + text, extensions: [Extensions.origin(Origin(lat: 35_681_236, lon: 139_767_125)), connectivity(online: up)],
+                    deliveryExpiresAtSeconds: Self.now() / 1000 + 3600)
+        }
+        #endif
         guard up, !fatal, disk != nil else { return }
         if fresh, socket != nil { closeRelay(graceful: false) }
         relayFailures.removeAll(); relayRetryAt.removeAll(); relayDeferred.removeAll(); relayIndex = 0; registrationRetryAt = 0
@@ -737,7 +747,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             // Development builds alone ship the test-post root; release builds have no such resource.
             let test = Self.trustAsset(Self.testTrustAsset).flatMap { try? PublicIngress.config($0) }
             (publicConfig, trustEntries) = PublicIngress.effective(builtin, test, trustChoices())
-            state.publicStatus = "公的情報: 有効 root \(publicConfig.roots.filter(\.enabled).count) / 選択 Bot/type \(publicConfig.selected.count)（未設定は投入不可）"
+            state.publicStatus = "公的情報: 有効 root \(publicConfig.roots.filter(\.enabled).count) / 選択 Bot・フィード/type \(publicConfig.selected.count)（未設定は投入不可）"
         } catch {
             state.publicStatus = "公的情報: config 読込失敗 / fail closed（既存鍵・失効履歴は保持）"
         }

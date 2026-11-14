@@ -47,9 +47,16 @@ struct RootView: View {
             withAnimation { toast = nil }
         }
         .task { firstLaunch() }
+        // A tapped hazard notification opens its post on the timeline.
+        .onReceive(HazardNotifier.shared.$opened.compactMap { $0 }) { id in
+            HazardNotifier.shared.opened = nil
+            nav.select(.timeline)
+            nav.timelinePath = [.post(id)]
+        }
     }
 
-    /// First launch asks for Bluetooth (via the coordinator) then location; later launches resume relaying unless switched off.
+    /// First launch asks for Bluetooth (via the coordinator), location then notifications; later launches resume relaying
+    /// unless switched off.
     private func firstLaunch() {
         if mesh.relayEnabled { mesh.start() }
         if !permissionsAsked || location.askable {
@@ -57,6 +64,7 @@ struct RootView: View {
             if location.askable { location.requestPermission() }
         }
         location.refresh()
+        HazardNotifier.shared.requestPermission()
     }
 
     @ViewBuilder private func destination(_ route: Route) -> some View {

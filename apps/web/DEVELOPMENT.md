@@ -2,7 +2,7 @@
 
 ## 配信設定
 
-NixOS構成にはリポジトリの `nixos/` をimportし、`services.mosimo-web` の `enable`、`domain`、`appviewUrl`、`clientKey` を設定します。Caddyで `index.html` と生成された公開設定を配信し、HTTPS証明書を管理します。
+NixOS構成にはリポジトリの `nixos/` をimportし、`services.mosimo-web` の `enable`、`domain`、`appviewUrl` を設定します。`clientKey` は省略でき、省略時はキーを付けずに問い合わせます。HappyViewのレート制限はクライアントキー単位で全閲覧者が共有するため、キーなしの問い合わせは制限を受けません。Caddyで `index.html` と生成された公開設定を配信し、HTTPS証明書を管理します。
 
 ## 接続先の変更
 

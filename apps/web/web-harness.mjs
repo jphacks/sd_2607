@@ -27,7 +27,8 @@ export async function runWeb(fetch, search = '', config = {
   appviewUrl: 'https://appview.example.org',
   clientKey: 'hvc_test_default',
 }) {
-  const elements = Object.fromEntries(['feed', 'status', 'more'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['feed', 'status', 'more', 'hideAlerts'].map(id => [id, new Element('div')]));
+  elements.hideAlerts.checked = false;
   const context = vm.createContext({
     URL, URLSearchParams, AbortSignal, Date, Map,
     MOSIMO_CONFIG: config,
@@ -49,5 +50,6 @@ export async function runWeb(fetch, search = '', config = {
     async refresh() { await vm.runInContext('load()', context); },
     async morePosts() { elements.more.listeners.click(); await idle(); },
     articles() { return elements.feed.querySelectorAll('article'); },
+    toggleAlerts(checked) { elements.hideAlerts.checked = checked; elements.hideAlerts.listeners.change(); },
   };
 }

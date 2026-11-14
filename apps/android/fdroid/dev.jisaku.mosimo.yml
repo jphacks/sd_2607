@@ -1,0 +1,70 @@
+Categories:
+  - Connectivity
+  - Emergency Action
+  - Social Network
+License: MIT
+AuthorName: JPHACKS sd_2607
+WebSite: https://mosimo.jisaku.dev/reference/mobile/
+SourceCode: https://github.com/jphacks/sd_2607
+IssueTracker: https://github.com/jphacks/sd_2607/issues
+Changelog: https://github.com/jphacks/sd_2607/releases
+
+AutoName: もしもの防災
+
+RepoType: git
+Repo: https://github.com/jphacks/sd_2607.git
+
+Builds:
+  - versionName: 0.4.0
+    versionCode: 491
+    commit: mosimo-v0.4.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=armeabi-v7a
+
+  - versionName: 0.4.0
+    versionCode: 492
+    commit: mosimo-v0.4.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=x86
+
+  - versionName: 0.4.0
+    versionCode: 493
+    commit: mosimo-v0.4.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=arm64-v8a
+
+  - versionName: 0.4.0
+    versionCode: 494
+    commit: mosimo-v0.4.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+    gradleprops:
+      - mosimoAbi=x86_64
+
+AutoUpdateMode: Version mosimo-v%v
+UpdateCheckMode: Tags ^mosimo-v[0-9.]+$
+VercodeOperation:
+  - 10*%c+1
+  - 10*%c+2
+  - 10*%c+3
+  - 10*%c+4
+CurrentVersion: 0.4.0
+CurrentVersionCode: 494
