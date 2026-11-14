@@ -40,7 +40,7 @@ const APPVIEW = params.get('appview') || globalThis.MOSIMO_CONFIG.appviewUrl;
 const CLIENT_KEY = params.get('client_key') || globalThis.MOSIMO_CONFIG.clientKey;
 const FEED = new URL('/xrpc/dev.jisaku.mosimo.getFeed', APPVIEW);
 FEED.searchParams.set('limit', '50');
-FEED.searchParams.set('client_key', CLIENT_KEY);
+if (CLIENT_KEY) FEED.searchParams.set('client_key', CLIENT_KEY);
 // A DID/URI filter makes a delayed mesh delivery directly inspectable.
 for (const key of ['did', 'uri']) {
   const value = params.get(key);
