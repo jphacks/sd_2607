@@ -21,9 +21,14 @@ import Layout from "../../../layouts/Layout.astro";
             もしもの防災は、インターネットや携帯電話がつながりにくいときにも、近くの人と被害や避難の状況を伝え合うための
             iPhone・iPad・Android 用アプリです。
           </p>
-          <a class="mobile-button" href="#mobile-features">
-            できることを見る <span aria-hidden="true">↓</span>
-          </a>
+          <div class="mobile-actions">
+            <a class="mobile-button" href="/reference/mobile/download/">
+              ダウンロード <span aria-hidden="true">→</span>
+            </a>
+            <a class="mobile-button mobile-button-light" href="#mobile-features">
+              できることを見る <span aria-hidden="true">↓</span>
+            </a>
+          </div>
         </div>
         <img class="mobile-visual" src="/images/mosimo-bosai-feature.png" width="1024" height="500" alt="" />
       </div>
@@ -209,6 +214,20 @@ import Layout from "../../../layouts/Layout.astro";
   .mobile-button:hover {
     background: #fff;
     color: #171717;
+  }
+  .mobile-button-light {
+    background: #fff;
+    color: #171717;
+    box-shadow: 5px 5px 0 #171717;
+  }
+  .mobile-button-light:hover {
+    background: #171717;
+    color: #fff;
+  }
+  .mobile-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem;
   }
   .mobile-button:focus-visible {
     outline: 3px solid #171717;
