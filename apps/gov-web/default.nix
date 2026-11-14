@@ -2,7 +2,7 @@
 let
   cfg = config.services.mosimo-gov-web;
   root = pkgs.callPackage ./package.nix {
-    inherit (cfg) appviewUrl clientKey mapBounds;
+    inherit (cfg) appviewUrl clientKey mapBounds relayUrl;
   };
 in
 {
@@ -20,7 +20,7 @@ in
     clientKey = lib.mkOption {
       type = lib.types.nullOr lib.types.nonEmptyStr;
       default = null;
-      description = "Public HappyView client key embedded at build time; null queries without a key.";
+      description = "Public HappyView client key embedded at build time; null queries without a key. HappyView rate-limits per key, shared by every viewer, and not keyless queries.";
       example = "hvc_0123456789abcdef";
     };
     mapBounds = lib.mkOption {
@@ -33,6 +33,12 @@ in
       default = null;
       description = "Initial map bounds as \"south,west,north,east\" in degrees, embedded at build time; null shows all of Japan.";
       example = "38.18,140.78,38.33,141.02";
+    };
+    relayUrl = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "wss?://[^?#[:space:]]+");
+      default = null;
+      description = "Mosimo Nostr relay used to map annotation targets given as Nostr event IDs to posts. Embedded at build time; null uses the app default (wss://pds.oriom.dev).";
+      example = "wss://pds.example.org";
     };
   };
 

@@ -305,6 +305,23 @@ final class ExchangeRejectTests: XCTestCase {
     }
 }
 
+final class EncryptedStoreTests: XCTestCase {
+    /// Builds before the dev.jisaku.mosimo rename sealed the state under the old AAD; updating must not lose it.
+    func testStateSealedWithLegacyAadStillOpens() throws {
+        let key = SymmetricKey(size: .bits256)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = EncryptedStore(file: file, key: { key })
+        let state = DiskState(keys: SecretKeys.generate(), pdsEndpoint: "https://pds.invalid")
+        try store.save(state, [], bootTime: nil)
+        let current = try Data(contentsOf: file)
+        let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: current.dropFirst()), using: key, authenticating: Data("dev.jisaku.mosimo.state.v1".utf8))
+        try (Data([1]) + AES.GCM.seal(plain, using: key, authenticating: Data("dev.oriom.mosimo.state.v1".utf8)).combined!).write(to: file)
+        XCTAssertEqual(try store.load()?.keys.nostr, state.keys.nostr)
+        XCTAssertThrowsError(try EncryptedStore(file: file, key: { SymmetricKey(size: .bits256) }).load())
+    }
+}
+
 /// Delivers each queued message to the other end until both sides go quiet.
 final class Loopback: Link {
     let name = "loop"

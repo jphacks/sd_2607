@@ -1,4 +1,4 @@
-{ lib, buildNpmPackage, importNpmLock, nodejs_24, appviewUrl, clientKey ? null, mapBounds ? null }:
+{ lib, buildNpmPackage, importNpmLock, nodejs_24, appviewUrl, clientKey ? null, mapBounds ? null, relayUrl ? null }:
 let
   src = lib.cleanSourceWith {
     src = ./.;
@@ -38,6 +38,8 @@ buildNpmPackage {
     VITE_CLIENT_KEY = clientKey;
   } // lib.optionalAttrs (mapBounds != null) {
     VITE_MAP_BOUNDS = mapBounds;
+  } // lib.optionalAttrs (relayUrl != null) {
+    VITE_RELAY_URL = relayUrl;
   };
 
   installPhase = ''

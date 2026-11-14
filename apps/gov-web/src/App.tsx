@@ -1,7 +1,7 @@
 import type { LatLngBounds } from 'leaflet';
 import { Component, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import MapView, { insetFocus, postParts } from './MapView';
-import { APPVIEW, bsafTag, buildThreads, CLIENT_KEY, delayText, fetchFeed, JMA_BOT, KIKIKURU_BOT, resolveHandle, validityState, type Area, type Post, type Relation, type Thread, type ValidityState } from './mosimo';
+import { APPVIEW, bsafTag, buildThreads, CLIENT_KEY, RELAY, delayText, fetchFeed, JMA_BOT, KIKIKURU_BOT, resolveHandle, validityState, type Area, type Post, type Relation, type Thread, type ValidityState } from './mosimo';
 
 const POLL_MS = 10_000;
 // ponytail: a burst longer than this many pages per poll leaves a gap that さらに読み込む fills at the end of the list; a keyset cursor (AppView B21) would let polling resume.
@@ -356,6 +356,23 @@ const field = 'h-10 rounded-8 border border-solid-gray-600 bg-white px-3 text-dn
 const button = 'rounded-8 px-4 py-1.5 text-dns-16B-130';
 const secondary = `${button} border border-key-900 text-key-900 hover:bg-key-50 disabled:opacity-50`;
 
+type Kind = 'all' | 'posts' | 'alerts';
+// Remembered per browser so an operator who hides BSAF/official alerts keeps them hidden after reload.
+function useKind(): [Kind, (k: Kind) => void] {
+  const [kind, setKind] = useState<Kind>(() => {
+    try {
+      const v = localStorage.getItem('mosimo-gov-kind');
+      return v === 'posts' || v === 'alerts' ? v : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  return [kind, k => {
+    setKind(k);
+    try { localStorage.setItem('mosimo-gov-kind', k); } catch { /* storage unavailable */ }
+  }];
+}
+
 export default function App() {
   const [did, setDid] = useUrlParam('did');
   const [selectedUri, setSelectedUri] = useUrlParam('uri');
@@ -370,7 +387,7 @@ export default function App() {
   const [failedUris, setFailedUris] = useState<string[]>([]);
   const [statuses, setStatus] = useStatuses();
   const [keyword, setKeyword] = useState('');
-  const [kind, setKind] = useState<'all' | 'mosimo' | 'bsaf'>('all');
+  const [kind, setKind] = useKind();
   const [validity, setValidity] = useState<'all' | ValidityState>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | Status>('all');
   const [inView, setInView] = useState(false);
@@ -396,7 +413,7 @@ export default function App() {
     const live = current();
     let loaded = false, inflight = false;
     setPosts([]); setPending([]); setCursor(undefined); setBusy(true);
-    const first = () => fetchFeed(APPVIEW, CLIENT_KEY, { did })
+    const first = () => fetchFeed(APPVIEW, CLIENT_KEY, { did }, RELAY)
       .then(page => {
         if (!live()) return;
         loaded = true;
@@ -408,7 +425,7 @@ export default function App() {
     const poll = async () => {
       let fresh: Post[] = [], next: string | undefined;
       for (let i = 0; i < POLL_PAGES; i++) {
-        const page = await fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor: next });
+        const page = await fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor: next }, RELAY);
         if (!live()) return;
         const add = page.posts.filter(p => !known.current.has(p.uri));
         fresh = merge(fresh, add);
@@ -436,7 +453,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedUri || busy || known.current.has(selectedUri) || failedUris.includes(selectedUri)) return;
     const live = current();
-    fetchFeed(APPVIEW, CLIENT_KEY, { uri: selectedUri })
+    fetchFeed(APPVIEW, CLIENT_KEY, { uri: selectedUri }, RELAY)
       .then(page => {
         if (!live()) return;
         if (!page.posts.some(p => p.uri === selectedUri)) throw new Error('Not found');
@@ -450,7 +467,7 @@ export default function App() {
     const live = current();
     setBusy(true);
     // Offsets shift as new posts arrive; overlap is de-duplicated by URI.
-    fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor })
+    fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor }, RELAY)
       .then(page => { if (live()) { setPosts(prev => merge(prev, page.posts)); setCursor(page.cursor); done(true); } })
       .catch(() => live() && done(false))
       .finally(() => live() && setBusy(false));
@@ -468,7 +485,7 @@ export default function App() {
   const { shown, counts } = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     const base = threads.filter(({ post, replies }) =>
-      (kind === 'all' || post.bsaf === (kind === 'bsaf')) &&
+      (kind === 'all' || post.alert === (kind === 'alerts')) &&
       (validity === 'all' || validityState(post.validity, now) === validity) &&
       (!q || [post, ...replies].some(p => p.text.toLowerCase().includes(q))));
     // Any post in a thread places it. A thread without geometry is neither in nor out of view, so it is excluded (geo §4.2).
@@ -534,8 +551,8 @@ export default function App() {
         <label className="flex flex-col gap-2 text-dns-14B-130">種類
           <select value={kind} onChange={e => setKind(e.target.value as typeof kind)} className={field}>
             <option value="all">すべて</option>
-            <option value="mosimo">アプリの投稿（Mosimo）</option>
-            <option value="bsaf">Botの投稿（BSAF）</option>
+            <option value="posts">警報・注意報を除く</option>
+            <option value="alerts">警報・注意報のみ</option>
           </select>
         </label>
         <label className="flex flex-col gap-2 text-dns-14B-130">有効状態

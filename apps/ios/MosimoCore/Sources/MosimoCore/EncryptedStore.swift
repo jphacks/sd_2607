@@ -55,6 +55,8 @@ public final class EncryptedStore {
     private let file: URL
     private let key: () throws -> SymmetricKey
     private let aad = Data("dev.jisaku.mosimo.state.v1".utf8)
+    /// AAD before the dev.jisaku.mosimo rename: such state still opens, and the next save re-seals it under [aad].
+    private let legacyAad = Data("dev.oriom.mosimo.state.v1".utf8)
 
     /// [key] must return the same key every time; a missing key with existing state is corruption, never a silent reset.
     public init(file: URL, key: @escaping () throws -> SymmetricKey) { self.file = file; self.key = key }
@@ -65,7 +67,10 @@ public final class EncryptedStore {
         guard exists else { return nil }
         let encrypted = try Data(contentsOf: file)
         try require((29...Self.maxDiskBytes).contains(encrypted.count) && encrypted.first == 1, "Corrupt state")
-        var plain = try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted.dropFirst()), using: key(), authenticating: aad)
+        let box = try AES.GCM.SealedBox(combined: encrypted.dropFirst()), k = try key()
+        var plain: Data
+        do { plain = try AES.GCM.open(box, using: k, authenticating: aad) }
+        catch CryptoKitError.authenticationFailure { plain = try AES.GCM.open(box, using: k, authenticating: legacyAad) }
         defer { plain.resetBytes(in: 0..<plain.count) }
         let n = try Json.parse(Array(plain), maxDepth: 32)
         try require(n["v"] == .int(1))

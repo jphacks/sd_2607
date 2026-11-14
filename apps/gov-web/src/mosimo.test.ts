@@ -270,3 +270,15 @@ test('B12 a transient failure is not cached', async () => {
   vi.stubGlobal('fetch', identity(d));
   expect(await resolveHandle(d)).toBe('@sendai.example');
 });
+
+test('alert flags BSAF originals and posts carrying hazard or official-source extensions', () => {
+  const alert = (ext: unknown[]) => parsePost(newWire(ext))!.alert;
+  expect(alert([])).toBe(false);
+  expect(alert([{ $type: `${N}geo#origin`, lat: 1, lon: 2 }, { $type: `${N}priority`, level: 1 }])).toBe(false);
+  expect(alert([{ $type: `${N}hazard`, type: 'earthquake' }])).toBe(true);
+  expect(alert([{ $type: `${N}hazard.weather` }])).toBe(true);
+  expect(alert([{ $type: `${N}public.bsaf` }])).toBe(true);
+  expect(alert([{ $type: `${N}public#source` }])).toBe(true);
+  expect(alert([{ $type: `${N}hazardous.other` }])).toBe(false);
+  expect(parsePost({ uri: 'at://x/app.bsky.feed.post/one', text: 't', $type: 'app.bsky.feed.post', createdAt: '2026-11-01T00:00:00Z' })!.alert).toBe(true);
+});

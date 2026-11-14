@@ -1,0 +1,30 @@
+Categories:
+  - Connectivity
+  - Emergency Action
+  - Social Network
+License: MIT
+AuthorName: JPHACKS sd_2607
+WebSite: https://mosimo.jisaku.dev/reference/mobile/
+SourceCode: https://github.com/jphacks/sd_2607
+IssueTracker: https://github.com/jphacks/sd_2607/issues
+Changelog: https://github.com/jphacks/sd_2607/releases
+
+AutoName: もしもの防災
+
+RepoType: git
+Repo: https://github.com/jphacks/sd_2607.git
+
+Builds:
+  - versionName: 0.3.0
+    versionCode: 48
+    commit: mosimo-v0.3.0
+    subdir: apps/android/app
+    gradle:
+      - yes
+    scandelete:
+      - hp/public/downloads
+
+AutoUpdateMode: Version mosimo-v%v
+UpdateCheckMode: Tags ^mosimo-v[0-9.]+$
+CurrentVersion: 0.3.0
+CurrentVersionCode: 48

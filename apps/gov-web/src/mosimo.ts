@@ -4,11 +4,16 @@
 // Extension shapes follow protocol/mosimo/{geo,validity,annotation,priority,hazard,public/bsaf}/.
 // A copy of protocol/mosimo/public/bsaf/hazard/prefectures.json: the Nix build sees only this directory. mosimo.test.ts fails if it drifts.
 import prefectures from './prefectures.json';
+import { base64ToBytes, resolveEventUris, toHex } from './nostr';
 
 const OLD = 'dev.oriom.mosimo.defs#', NEW = 'dev.jisaku.mosimo.';
+const ALERT_EXT = /^dev\.jisaku\.mosimo\.(hazard|public)([.#]|$)/;
 export const APPVIEW: string = import.meta.env.VITE_APPVIEW_URL || 'https://appview.oriom.dev';
 // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
+// Optional: HappyView rate-limits per key (shared by every viewer), not keyless queries.
 export const CLIENT_KEY: string = import.meta.env.VITE_CLIENT_KEY ?? '';
+// Nostr relay used to map annotation targets given as Nostr event IDs (Android) to atproto posts.
+export const RELAY: string = import.meta.env.VITE_RELAY_URL || 'wss://pds.oriom.dev';
 
 export type LatLng = [number, number];
 export type Area = { shape: 'circle'; center: LatLng; radiusMeters: number } | { shape: 'rect'; bounds: [LatLng, LatLng]; hash: string };
@@ -25,6 +30,8 @@ export type Post = {
   firstSeenAt?: string;
   cid?: string;
   bsaf: boolean;
+  // 警報・注意報系: a BSAF original, or a post carrying hazard / official-source extensions (JMA, CAP, BSAF reposts).
+  alert: boolean;
   bsafTags: string[];
   repostOf?: string;
   repostCid?: string;
@@ -33,7 +40,8 @@ export type Post = {
   areaIncomplete?: boolean;
   areaApprox?: boolean;
   validity?: Validity;
-  annotation?: { relation: Relation; target?: string; nostr?: boolean };
+  // target is an atproto URI; eventId (hex) is kept for Nostr targets until fetchFeed maps it to a URI.
+  annotation?: { relation: Relation; target?: string; nostr?: boolean; eventId?: string };
   priority?: number;
   hazardStatus?: string;
   online?: boolean;
@@ -144,6 +152,7 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
     firstSeenAt: str(provenance?.firstSeenAt),
     cid: str(provenance?.cid),
     bsaf,
+    alert: bsaf,
     bsafTags: bsaf ? strs(record.tags) : [],
     areas: [],
     conflicts: [],
@@ -160,6 +169,7 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
   for (const ext of Array.isArray(exts) ? exts : []) {
     const e = obj(ext), type = str(e?.$type);
     if (!e || !type) continue;
+    if (ALERT_EXT.test(type)) post.alert = true;
     const kind = KIND.get(type);
     if (kind) byKind.set(kind, [...(byKind.get(kind) ?? []), e]);
     else post.unknownTypes.push(type);
@@ -194,8 +204,12 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
         const relation = e.relation, t = obj(e.target);
         if (relation === 'correction' || relation === 'supplement' || relation === 'endorsement') {
           post.annotation = { relation, target: str(t?.uri) };
-          // Matching a Nostr eventId needs the AppView's atproto↔Nostr index (annotation §4), which it does not serve yet.
-          if (t?.network === 'nostr' && !post.annotation.target) post.annotation.nostr = true;
+          // Nostr targets carry only an eventId; fetchFeed maps it to a URI via the relay (resolveNostrTargets).
+          if (t?.network === 'nostr' && !post.annotation.target) {
+            post.annotation.nostr = true;
+            const raw = str(obj(t.eventId)?.$bytes), bytes = raw ? base64ToBytes(raw) : undefined;
+            if (bytes?.length === 32) post.annotation.eventId = toHex(bytes);
+          }
         }
         break;
       }
@@ -290,7 +304,15 @@ export function buildThreads(posts: Post[]): Thread[] {
 
 export type FeedPage = { posts: Post[]; cursor?: string };
 
-export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }): Promise<FeedPage> {
+// Fill in atproto URIs for annotations that target a Nostr event. Unresolved ones stay unfolded.
+export async function resolveNostrTargets(posts: Post[], relay: string, opts?: Parameters<typeof resolveEventUris>[2]): Promise<void> {
+  const pending = posts.filter(p => p.annotation?.eventId && !p.annotation.target);
+  if (!relay || !pending.length) return;
+  const uris = await resolveEventUris(relay, pending.map(p => p.annotation!.eventId!), opts).catch(() => new Map<string, string>());
+  for (const p of pending) p.annotation!.target = uris.get(p.annotation!.eventId!);
+}
+
+export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }, relay = ''): Promise<FeedPage> {
   const url = new URL('/xrpc/dev.jisaku.mosimo.getFeed', appview);
   url.searchParams.set('limit', '50');
   if (clientKey) url.searchParams.set('client_key', clientKey);
@@ -309,6 +331,7 @@ export async function fetchFeed(appview: string, clientKey: string, q: { cursor?
   });
   const cursor = data.cursor;
   if (cursor != null && (typeof cursor !== 'string' || cursor === q.cursor)) throw new Error('Invalid cursor');
+  await resolveNostrTargets(posts, relay);
   return { posts, cursor: cursor ?? undefined };
 }
 

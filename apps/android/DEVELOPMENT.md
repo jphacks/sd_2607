@@ -116,6 +116,24 @@ Gradleに次のプロパティを渡すと隔離試験に使える。いずれ�
 
 認証・本番アクセス制御の代替ではない。nodeはプロセスごとの一時値なので、現在のログで確認し、過去のallowlistを再利用しない。
 
+## F-Droid・GitHub Releases への公開
+
+Google Play とは別の経路です。Play 用の `android.yml`・`fastlane/`・Play の掲載情報には影響しません。
+
+- **バージョン**: `app/build.gradle.kts` の `versionCode`（毎回 1 ずつ増やす）と `versionName` をリリースごとに上げる。F-Droid はタグ時点のこの値を読むため、`versionCode = 48` のような数値リテラルのまま書く。Play の CI は従来どおり実行番号で上書きするので、Play の versionCode とは無関係。
+- **掲載情報**: リポジトリ直下の `fastlane/metadata/android/`（F-Droid 用）。リリースごとに `ja-JP` と `en-US` の `changelogs/<versionCode>.txt` を追加する。
+- **署名**: F-Droid は自分の鍵で署名し直す。GitHub Releases の APK は Play のアップロード鍵とは別の専用鍵（`secrets/github-release.sops.yaml`、証明書 SHA-256 `7e4503339f67aa0334f7046f98f369f74da7c870faa2b30d080ff06f93f8ae27`）で署名する。鍵を失うと更新できなくなるため、この暗号化ファイルを消さない。
+
+### リリース手順
+
+1. `versionCode`・`versionName` を上げ、changelog を追加して main にマージする。
+2. GitHub Actions の「Android GitHub release」を main で手動実行する。署名済み APK を作り、`mosimo-v<versionName>` タグと GitHub Release を作成する。ローカルでは `mise run github-release-apk` で同じ APK を作れる（復号鍵が必要）。
+3. F-Droid はタグを検出して自動でビルドを追加する（`fdroid/dev.jisaku.mosimo.yml` の `UpdateCheckMode`）。反映には数日かかる。
+
+### F-Droid への初回申請
+
+`fdroid/dev.jisaku.mosimo.yml` は fdroiddata に出すメタデータの下書き。初回のタグを作った後、`commit` をそのタグのコミットハッシュに置き換え、GitLab の `fdroid/fdroiddata` をフォークして `metadata/dev.jisaku.mosimo.yml` として追加し、マージリクエストを出す。
+
 ## 組み込み・変更箇所
 
 | モジュール | 責務 |

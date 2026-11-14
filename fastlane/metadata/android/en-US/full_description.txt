@@ -1,0 +1,19 @@
+Mosimo Bosai helps people near each other share damage and evacuation reports when the internet or mobile network is unreliable. Phones hand posts to each other; each phone stores what it receives and carries it on to the next one, like a bucket brigade.
+
+<b>Features</b>
+<ul>
+<li><b>Post while offline</b>: write public text posts on the device, signed by the author and stored locally.</li>
+<li><b>Hand posts to nearby phones</b>: exchange posts the other side does not have yet over Bluetooth or the same LAN. Phones do not need to be connected at the same time.</li>
+<li><b>Send when back online</b>: once a connection is available, carried posts are delivered to the server together with their signatures.</li>
+<li><b>Relay in the background</b>: relaying continues with the screen off and resumes after a reboot.</li>
+</ul>
+
+<b>Notes</b>
+<ul>
+<li>This is an experimental research app. Delivery of every post, and relaying under battery restrictions or after a force stop, is not guaranteed.</li>
+<li>Only public text is supported. Posts are relayed and published in a form anyone can read.</li>
+<li>Signatures do not prove that the content is true or who the author is in real life.</li>
+<li>When online, the app talks to the post server (pds.oriom.dev by default), Nostr relays, the PLC directory (plc.directory) and map tiles from the Geospatial Information Authority of Japan.</li>
+</ul>
+
+Built at JPHACKS 2026 as the reference implementation of the Mosimo Protocol (https://github.com/jphacks/sd_2607). The app UI is in Japanese and English.
