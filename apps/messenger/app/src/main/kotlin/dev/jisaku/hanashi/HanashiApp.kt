@@ -7,8 +7,7 @@ class HanashiApp : Application() {
     val messenger by lazy { Messenger(this) }
     override fun onCreate() {
         super.onCreate()
-        // This demo always talks Mosimo: a pure mesh node, never a relay gateway.
-        MeshCoordinator.get(this).setOnlineEnabled(false)
-        messenger
+        // This demo always talks Mosimo; it becomes a relay gateway only when the user turns on 「インターネットへ搬出」.
+        MeshCoordinator.get(this).setOnlineEnabled(messenger.chats.value.gateway)
     }
 }

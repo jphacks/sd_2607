@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.NorthEast
 import androidx.compose.material.icons.outlined.SouthWest
 import androidx.compose.material3.HorizontalDivider
@@ -45,6 +46,8 @@ fun Relays(mesh: MeshState, chats: Chats) {
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                 Stat(items.size, "受信", Color.Black)
                 Stat(items.count { it.trail.forwarded.isNotEmpty() }, "中継", Hanashi.green)
+                val exported = items.count { it.trail.exported.isNotEmpty() }
+                if (chats.gateway || exported > 0) Stat(exported, "搬出", Hanashi.internet)
                 Stat(mesh.neighbors.size, "近くの端末", Color.Black)
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -89,14 +92,18 @@ private fun CarriedRow(item: Carried, chats: Chats, me: String, modifier: Modifi
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Pill(label, color, color.copy(alpha = 0.12f))
                 Spacer(Modifier.weight(1f))
+                if (trail.exported.isNotEmpty()) { Pill("搬出", Color.White, Hanashi.internet); Spacer(Modifier.width(4.dp)) }
                 if (trail.forwarded.isNotEmpty()) Pill("中継 ${trail.forwarded.size}台", Color.White, Hanashi.green)
             }
             summary(event, chats, me)?.let { Text(it, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis) }
             Text(people(event, chats, me, did), fontSize = 12.sp, color = Hanashi.muted)
             HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Hanashi.line)
-            Leg(Icons.Outlined.SouthWest, "受信", listOfNotNull(trail.received?.let { linkLabel(it.link) }, hopLabel(trail.hop)).joinToString(" · "))
+            // From the Internet (a gateway's public-information import) there is no mesh hop to tell.
+            Leg(Icons.Outlined.SouthWest, "受信", if (trail.received?.link == "relay") linkLabel("relay")
+                else listOfNotNull(trail.received?.let { linkLabel(it.link) }, hopLabel(trail.hop)).joinToString(" · "))
             trail.forwarded.forEach { Leg(Icons.Outlined.NorthEast, "中継", "${linkLabel(it.link)} · ${clockSeconds(it.at)}") }
             if (trail.forwarded.isEmpty()) Leg(Icons.Outlined.NorthEast, "中継待ち", "持っていない端末に渡します", Hanashi.muted)
+            trail.exported.forEach { Leg(Icons.Outlined.CloudUpload, "搬出", "${it.peer.substringAfter("://")} · ${clockSeconds(it.at)}", Hanashi.internet) }
         }
     }
 }
@@ -155,5 +162,6 @@ fun linkLabel(link: String) = when (link) {
     "ble" -> "Bluetooth"
     "lan" -> "Wi-Fi"
     "local" -> "同じ端末のアプリ"
+    "relay" -> "インターネット"
     else -> link
 }

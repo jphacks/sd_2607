@@ -21,6 +21,7 @@ import org.mndt.dm.Delivery
 import org.mndt.dm.DmCodec
 import org.mndt.dm.Draft
 import org.mndt.dm.Inbound
+import org.mndt.mesh.Handoff
 import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshState
 import org.mndt.mesh.Transit
@@ -35,19 +36,23 @@ import java.util.concurrent.ConcurrentHashMap
 /** A saved [org.mndt.mesh.Handoff]: wall time (ms), link ("ble", "lan", "local") and the peer's session label. */
 @Serializable data class Step(val at: Long, val link: String, val peer: String)
 /** A saved [Transit]: the SDK keeps one per run, we keep it across restarts. */
-@Serializable data class Trail(val hop: Int, val received: Step? = null, val forwarded: List<Step> = emptyList())
-/** [trails]: by event ID, for every bundle the mesh holds. */
+@Serializable data class Trail(val hop: Int, val received: Step? = null, val forwarded: List<Step> = emptyList(),
+    val exported: List<Step> = emptyList())
+/** [trails]: by event ID, for every bundle the mesh holds. [gateway]: also export to online relays when the phone is online. */
 @Serializable data class Chats(val name: String? = null, val contacts: Map<String, Contact> = emptyMap(),
-    val messages: List<Msg> = emptyList(), val receipted: Set<String> = emptySet(), val trails: Map<String, Trail> = emptyMap()) {
+    val messages: List<Msg> = emptyList(), val receipted: Set<String> = emptySet(), val trails: Map<String, Trail> = emptyMap(),
+    val gateway: Boolean = false) {
     fun nameOf(pubkey: String) = contacts[pubkey]?.name ?: "名無し ${pubkey.take(6)}"
 }
 
 /** This run's transits laid over the saved trails: the first arrival and the first handoff per peer stay; gone bundles drop out. */
 fun merge(saved: Map<String, Trail>, live: Map<String, Transit>): Map<String, Trail> = live.mapValues { (id, t) ->
     val before = saved[id]
-    Trail(t.hop, before?.received ?: t.received?.let { Step(it.atMillis, it.link, it.peer) },
-        (before?.forwarded.orEmpty() + t.forwarded.map { Step(it.atMillis, it.link, it.peer) }).distinctBy { it.peer })
+    Trail(t.hop, before?.received ?: t.received?.step(), steps(before?.forwarded, t.forwarded), steps(before?.exported, t.exported))
 }
+
+private fun Handoff.step() = Step(atMillis, link, peer)
+private fun steps(saved: List<Step>?, now: List<Handoff>) = (saved.orEmpty() + now.map { it.step() }).distinctBy { it.peer }
 
 /** A bundle this phone holds for someone else, and how it passed through. */
 data class Carried(val event: NostrEvent, val trail: Trail)
@@ -126,6 +131,12 @@ class Messenger(private val context: Context) {
     suspend fun setName(name: String) = lock.withLock {
         commit(mutable.value.copy(name = name.trim().take(DmCodec.MAX_NAME)))
         announced = false
+    }
+
+    /** Demo switch: with it on, the mesh also exports to online relays whenever the phone has a network. */
+    suspend fun setGateway(on: Boolean) = lock.withLock {
+        commit(mutable.value.copy(gateway = on))
+        mesh.setOnlineEnabled(on)
     }
 
     fun markRead(peer: String) = scope.launch {

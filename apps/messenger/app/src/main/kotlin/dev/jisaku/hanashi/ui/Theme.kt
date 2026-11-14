@@ -29,9 +29,10 @@ object Hanashi {
     val muted = Color(0xFF8A8F98)
     val canvas = Color(0xFFF0F2F5)
     val line = Color(0xFFE1E4E8)
-    /** Bundle kinds on the relay screens: Mosimo Bosai posts, everything else (Talk is [green]). */
+    /** Bundle kinds on the relay screens: Mosimo Bosai posts, everything else (Talk is [green]); [internet]: online relays. */
     val bosai = Color(0xFFE8590C)
     val other = Color(0xFF7048E8)
+    val internet = Color(0xFF1C7ED6)
 }
 
 // ponytail: light theme only; add a dark scheme if the demo needs it.

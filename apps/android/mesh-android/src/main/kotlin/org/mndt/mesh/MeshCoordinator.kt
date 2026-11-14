@@ -50,9 +50,10 @@ data class ClockSkew(val peer: String, val deltaSeconds: Long, val confidence: I
 data class Handoff(val atMillis: Long, val link: String, val peer: String)
 /**
  * How a stored bundle passed through this device this run: its hop count on arrival, the handoff it came in on (null when
- * we originated it or restored it from disk) and the peers that took it from us.
+ * we originated it or restored it from disk), the peers that took it from us and the online relays that accepted it.
+ * Handoffs with the Internet use the link "relay" and the relay URL as the peer.
  */
-data class Transit(val hop: Int, val received: Handoff?, val forwarded: List<Handoff>)
+data class Transit(val hop: Int, val received: Handoff?, val forwarded: List<Handoff>, val exported: List<Handoff> = emptyList())
 data class MeshState(
     val ready: Boolean = false, val running: Boolean = false, val did: String = "", val publicKey: String = "",
     val relays: List<String> = emptyList(), val registration: String = "PLC 未登録", val neighbors: List<Neighbor> = emptyList(),
@@ -152,8 +153,9 @@ class MeshCoordinator private constructor(private val context: Context) {
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
     private val arrived = mutableMapOf<String, Handoff>()
-    /** Event ID → peer label → the first handoff to that peer. */
+    /** Event ID → peer label → the first handoff to that peer; [exported] is the same by relay URL. */
     private val forwarded = mutableMapOf<String, MutableMap<String, Handoff>>()
+    private val exported = mutableMapOf<String, MutableMap<String, Handoff>>()
     private val exchange = Exchange(engine, ::now, ::elapsed, ::note, allowedPeerNode, allowedAuthor,
         forwarded = { id, to -> forwarded.getOrPut(id) { linkedMapOf() }.getOrPut(to.peer) { to } },
         accepted = { entry, from ->
@@ -456,8 +458,9 @@ class MeshCoordinator private constructor(private val context: Context) {
             publicBusy = publicBusy, blockedPubkeys = blocked, hideExpired = hideExpired,
             events = if (fatal) emptyList() else engine.entries().map { it.event },
             forwardedTo = forwarded.apply { keys.retainAll(engine.entries().mapTo(hashSetOf()) { it.event.id }) }.mapValues { it.value.size },
-            transits = engine.entries().associate { it.event.id to Transit(it.hop, arrived[it.event.id], forwarded[it.event.id]?.values?.toList().orEmpty()) }
-                .also { arrived.keys.retainAll(it.keys) },
+            transits = engine.entries().associate { it.event.id to Transit(it.hop, arrived[it.event.id],
+                forwarded[it.event.id]?.values?.toList().orEmpty(), exported[it.event.id]?.values?.toList().orEmpty()) }
+                .also { arrived.keys.retainAll(it.keys); exported.keys.retainAll(it.keys) },
             roots = publicConfig.roots, trustRoots = trustEntries, revocationCount = revocations.size, revocationChecked = data?.revocationChecked.orEmpty(),
             clockSkews = clockSkews.values.reversed(),
             reported = reported.toSet(),
@@ -668,6 +671,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                             val saved = runCatching { engine.originate(event, now(), elapsed()) }
                             if (saved.isSuccess) {
                                 seenAt[event.id] = Instant.ofEpochMilli(now())
+                                arrived[event.id] = Handoff(now(), "relay", publicRelay)
                                 val audit = "取込時の転載者認可（現在の公式認証ではない）: $receipt"
                                 persist(checkNotNull(disk).copy(publicAudit = checkNotNull(disk).publicAudit + (event.id to audit)))
                                 imported++; "認可・暗号化保存済み / priority ${receipt.priority}"
@@ -918,6 +922,7 @@ class MeshCoordinator private constructor(private val context: Context) {
         relayFailures.remove(activeRelay)
         relayRetryAt.remove(activeRelay)
         relayDeferred[activeRelay]?.remove(id)
+        exported.getOrPut(id) { linkedMapOf() }.getOrPut(activeRelay) { Handoff(now(), "relay", activeRelay) }
         note("リレー OK ${id.take(8)}（$activeRelay / PLC・PDS・AppView 完了ではない）")
         closeRelay(); relayIndex++
         drainRelay()

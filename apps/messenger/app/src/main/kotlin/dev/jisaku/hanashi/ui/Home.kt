@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
@@ -142,15 +143,17 @@ private fun Home(messenger: Messenger, chats: Chats, startMesh: () -> Unit, open
     }
 }
 
-/** The demo's story: this app is "offline", so everything goes through Mosimo. */
+/** The demo's story: this app is "offline", so everything goes through Mosimo; with the gateway switch it also feeds the Internet. */
 @Composable
 private fun MosimoBanner(mesh: MeshState, startMesh: () -> Unit) {
-    val text = if (mesh.running) "オフライン · Mosimo 経由で送信（近くの端末 ${mesh.neighbors.size} 台）"
-        else "Mosimo 停止中 · タップして開始"
-    Row(Modifier.fillMaxWidth().background(if (mesh.running) Color(0xFF3C4650) else Color(0xFFB3261E))
+    val exporting = mesh.running && mesh.onlineActive && mesh.network
+    val text = if (!mesh.running) "Mosimo 停止中 · タップして開始"
+        else if (exporting) "Mosimo で送信 · インターネットへも搬出中（近くの端末 ${mesh.neighbors.size} 台）"
+        else "オフライン · Mosimo 経由で送信（近くの端末 ${mesh.neighbors.size} 台）"
+    Row(Modifier.fillMaxWidth().background(if (!mesh.running) Color(0xFFB3261E) else if (exporting) Hanashi.internet else Color(0xFF3C4650))
         .clickable(enabled = !mesh.running, onClick = startMesh).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Outlined.WifiOff, null, tint = Color.White, modifier = Modifier.size(16.dp))
+        Icon(if (exporting) Icons.Outlined.CloudUpload else Icons.Outlined.WifiOff, null, tint = Color.White, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(8.dp))
         Text(text, color = Color.White, fontSize = 13.sp)
     }
@@ -226,7 +229,15 @@ private fun SettingsTab(messenger: Messenger, chats: Chats, mesh: MeshState) {
         Column {
             Text("通信", color = Hanashi.muted, fontSize = 12.sp)
             Text(if (mesh.running) "Mosimo 稼働中 · 近くの端末 ${mesh.neighbors.size} 台" else "Mosimo 停止中")
-            Text("このデモは常に Mosimo（Bluetooth・LAN のメッシュ）で送受信し、インターネットは使いません。", color = Hanashi.muted, fontSize = 13.sp)
+            Text(if (chats.gateway) "メッセージは Mosimo で届けます。ネットにつながっているときは、預かったデータをインターネットのリレーへも送ります。"
+                else "このデモは常に Mosimo（Bluetooth・LAN のメッシュ）で送受信し、インターネットは使いません。", color = Hanashi.muted, fontSize = 13.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("インターネットへ搬出")
+                Text("ネットにつながっているとき、メッシュとインターネットの橋渡し役になります", color = Hanashi.muted, fontSize = 13.sp)
+            }
+            Switch(chats.gateway, { on -> scope.launch { messenger.setGateway(on) } })
         }
     }
     if (editing) {
