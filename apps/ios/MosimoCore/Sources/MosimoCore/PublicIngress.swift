@@ -4,11 +4,22 @@ import Foundation
 /// Internet. Trust comes only from the local [Config]; a relay's or server's own verification claims are ignored.
 public enum PublicIngress {
     public static let bsaf = "dev.jisaku.mosimo.public.bsaf"
+    public static let jmaEarthquake = "dev.jisaku.mosimo.public.jma.earthquake"
+    public static let jmaWeather = "dev.jisaku.mosimo.public.jma.weather"
+    /// importer §1.1: the feed of re-posted JMA disaster-prevention XML; its types are the original `Control/Title`.
+    public static let jmaFeed = "jma-xml"
     public static let priorityType = "dev.jisaku.mosimo.priority"
     public static let maxRoots = 8
     public static let maxSelected = 64
 
-    public struct Selection: Hashable, Sendable { public let botDid: String; public let type: String }
+    /// One re-posted (botDid, type) or (feed, type) pair (importer §1): exactly one of [botDid] and [feed] is set.
+    public struct Selection: Hashable, Sendable {
+        public let botDid: String?, feed: String?
+        public let type: String
+        public init(botDid: String, type: String) { self.botDid = botDid; feed = nil; self.type = type }
+        public init(feed: String, type: String) { botDid = nil; self.feed = feed; self.type = type }
+        public var description: String { botDid.map { "bot=\($0)" } ?? "feed=\(feed ?? "")" }
+    }
     public struct Config: Sendable {
         public var roots: [Attest.Root] = []
         public var selected: Set<Selection> = []
@@ -45,7 +56,7 @@ public enum PublicIngress {
         public let trustLevel: Int64?
         public let reason: String
         /// importer §3 without the mesh-insertion conditions: an `import` leaf with an organization whose scope covers the post's
-        /// (Bot DID, type), and that pair locally selected. Decided from the post alone, however it arrived.
+        /// (Bot DID, type) or (feed, type), and that pair locally selected. Decided from the post alone, however it arrived.
         public let importAuthorized: Bool
         public var identity: Bool { roles.contains(Attest.roleIdentity) }
         public var publicInformation: Bool { roles.contains(Attest.rolePublicInformation) }
@@ -54,12 +65,13 @@ public enum PublicIngress {
 
     /// Authorization record kept with an inserted post (importer §3): never "official", only who re-posted what.
     public struct Receipt: Sendable, CustomStringConvertible {
-        public let rootPubkey, leafId, botDid, type, orgId, orgName: String
+        public let rootPubkey, leafId, orgId, orgName: String
+        public let source: Selection
         public let priority: Int
         public let checkedAt: String
         public let leafValidUntil: String?
         public var description: String {
-            "root=\(rootPubkey.prefix(8)) leaf=\(leafId.prefix(8)) org=\(orgName)(\(orgId)) bot=\(botDid) type=\(type) priority=\(priority) checked=\(checkedAt)"
+            "root=\(rootPubkey.prefix(8)) leaf=\(leafId.prefix(8)) org=\(orgName)(\(orgId)) \(source.description) type=\(source.type) priority=\(priority) checked=\(checkedAt)"
         }
     }
     public struct Decision: Sendable { public let receipt: Receipt?; public let chain: ChainView?; public let reason: String }
@@ -77,11 +89,12 @@ public enum PublicIngress {
         }
         try require(Set(roots.map(\.pubkeyHex)).count == roots.count, "Duplicate root")
         guard let selectedNodes = node["selected"]?.array, selectedNodes.count <= maxSelected else { throw CoreError("Invalid selected") }
+        // Each element names a Bot or a feed: {"botDid", "type"} or {"feed", "type"}.
         let selected: [Selection] = try selectedNodes.map { s in
-            try require(s.keys == ["botDid", "type"], "Unexpected/missing JSON fields")
-            guard let did = s["botDid"]?.string, matches(AtRepository.didPattern, did), let type = s["type"]?.string, (1...128).contains(type.utf8.count) else {
-                throw CoreError("Invalid selection")
-            }
+            try require(s.keys == ["botDid", "type"] || s.keys == ["feed", "type"], "Unexpected/missing JSON fields")
+            guard let type = s["type"]?.string, (1...128).contains(type.utf8.count) else { throw CoreError("Invalid selection") }
+            if let feed = s["feed"]?.string, (1...Attest.maxTextBytes).contains(feed.utf8.count) { return Selection(feed: feed, type: type) }
+            guard let did = s["botDid"]?.string, matches(AtRepository.didPattern, did) else { throw CoreError("Invalid selection") }
             return Selection(botDid: did, type: type)
         }
         try require(Set(selected).count == selected.count, "Duplicate selection")
@@ -207,6 +220,20 @@ public enum PublicIngress {
         return BsafOriginal(botDid: did, type: type, uri: uri, cid: cidText)
     }
 
+    /// The re-posted pair of [event] (importer §1.1): a BSAF import gives (botDid, type); otherwise exactly one
+    /// `public.jma.earthquake` or `public.jma.weather` gives (`jma-xml`, its `message.control.title`). Throws for anything else.
+    public static func importPair(_ event: NostrEvent) throws -> Selection {
+        let ext = try AtRepository.extensions(event)
+        if ext.contains(where: { $0["$type"] == .text(bsaf) }) {
+            let o = try bsafOriginal(event)
+            return Selection(botDid: o.botDid, type: o.type)
+        }
+        let jma = ext.filter { $0["$type"] == .text(jmaEarthquake) || $0["$type"] == .text(jmaWeather) }
+        try require(jma.count == 1, "Neither a BSAF import nor exactly one JMA extension")
+        guard let title = jma[0]["message"]?["control"]?["title"]?.text, !title.isEmpty else { throw CoreError("JMA message.control.title") }
+        return Selection(feed: jmaFeed, type: title)
+    }
+
     /// Evaluates every chain of [event] against [roots]; the first chain whose leaf belongs to the event decides.
     /// [now] nil means the clock is untrusted: the result is unknownTime, never verified.
     public static func chainView(_ event: NostrEvent, roots: [Attest.Root], revocations: RevocationStore, now: Instant?, seenAt: Instant,
@@ -218,7 +245,7 @@ public enum PublicIngress {
         }
         if chains.isEmpty { return nil }
         let createdAt = Instant(epochSecond: event.createdAt)
-        let original = (try? bsafOriginal(event)).flatMap { selected.contains(Selection(botDid: $0.botDid, type: $0.type)) ? $0 : nil }
+        let pair = (try? importPair(event)).flatMap { selected.contains($0) ? $0 : nil }
         var best: ChainView?
         for chain in chains {
             let leaf = chain.attestations.last!
@@ -228,8 +255,8 @@ public enum PublicIngress {
                 result = Attest.verifyChain(chain.attestations, roots: roots, createdAt: createdAt, now: now)
             } catch { result = Attest.ChainResult(state: .invalid, reason: "leaf: \(error)") }
             let revocation = result.root != nil ? Attest.revocationState(result, known: revocations.of, createdAt: createdAt, seenAt: seenAt) : nil
-            let imported = original.map { o in
-                result.state == .verified && leaf.roles.contains(Attest.roleImport) && leaf.orgId != nil && leaf.importerSources?[o.botDid]?.contains(o.type) == true
+            let imported = pair.map { p in
+                result.state == .verified && leaf.roles.contains(Attest.roleImport) && leaf.orgId != nil && leaf.importerBlock?.covers(p) == true
             } ?? false
             let view = ChainView(state: result.state, expiredNow: result.expiredNow, revocation: revocation, name: result.leaf?.displayName,
                                  orgId: result.leaf?.orgId, roles: result.leaf?.roles ?? [], trustLevel: result.leaf?.trustLevel, reason: result.reason,
@@ -241,14 +268,14 @@ public enum PublicIngress {
     }
 
     /// importer §3: local selection, a chain verified at both creation and now whose leaf has the `import` role, an
-    /// `importer` block covering (botDid, type) and an `organization`, and no known revocation.
+    /// `importer` block covering (botDid, type) or (feed, type) and an `organization`, and no known revocation.
     public static func verify(_ event: NostrEvent, _ config: Config, _ revocations: RevocationStore, _ now: Instant?, seenAt: Instant? = nil) -> Decision {
         do {
             try require(event.tags.count <= 64 && event.tags.filter { $0.first?.hasPrefix(AtRepository.extPrefix) == true }.count <= 16, "Event resource limit")
             try require(event.verify(), "Invalid author signature")
             try require(try EventCodec.encode(event).count <= MeshPolicy.maxPayloadBytes && AtRepository.verifyEnvelope(event), "Invalid envelope/resource limit")
-            let original = try bsafOriginal(event)
-            try require(config.selected.contains(Selection(botDid: original.botDid, type: original.type)), "Bot/type not selected")
+            let pair = try importPair(event)
+            try require(config.selected.contains(pair), "Bot/feed type not selected")
             guard let now else { throw CoreError("Clock unknown") }
             let seen = seenAt ?? now
             let createdAt = Instant(epochSecond: event.createdAt)
@@ -267,12 +294,12 @@ public enum PublicIngress {
                 if result.state != .verified { failure = result.reason; continue }
                 if result.expiredNow == true { failure = "chain expired now"; continue }
                 if !leaf.roles.contains(Attest.roleImport) { failure = "leaf lacks import role"; continue }
-                guard let sources = leaf.importerSources else { failure = "leaf lacks importer block"; continue }
+                guard let block = leaf.importerBlock else { failure = "leaf lacks importer block"; continue }
                 guard let org = leaf.orgId else { failure = "leaf lacks organization"; continue }
-                if sources[original.botDid]?.contains(original.type) != true { failure = "importer block does not cover \(original.botDid)/\(original.type)"; continue }
+                if !block.covers(pair) { failure = "importer block does not cover \(pair.description)/\(pair.type)"; continue }
                 if revocation != .notRevokedAsKnown { failure = "revocation: \(String(describing: revocation))"; continue }
-                let receipt = Receipt(rootPubkey: result.root!.pubkeyHex, leafId: hex(leaf.id), botDid: original.botDid, type: original.type, orgId: org,
-                                      orgName: leaf.orgName ?? leaf.ownerName, priority: priority(event), checkedAt: now.description,
+                let receipt = Receipt(rootPubkey: result.root!.pubkeyHex, leafId: hex(leaf.id), orgId: org,
+                                      orgName: leaf.orgName ?? leaf.ownerName, source: pair, priority: priority(event), checkedAt: now.description,
                                       leafValidUntil: leaf.validUntil?.description)
                 return Decision(receipt: receipt, chain: view, reason: "Authorized importer testimony; original Bot signature/inclusion not verified")
             }

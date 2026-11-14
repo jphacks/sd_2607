@@ -42,12 +42,23 @@ sealed interface HazardKind {
     data class Cyclone(val name: LocalizedText? = null, val designation: String? = null, val center: Pair<Long, Long>? = null,
         val pressure: Long? = null, val maxWind: Long? = null, val stormRadius: Long? = null) : HazardKind
 }
+/** A JMA code with its scheme (jma §3.1); equal only when both match. */
+data class JmaCode(val value: String, val type: String?)
+/**
+ * public.jma.earthquake / public.jma.weather, only what the map needs to tell which post of a series is the latest
+ * (jma §5.3). Original strings as sent; [dateTime] is `Control/DateTime`. [pref] is an earthquake post's selected Pref
+ * (`body.observation.prefs[0].code`, region selections only); [forecastArea] a weather post's 府県予報区等 code.
+ */
+data class Jma(val earthquake: Boolean, val title: String, val status: String, val dateTime: String, val eventId: String,
+    val whole: Boolean, val pref: JmaCode? = null, val forecastArea: String? = null)
 data class PostExtensions(
     val origin: Origin? = null, val areas: List<Area> = emptyList(), val validity: Validity? = null,
     val priority: Int = 1, val bsaf: Bsaf? = null, val annotation: Annotation? = null,
     /** An `attest.chain` extension is present (verification is the coordinator's, see [PostView.chain]). */
     val hasChain: Boolean = false,
     val hazard: Hazard? = null,
+    /** Exactly one public.jma.* extension, decoded; null when absent, ambiguous or malformed. */
+    val jma: Jma? = null,
 ) {
     val regions: List<Region> get() = areas.flatMap { it.regions }
 }
@@ -119,6 +130,8 @@ object Extensions {
             },
             hasChain = ext.any { it["\$type"] == Attest.CHAIN },
             hazard = first(HAZARD)?.let { m -> runCatching { hazard(m, ext) }.getOrNull() },
+            jma = ext.filter { it["\$type"] == PublicIngress.JMA_EARTHQUAKE || it["\$type"] == PublicIngress.JMA_WEATHER }.singleOrNull()
+                ?.let { m -> runCatching { jma(m) }.getOrNull() },
         )
     }
 
@@ -149,6 +162,25 @@ object Extensions {
         else -> HazardKind.Cyclone(text(m["name"]), m["designation"] as? String,
             (m["center"] as? Map<*, *>)?.let { c -> c.opt("lat")?.let { lat -> c.opt("lon")?.let { lat to it } } },
             m.opt("pressure"), m.opt("maxWind"), m.opt("stormRadius"))
+    }
+    /** Required parts missing or mistyped → throws (no jma). */
+    private fun jma(m: Map<String, Any?>): Jma {
+        val message = m["message"] as Map<*, *>
+        val control = message["control"] as Map<*, *>
+        val head = message["head"] as Map<*, *>
+        val selection = m["selection"] as Map<*, *>
+        val whole = when (selection["kind"]) { "whole" -> true; "region" -> false; else -> error("selection") }
+        val earthquake = m["\$type"] == PublicIngress.JMA_EARTHQUAKE
+        fun code(v: Any?) = (v as? Map<*, *>)?.let { c -> (c["value"] as? String)?.let { JmaCode(it, c["type"] as? String) } }
+        // earthquake §3.1: the selected Pref is prefs[0]; whole posts select no Pref.
+        val pref = if (earthquake && !whole) (((m["body"] as? Map<*, *>)?.get("observation") as? Map<*, *>)?.get("prefs") as? List<*>)
+            ?.firstOrNull()?.let { code((it as? Map<*, *>)?.get("code")) } else null
+        // weather §7.1: the series is keyed by the 府県予報区等 Item's area code.
+        val forecastArea = if (earthquake) null else (m["warnings"] as? List<*>).orEmpty().filterIsInstance<Map<*, *>>()
+            .firstOrNull { it["warningType"] == "気象警報・注意報（府県予報区等）" }
+            ?.let { (it["areas"] as? List<*>)?.firstOrNull() as? Map<*, *> }?.let { code(it["code"])?.value }
+        return Jma(earthquake, control["title"] as String, control["status"] as String, control["dateTime"] as String,
+            head["eventID"] as? String ?: if (earthquake) error("eventID") else "", whole, pref, forecastArea)
     }
     private fun text(v: Any?): LocalizedText? = (v as? Map<*, *>)?.let { m -> (m["text"] as? String)?.let { LocalizedText(it, m["lang"] as? String) } }
     private fun Map<*, *>.opt(key: String) = (this[key] as? Number)?.toLong()

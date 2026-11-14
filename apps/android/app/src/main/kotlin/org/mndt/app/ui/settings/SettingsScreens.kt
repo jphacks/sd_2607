@@ -39,8 +39,8 @@ import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 
-/** One selected (Bot DID, BSAF type) pair from the local trust config. */
-internal class TrustSource(val botDid: String, val types: List<String>)
+/** The selected types of one source in the local trust config: a Bot DID (BSAF `type:` values) or a feed (importer §1.1). */
+internal class TrustSource(val name: String, val feed: Boolean, val types: List<String>)
 private fun JSONArray?.objects() = if (this == null) emptyList() else (0 until length()).map(::getJSONObject)
 
 private fun trustConfig(context: Context): JSONObject? =
@@ -49,8 +49,8 @@ private fun trustConfig(context: Context): JSONObject? =
 
 internal fun trustSources(context: Context): List<TrustSource> = runCatching {
     trustConfig(context)!!.optJSONArray("selected").objects()
-        .groupBy({ it.getString("botDid") }, { it.getString("type") })
-        .map { (did, types) -> TrustSource(did, types) }
+        .groupBy({ (it.optString("feed").ifEmpty { null } ?: it.getString("botDid")) to it.has("feed") }, { it.getString("type") })
+        .map { (source, types) -> TrustSource(source.first, source.second, types) }
 }.getOrDefault(emptyList())
 
 @Composable
@@ -77,13 +77,13 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
         }
     }
     AddRoot(mesh)
-    Header("取り込みを選択した Bot と種別")
+    Header("取り込みを選択した Bot・フィードと種別")
     if (sources.isEmpty()) Group { Text("なし", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
     sources.forEach { source ->
         Group {
-            SettingRow(Icons.Outlined.Download, Mosimo.info, source.botDid, value = "${source.types.size}種別")
+            SettingRow(Icons.Outlined.Download, Mosimo.info, if (source.feed) feedLabel(source.name) else source.name, value = "${source.types.size}種別")
             Line()
-            Text(source.types.joinToString("・") { bsafLabel(it) }, Modifier.padding(16.dp),
+            Text(source.types.joinToString("・") { if (source.feed) it else bsafLabel(it) }, Modifier.padding(16.dp),
                 style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
         }
     }
@@ -97,6 +97,8 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
         }
     }
 }
+
+private fun feedLabel(feed: String) = if (feed == PublicIngress.FEED_JMA_XML) "気象庁防災情報XML（$feed）" else feed
 
 private fun originLabel(o: PublicIngress.RootOrigin) = when (o) {
     PublicIngress.RootOrigin.BUILTIN -> "アプリに同梱"

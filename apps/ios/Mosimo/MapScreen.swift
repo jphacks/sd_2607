@@ -304,7 +304,7 @@ struct MapScreen: View {
               let post = mesh.state.posts.first(where: { $0.id == id }) else { return }
         vm.handledFocus = nav.focusToken
         // An alert usually covers a prefecture or more, so it opens zoomed out.
-        if let c = post.mapPoint { vm.centered = true; map.moveTo(c, zoom: post.alert ? 8 : 15, bottomFraction: 0.5) }
+        if let c = post.mapPoint { vm.centered = true; map.moveTo(c, zoom: post.alert || post.allClearNotice ? 8 : 15, bottomFraction: 0.5) }
         vm.stack = [id]; vm.selected = id
     }
 

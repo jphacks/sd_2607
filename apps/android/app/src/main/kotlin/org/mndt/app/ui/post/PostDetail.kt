@@ -31,7 +31,7 @@ import java.time.OffsetDateTime
 
 private val sourceNames = mapOf("jma" to "気象庁")
 /** BSAF `source:` tag, e.g. `jma` → 「気象庁」. */
-fun PostView.bsafSource(): String = ext.bsaf?.source?.ifBlank { null }?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
+fun PostView.bsafSource(): String = if (ext.jma != null) "気象庁防災情報XML" else ext.bsaf?.source?.ifBlank { null }?.let { sourceNames[it.lowercase()] ?: it } ?: "公的情報"
 
 /**
  * importer §3.2: 「orgName が転載した botDid の情報」. The BSAF `source:` tag is self-declared (bsaf §7), so it is
@@ -40,7 +40,8 @@ fun PostView.bsafSource(): String = ext.bsaf?.source?.ifBlank { null }?.let { so
 @Composable
 fun BsafVerification(post: PostView) {
     val importer = post.chain?.takeIf { it.confirmedNow }?.name
-    val bot = post.ext.bsaf?.botDid?.let { shortDid(it, "") } ?: "Bot"
+    // importer §1.1: a feed re-post names the feed, not a Bot.
+    val bot = if (post.ext.jma != null) "気象庁防災情報XML" else post.ext.bsaf?.botDid?.let { shortDid(it, "") } ?: "Bot"
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (post.importerAuthorized) {
@@ -95,7 +96,7 @@ fun CategoryBadge(category: Category) = Text(category.label, Modifier.clip(Mater
 @Composable
 fun KindLabel(post: PostView) {
     post.ext.hazard?.let { HazardLabel(post, it); return }
-    val (icon, color, label) = if (post.isPublic) Triple(Icons.Outlined.Info, post.priorityColor(), bsafLabel(post.ext.bsaf?.type))
+    val (icon, color, label) = if (post.isPublic) Triple(Icons.Outlined.Info, post.priorityColor(), post.publicLabel())
     else Triple(Icons.Outlined.Place, Mosimo.info, "周辺の投稿")
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.size(26.dp).clip(MaterialTheme.shapes.small).background(color.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {

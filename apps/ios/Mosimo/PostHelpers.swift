@@ -46,7 +46,10 @@ extension PostView {
         return categoryPrefix.stringByReplacingMatches(in: content, range: NSRange(location: 0, length: ns.length), withTemplate: "")
     }
     /// A re-posted BSAF original (`original` present), not just any post carrying the extension.
-    var isPublic: Bool { ext.bsaf?.imported == true }
+    /// A re-post by an importer: a BSAF original or a JMA XML message (importer §1.1).
+    var isPublic: Bool { ext.bsaf?.imported == true || ext.jma != nil }
+    /// Card label of a re-post: the JMA Control/Title, else the BSAF type.
+    var publicLabel: String { ext.jma?.title ?? bsafLabel(ext.bsaf?.type) }
     /// The confirmed sender name (attest.chain §4.3): shown only when the chain is confirmed now and the leaf may name itself.
     var senderName: String? { chain.flatMap { $0.identity && $0.confirmedNow ? $0.name : nil } }
     /// The post's own chain, confirmed now, ends in an importer authorized for its (Bot, type) (importer §3). Decided from
@@ -85,6 +88,7 @@ extension PostView {
     }
     /// BSAF `source:` tag, e.g. `jma` → 「気象庁」.
     var bsafSource: String {
+        if ext.jma != nil { return "気象庁防災情報XML" }
         guard let s = ext.bsaf?.source, !s.isEmpty else { return "公的情報" }
         return s.lowercased() == "jma" ? "気象庁" : s
     }
@@ -156,10 +160,12 @@ func standalone(_ posts: [PostView]) -> [PostView] {
 func endorsers(_ annotations: [PostView]) -> Set<String> {
     Set(annotations.filter { $0.ext.annotation?.relation == .endorsement }.map { $0.did ?? $0.pubkey })
 }
-/// Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail).
+/// Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail)
+/// and official JMA re-posts a newer one of the same series replaces (jma §5.3; the timeline and details still show them).
 @MainActor func mapPosts(_ posts: [PostView]) -> [PostView] {
     let ids = Set(posts.map(\.id))
-    return posts.filter { $0.mapPoint != nil && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
+    let replaced = JmaDisplay.superseded(posts.compactMap { p in p.officialHazard ? p.ext.jma.map { (p.id, $0) } : nil })
+    return posts.filter { $0.mapPoint != nil && !replaced.contains($0.id) && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
 }
 
 /// Geohash anchors keyed by their cell list: tracing a prefecture cover is too slow to redo on every view update.
@@ -174,7 +180,18 @@ func endorsers(_ annotations: [PostView]) -> Set<String> {
 
 extension PostView {
     /// An official hazard notice: shown at every zoom and above ordinary pins. A user's own hazard claim is an ordinary post.
-    var alert: Bool { ext.hazard != nil && officialHazard }
+    var alert: Bool { ext.hazard.map { officialHazard && !$0.allClear } ?? false }
+    /// An official all-clear: the danger is over, so it is an ordinary pin and its area is not drawn.
+    var allClearNotice: Bool { ext.hazard.map { officialHazard && $0.allClear } ?? false }
+
+    /// Web-mercator zoom from which the pin and area show: ordinary posts at [postMinZoom], official alerts at every zoom,
+    /// except an earthquake with a shindo scale, whose reach follows its maximum shindo (a shindo 1 is a local event).
+    var minZoom: Double {
+        guard alert else { return postMinZoom }
+        guard case .earthquake? = ext.hazard?.kind else { return 0 }
+        let zooms = ext.hazard?.scales.filter { $0.scheme == "jp.jma.shindo" }.compactMap { shindoMinZoom[$0.value] } ?? []
+        return zooms.min() ?? 0
+    }
 
     /// Where a post's pin goes: its own position, else for a hazard the epicentre / volcano / cyclone centre it carries,
     /// else a point inside its area (the cell nearest the middle of a geohash union, or the first circle's centre).
@@ -199,6 +216,11 @@ extension PostView {
         return nil
     }
 }
+
+/// `jp.jma.shindo` → the zoom an earthquake alert shows from; 5弱 and above show at every zoom. Unknown values are not listed.
+private let shindoMinZoom: [String: Double] = ["0": 8, "1": 8, "2": 8, "3": 6, "4": 5, "5-": 0, "5+": 0, "6-": 0, "6+": 0, "7": 0]
+/// Zooms at which the set of shown posts can change: the shindo steps and [postMinZoom].
+let mapZoomSteps = Set(shindoMinZoom.values.filter { $0 > 0 } + [postMinZoom]).sorted()
 
 private let severityRank = ["Extreme", "Severe", "Moderate", "Minor"]
 /// Pin stack order: official alerts first (most severe, then newest), then ordinary posts newest first.

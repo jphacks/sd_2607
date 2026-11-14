@@ -58,8 +58,8 @@ public enum Attest {
         public let issuerDomain: String?
         public let trustLevel: Int64?
         public let revocationSubkey: [UInt8]?
-        /// importer block: botDid → types. Nil when the block is absent.
-        public let importerSources: [String: Set<String>]?
+        /// importer block (importer §1). Nil when the block is absent.
+        public let importerBlock: Importer?
         /// Display name for `identity`: the organization if any, else the owner.
         public var displayName: String { orgName ?? ownerName }
 
@@ -90,17 +90,27 @@ public enum Attest {
             issuerDomain = try blocks[issuerDomainType].map { try text($0["domain"]).lowercased() }
             trustLevel = try blocks[trustLevelType].map { b in let l = try number(b["level"]); try require(l <= 3); return l }
             revocationSubkey = try blocks[subkey].map { try publicKey($0["key"]) }
-            importerSources = try blocks[importer].map { block in
-                guard let sources = block["sources"]?.array, sources.count <= 16 else { throw CoreError("Expected sources") }
-                let parsed: [(String, Set<String>)] = try sources.map { s in
-                    let m = try map(s)
-                    let did = try text(m["botDid"])
-                    try require(matches(AtRepository.didPattern, did))
-                    return (did, Set(try sortedTexts(m["types"], 32, min: 1)))
+            importerBlock = try blocks[importer].map { block in
+                // Each list, when present, is non-empty, sorted by its key and free of duplicates (importer §1, §4).
+                func pairs(_ field: String, _ key: String, _ max: Int, _ check: (String) -> Bool) throws -> [String: Set<String>]? {
+                    guard let value = block[field] else { return nil }
+                    guard let list = value.array, (1...max).contains(list.count) else { throw CoreError("Expected \(field)") }
+                    let parsed: [(String, Set<String>)] = try list.map { s in
+                        let m = try map(s)
+                        let name = try text(m[key])
+                        try require(check(name), "Invalid \(key)")
+                        return (name, Set(try sortedTexts(m["types"], 32, min: 1)))
+                    }
+                    try require(zip(parsed, parsed.dropFirst()).allSatisfy { lexicalCompare($0.0, $1.0) < 0 }, "Unsorted \(field)")
+                    return Dictionary(uniqueKeysWithValues: parsed)
                 }
-                try require(zip(parsed, parsed.dropFirst()).allSatisfy { lexicalCompare($0.0, $1.0) < 0 }, "Unsorted sources")
-                try require(parsed.reduce(0) { $0 + $1.1.count } <= 64)
-                return Dictionary(uniqueKeysWithValues: parsed)
+                let sources = try pairs("sources", "botDid", 16) { matches(AtRepository.didPattern, $0) }
+                // An unknown feed name parses; it just never authorizes (importer §1.1).
+                let feeds = try pairs("feeds", "feed", 8) { (1...maxTextBytes).contains($0.utf8.count) }
+                try require(sources != nil || feeds != nil, "importer block without sources or feeds")
+                let b = Importer(sources: sources, feeds: feeds)
+                try require(b.pairCount <= 64)
+                return b
             }
             try require(issuer != subject, "Self-signed attestation")
             try require(ownerId.utf8.count <= maxTextBytes && ownerName.utf8.count <= maxTextBytes)
@@ -114,6 +124,28 @@ public enum Attest {
 
         /// `keyValidity`: from <= t < until; absent bounds are unlimited.
         public func validAt(_ t: Instant) -> Bool { (validFrom.map { t >= $0 } ?? true) && (validUntil.map { t < $0 } ?? true) }
+    }
+
+    /// `dev.jisaku.mosimo.attest.importer`: the (botDid, type) pairs of `sources` and the (feed, type) pairs of `feeds`
+    /// an importer may re-publish; each map is nil when its list is absent.
+    public struct Importer: Equatable, Sendable {
+        public let sources: [String: Set<String>]?
+        public let feeds: [String: Set<String>]?
+        var pairCount: Int { [sources, feeds].reduce(0) { $0 + ($1?.values.reduce(0) { $0 + $1.count } ?? 0) } }
+        public func covers(_ pair: PublicIngress.Selection) -> Bool {
+            if let bot = pair.botDid { return sources?[bot]?.contains(pair.type) == true }
+            if let feed = pair.feed { return feeds?[feed]?.contains(pair.type) == true }
+            return false
+        }
+        /// importer §1: each child pair is in the issuer's list of the same kind; a list the issuer lacks, the child cannot have.
+        func within(_ parent: Importer) -> Bool {
+            func contained(_ child: [String: Set<String>]?, _ parent: [String: Set<String>]?) -> Bool {
+                guard let child else { return true }
+                guard let parent else { return false }
+                return child.allSatisfy { key, types in parent[key].map { types.isSubset(of: $0) } ?? false }
+            }
+            return contained(sources, parent.sources) && contained(feeds, parent.feeds)
+        }
     }
 
     /// `{body, sig}` as carried in chains and FETCH responses.
@@ -159,7 +191,7 @@ public enum Attest {
         var parentDepth = Int64(root.maxDepth)
         var parentFrom: Instant?, parentUntil: Instant?
         var parentOrg: String?
-        var parentSources: [String: Set<String>]?
+        var parentImporter: Importer?
         for (i, a) in attestations.enumerated() {
             let leaf = i == attestations.count - 1
             func invalid(_ why: String) -> ChainResult { ChainResult(state: .invalid, reason: "attestation \(i): \(why)", root: root) }
@@ -172,11 +204,10 @@ public enum Attest {
             if a.maxDepth > parentDepth - 1 { return invalid("delegation depth exceeds the issuer's") }
             if !leaf && a.maxDepth < 1 { return invalid("intermediate without delegation") }
             if let po = parentOrg, a.orgId != po { return invalid("organization differs from the issuer's") }
-            if let ps = parentSources, let sources = a.importerSources,
-               !sources.allSatisfy({ bot, types in ps[bot].map { types.isSubset(of: $0) } ?? false }) { return invalid("importer sources exceed the issuer's") }
+            if let pi = parentImporter, let ci = a.importerBlock, !ci.within(pi) { return invalid("importer block exceeds the issuer's") }
             parentRoles = Set(a.roles); parentDepth = a.maxDepth; parentFrom = a.validFrom; parentUntil = a.validUntil
             parentOrg = a.orgId ?? parentOrg
-            parentSources = a.importerSources // importer §1: a child of a block-less issuer is unconstrained
+            parentImporter = a.importerBlock // importer §1: a child of a block-less issuer is unconstrained
         }
         guard let now else { return ChainResult(state: .unknownTime, reason: "clock unknown", root: root, attestations: attestations) }
         if !attestations.allSatisfy({ $0.validAt(createdAt) }) { return ChainResult(state: .expired, reason: "outside validity at creation", root: root, attestations: attestations) }

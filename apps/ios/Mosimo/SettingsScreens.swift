@@ -258,11 +258,11 @@ struct TrustScreen: View {
                 }
             }
             AddRootSection()
-            Header(text: "取り込みを選択した Bot と種別")
+            Header(text: "取り込みを選択した Bot・フィードと種別")
             if sources.isEmpty { Group_ { NoneText() } }
             ForEach(sources) { source in
                 Group_ {
-                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.botDid, value: "\(source.types.count)種別")
+                    SettingRow(icon: "arrow.down.circle", tint: Mosimo.info, title: source.name, value: "\(source.types.count)種別")
                     Line()
                     detail(source.types.map(bsafLabel).joined(separator: "・"))
                 }
