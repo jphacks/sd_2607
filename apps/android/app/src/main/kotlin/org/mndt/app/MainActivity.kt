@@ -13,6 +13,7 @@ import org.koin.dsl.module
 import org.mndt.app.location.LocationRepository
 import org.mndt.app.ui.MosimoApp
 import org.mndt.app.ui.map.mapModule
+import org.mndt.app.ui.post.connectivity
 import org.mndt.app.ui.settings.settingsModule
 import org.mndt.app.ui.theme.MosimoTheme
 import org.mndt.app.ui.timeline.timelineModule
@@ -46,7 +47,7 @@ class MainActivity : ComponentActivity() {
         setContent { MosimoTheme { MosimoApp() } }
         // Debug-only lab hook (as iOS `-mosimo.test.post`): `am start -n … --es mosimo.test.post "text"` publishes one located post.
         if (BuildConfig.DEBUG && savedInstanceState == null) intent.getStringExtra("mosimo.test.post")?.let { text ->
-            MeshCoordinator.get(this).publish("［安全］$text", listOf(Extensions.origin(Origin(35_681_236, 139_767_125))))
+            MeshCoordinator.get(this).publish("［安全］$text", listOf(Extensions.origin(Origin(35_681_236, 139_767_125)), connectivity(this)))
         }
         // `--es mosimo.test.report <id prefix>` / `--es mosimo.test.delete <id prefix>` act on a held event once loaded.
         if (BuildConfig.DEBUG && savedInstanceState == null) {

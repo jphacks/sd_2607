@@ -1,6 +1,8 @@
 package org.mndt.app.ui.post
 
+import android.content.Context
 import android.location.Location
+import android.net.ConnectivityManager
 import androidx.compose.ui.graphics.Color
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.mesh.PostView
@@ -8,6 +10,13 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+
+/**
+ * Our own post extension, not an official dev.jisaku.mosimo type (core §10.3; apps/lexicons/dev/jisaku/bosai/connectivity.json):
+ * whether the OS has a network now. Every post this app publishes passes it explicitly.
+ */
+fun connectivity(context: Context): Map<String, Any?> = mapOf("\$type" to "dev.jisaku.bosai.connectivity",
+    "online" to (context.getSystemService(ConnectivityManager::class.java).activeNetwork != null))
 
 /** Situation kind, carried as a plain-text prefix 「［危険］」 so any client can read it (no protocol field). */
 enum class Category(val label: String, val color: Color) {

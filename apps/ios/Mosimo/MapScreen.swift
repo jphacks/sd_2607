@@ -51,6 +51,7 @@ final class MapModel: ObservableObject {
         if areaMeters > 0 { ext.append(Extensions.circle(lat: micro(point.latitude), lon: micro(point.longitude), r: Int64(areaMeters) * 1000)) }
         // validity is independent of the delivery deadline, which keeps the app default.
         ext.append(Extensions.validity(until: Instant(epochSecond: ends).description))
+        ext.append(connectivity(online: mesh.state.network))
         sentAttempt = mesh.state.publishAttempt
         sentId = mesh.state.lastPublishedId
         sending = true
