@@ -1,3 +1,5 @@
+import { base64ToBytes, resolveEventUris, toHex } from './nostr';
+
 // Mosimo feed parsing. Extension shapes follow the dev.jisaku.mosimo protocol
 // (post, geo, validity, annotation, priority).
 const NS = 'dev.jisaku.mosimo';
@@ -7,6 +9,7 @@ const AREA = `${NS}.geo#area`;
 const VALIDITY = `${NS}.validity`;
 const ANNOTATION = `${NS}.annotation`;
 const PRIORITY = `${NS}.priority`;
+const ALERT_EXT = /^dev\.jisaku\.mosimo\.(hazard|public)([.#]|$)/;
 
 export type LatLng = [number, number];
 export type Area = { shape: 'circle'; center: LatLng; radiusMeters: number } | { shape: 'rect'; bounds: [LatLng, LatLng] };
@@ -21,10 +24,13 @@ export type Post = {
   createdAt: string;
   indexedAt?: string;
   bsaf: boolean;
+  // 警報・注意報系: a BSAF original, or a post carrying hazard / official-source extensions (JMA, CAP, BSAF reposts).
+  alert: boolean;
   origin?: LatLng;
   areas: Area[];
   validity?: Validity;
-  annotation?: { relation: Relation; target?: string };
+  // target is an atproto URI; eventId (hex) is kept for Nostr targets until fetchFeed maps it to a URI.
+  annotation?: { relation: Relation; target?: string; eventId?: string };
   priority?: number;
   unknownTypes: string[];
 };
@@ -94,6 +100,7 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
     createdAt,
     indexedAt: str(provenance?.indexedAt),
     bsaf,
+    alert: bsaf,
     areas: [],
     unknownTypes: [],
   };
@@ -102,6 +109,7 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
     const e = obj(ext);
     const type = str(e?.$type);
     if (!e || !type) continue;
+    if (ALERT_EXT.test(type)) post.alert = true;
     switch (type) {
       case ORIGIN:
         post.origin = micro(e.lat, e.lon);
@@ -118,9 +126,14 @@ export function parsePost(record: Record<string, unknown>, provenance?: Record<s
       case ANNOTATION: {
         const relation = e.relation;
         if (relation === 'correction' || relation === 'supplement' || relation === 'endorsement') {
-          // atproto targets carry a uri; Nostr targets carry only an eventId and read as 参照先未取得.
+          // atproto targets carry a uri; Nostr targets carry an eventId that fetchFeed resolves via the relay.
           const target = obj(e.target);
-          post.annotation = { relation, target: target?.network === 'atproto' ? str(target.uri) : undefined };
+          if (target?.network === 'atproto') post.annotation = { relation, target: str(target.uri) };
+          else {
+            const raw = str(obj(target?.eventId)?.$bytes);
+            const bytes = raw ? base64ToBytes(raw) : undefined;
+            post.annotation = { relation, eventId: bytes?.length === 32 ? toHex(bytes) : undefined };
+          }
         }
         break;
       }
@@ -202,7 +215,15 @@ export const POST_COLLECTION = POST;
 
 export type FeedPage = { posts: Post[]; cursor?: string };
 
-export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }): Promise<FeedPage> {
+// Fill in atproto URIs for annotations that target a Nostr event. Unresolved ones stay 参照先未取得.
+export async function resolveNostrTargets(posts: Post[], relay: string, opts?: Parameters<typeof resolveEventUris>[2]): Promise<void> {
+  const pending = posts.filter(p => p.annotation?.eventId && !p.annotation.target);
+  if (!relay || !pending.length) return;
+  const uris = await resolveEventUris(relay, pending.map(p => p.annotation!.eventId!), opts).catch(() => new Map<string, string>());
+  for (const p of pending) p.annotation!.target = uris.get(p.annotation!.eventId!);
+}
+
+export async function fetchFeed(appview: string, clientKey: string, q: { cursor?: string; did?: string; uri?: string }, relay = ''): Promise<FeedPage> {
   const url = new URL('/xrpc/dev.jisaku.mosimo.getFeed', appview);
   url.searchParams.set('limit', '50');
   // Public HappyView client key: an app identifier checked against allowed origins, not a secret.
@@ -221,6 +242,7 @@ export async function fetchFeed(appview: string, clientKey: string, q: { cursor?
   });
   const cursor = data.cursor;
   if (cursor != null && (typeof cursor !== 'string' || cursor === q.cursor)) throw new Error('Invalid cursor');
+  await resolveNostrTargets(posts, relay);
   return { posts, cursor: cursor ?? undefined };
 }
 

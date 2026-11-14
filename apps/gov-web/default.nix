@@ -2,7 +2,7 @@
 let
   cfg = config.services.mosimo-gov-web;
   root = pkgs.callPackage ./package.nix {
-    inherit (cfg) appviewUrl clientKey;
+    inherit (cfg) appviewUrl clientKey relayUrl;
   };
 in
 {
@@ -22,6 +22,12 @@ in
       default = null;
       description = "Public HappyView client key embedded at build time; null queries without a key.";
       example = "hvc_0123456789abcdef";
+    };
+    relayUrl = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "wss?://[^?#[:space:]]+");
+      default = null;
+      description = "Mosimo Nostr relay used to map annotation targets given as Nostr event IDs to posts. Embedded at build time; null uses the app default (wss://pds.oriom.dev).";
+      example = "wss://pds.example.org";
     };
   };
 

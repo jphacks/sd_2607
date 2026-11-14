@@ -91,3 +91,15 @@ test('parsePost reads Nostr annotation targets as 参照先未取得 (undefined 
   const p = parsePost(rec(uri, [nostr]))!;
   expect(p.annotation).toEqual({ relation: 'correction', target: undefined });
 });
+
+test('alert flags BSAF originals and posts carrying hazard or official-source extensions', () => {
+  const u = uriOf('did:plc:a', 'alert');
+  expect(post(u).alert).toBe(false);
+  expect(post(u, [{ $type: `${NS}.geo#origin`, lat: 1, lon: 2 }, { $type: `${NS}.priority`, level: 1 }]).alert).toBe(false);
+  expect(post(u, [{ $type: `${NS}.hazard`, type: 'earthquake' }]).alert).toBe(true);
+  expect(post(u, [{ $type: `${NS}.hazard.weather` }]).alert).toBe(true);
+  expect(post(u, [{ $type: `${NS}.public.bsaf` }]).alert).toBe(true);
+  expect(post(u, [{ $type: `${NS}.public#source` }]).alert).toBe(true);
+  expect(post(u, [{ $type: `${NS}.hazardous.other` }]).alert).toBe(false);
+  expect(parsePost({ uri: 'at://x/app.bsky.feed.post/one', text: 't', $type: 'app.bsky.feed.post', createdAt: '2026-11-01T00:00:00Z' })!.alert).toBe(true);
+});

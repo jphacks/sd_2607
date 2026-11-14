@@ -5,6 +5,8 @@ import { buildThreads, delayText, fetchFeed, resolveHandle, validityState, type 
 
 const APPVIEW = import.meta.env.VITE_APPVIEW_URL || 'https://appview.oriom.dev';
 const CLIENT_KEY: string = import.meta.env.VITE_CLIENT_KEY ?? '';
+// Nostr relay used to map annotation targets given as Nostr event IDs (Android) to atproto posts.
+const RELAY: string = import.meta.env.VITE_RELAY_URL || 'wss://pds.oriom.dev';
 const POLL_MS = 10_000;
 
 type Status = 'todo' | 'doing' | 'done';
@@ -204,6 +206,23 @@ function Detail({ post, thread, status, now, onStatus, onSelect, onAuthor }: {
 const field = 'rounded-8 border border-solid-gray-600 bg-white px-3 py-1.5 text-dns-16N-130';
 const button = 'rounded-8 px-4 py-1.5 text-dns-16B-130';
 
+type Kind = 'all' | 'posts' | 'alerts';
+// Remembered per browser so an operator who hides BSAF/official alerts keeps them hidden after reload.
+function useKind(): [Kind, (k: Kind) => void] {
+  const [kind, setKind] = useState<Kind>(() => {
+    try {
+      const v = localStorage.getItem('mosimo-gov-kind');
+      return v === 'posts' || v === 'alerts' ? v : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  return [kind, k => {
+    setKind(k);
+    try { localStorage.setItem('mosimo-gov-kind', k); } catch { /* storage unavailable */ }
+  }];
+}
+
 export default function App() {
   const [did, setDid] = useUrlParam('did');
   const [selectedUri, setSelectedUri] = useUrlParam('uri');
@@ -216,7 +235,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now);
   const [statuses, setStatus] = useStatuses();
   const [keyword, setKeyword] = useState('');
-  const [kind, setKind] = useState<'all' | 'mosimo' | 'bsaf'>('all');
+  const [kind, setKind] = useKind();
   const [validity, setValidity] = useState<'all' | ValidityState>('all');
   const [inView, setInView] = useState(false);
   const [bounds, setBounds] = useState<LatLngBounds>();
@@ -234,13 +253,13 @@ export default function App() {
   useEffect(() => {
     let live = true;
     setPosts([]); setPending([]); setCursor(undefined); setBusy(true);
-    fetchFeed(APPVIEW, CLIENT_KEY, { did })
+    fetchFeed(APPVIEW, CLIENT_KEY, { did }, RELAY)
       .then(page => { if (live) { setPosts(page.posts); setCursor(page.cursor); done(true); } })
       .catch(() => live && done(false))
       .finally(() => live && setBusy(false));
     // ponytail: polling only adds arrivals; deletions in loaded pages show after a reload.
     const timer = setInterval(() => {
-      fetchFeed(APPVIEW, CLIENT_KEY, { did })
+      fetchFeed(APPVIEW, CLIENT_KEY, { did }, RELAY)
         .then(page => {
           if (!live) return;
           const fresh = page.posts.filter(p => !known.current.has(p.uri));
@@ -255,14 +274,14 @@ export default function App() {
   // A shared ?uri= link may point past the loaded pages; fetch it on its own.
   useEffect(() => {
     if (!selectedUri || busy || known.current.has(selectedUri)) return;
-    fetchFeed(APPVIEW, CLIENT_KEY, { uri: selectedUri }).then(page => setPosts(prev => merge(prev, page.posts))).catch(() => {});
+    fetchFeed(APPVIEW, CLIENT_KEY, { uri: selectedUri }, RELAY).then(page => setPosts(prev => merge(prev, page.posts))).catch(() => {});
   }, [selectedUri, busy]);
 
   const loadMore = () => {
     if (busy || !cursor) return;
     setBusy(true);
     // Offsets shift as new posts arrive; overlap is de-duplicated by URI.
-    fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor })
+    fetchFeed(APPVIEW, CLIENT_KEY, { did, cursor }, RELAY)
       .then(page => { setPosts(prev => merge(prev, page.posts)); setCursor(page.cursor); done(true); })
       .catch(() => done(false))
       .finally(() => setBusy(false));
@@ -272,7 +291,7 @@ export default function App() {
   const shown = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     return threads.filter(({ post, replies }) =>
-      (kind === 'all' || post.bsaf === (kind === 'bsaf')) &&
+      (kind === 'all' || post.alert === (kind === 'alerts')) &&
       (validity === 'all' || validityState(post.validity, now) === validity) &&
       (!q || [post, ...replies].some(p => p.text.toLowerCase().includes(q))) &&
       (!inView || !!(bounds && postBounds(post) && bounds.intersects(postBounds(post)!))));
@@ -304,8 +323,8 @@ export default function App() {
         <label className="flex flex-col gap-1 text-dns-14B-130">種類
           <select value={kind} onChange={e => setKind(e.target.value as typeof kind)} className={field}>
             <option value="all">すべて</option>
-            <option value="mosimo">Mosimo</option>
-            <option value="bsaf">BSAF</option>
+            <option value="posts">警報・注意報を除く</option>
+            <option value="alerts">警報・注意報のみ</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-dns-14B-130">有効状態
