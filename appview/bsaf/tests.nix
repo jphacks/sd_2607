@@ -26,8 +26,11 @@ let
   };
   publisherBase = {
     enable = true; selectJmaDefaults = true;
-    credentialsDirectory = "/var/lib/mosimo-importer";
-    trustFile = "/var/lib/mosimo-importer/roots.json";
+    identityFile = ./tests.nix; # any Nix path: public files may live in the store
+    chainFile = "/etc/mosimo-importer/chain.cbor";
+    nostrKeyFile = "/run/secrets/mosimo_importer_nostr_pem";
+    atprotoKeyFile = "/run/secrets/mosimo_importer_atproto_pem";
+    trustFile = "/etc/mosimo-importer/roots.json";
     relayUrl = "wss://pds.invalid/";
   };
   publishing = evaluate {
@@ -44,6 +47,23 @@ let
       enable = true;
       authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" "did:plc:kxwz5cz7o6g4jlmxh6doyfsm" ];
       publisher = publisherBase // { selectKikikuruDefaults = true; };
+    };
+  };
+  # Private keys must never be Nix paths (they would be copied into the world-readable store).
+  storeKey = evaluate {
+    happyview = enabledHappyView;
+    bsaf = {
+      enable = true;
+      authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" ];
+      publisher = publisherBase // { nostrKeyFile = "/nix/store/x-nostr.pem"; };
+    };
+  };
+  sameKey = evaluate {
+    happyview = enabledHappyView;
+    bsaf = {
+      enable = true;
+      authors = [ "did:plc:vwi7zhfyamyvrg5v6ycjgzxi" ];
+      publisher = publisherBase // { atprotoKeyFile = publisherBase.nostrKeyFile; };
     };
   };
   mixed = evaluate {
@@ -69,14 +89,15 @@ assert failedAssertions missingHappyView == failedAssertions selected + 1;
 assert !(empty.systemd.services ? mosimo-bsaf);
 assert !(empty.systemd.services ? mosimo-bsaf-publisher);
 assert publisher.serviceConfig.LoadCredential == [
-  "identity.json:/var/lib/mosimo-importer/identity.json" "chain.cbor:/var/lib/mosimo-importer/chain.cbor"
-  "nostr.pem:/var/lib/mosimo-importer/nostr.pem" "atproto.pem:/var/lib/mosimo-importer/atproto.pem"
-];
-assert builtins.match ".*publisher.mts" publisher.serviceConfig.ExecStart != null;
+  "atproto.pem:/run/secrets/mosimo_importer_atproto_pem" "chain.cbor:/etc/mosimo-importer/chain.cbor"
+  "identity.json:${toString ./tests.nix}" "nostr.pem:/run/secrets/mosimo_importer_nostr_pem"
+];assert builtins.match ".*publisher.mts" publisher.serviceConfig.ExecStart != null;
 assert publisher.serviceConfig.MemoryMax == "128M";
 assert publishing.services.mosimo-bsaf.publisher.priority == null;
 assert !publishing.services.mosimo-bsaf.publisher.selectKikikuruDefaults;
 assert failedAssertions mixed == failedAssertions both + 1;
+assert failedAssertions storeKey == failedAssertions publishing + 1;
+assert failedAssertions sameKey == failedAssertions publishing + 1;
 assert publishing.services.mosimo-bsaf.publisher.jmaPriorityPolicy;
 assert publishing.services.mosimo-bsaf.publisher.maxOriginalAgeSeconds == 3600;
 assert empty.systemd.services.mosimo-bsaf-prepare.serviceConfig.Type == "oneshot";

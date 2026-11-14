@@ -32,7 +32,7 @@ services.mosimo-bsaf.authors = [
 
 `authors` は収集元のローカル許可リストです。公的機関の認証や、Botの全情報種別の再配信許可を意味しません。publisherは既定で無効であり、再配信には以下を別途設定します。
 
-- `publisher.enable = true` と、再配信先の `relayUrl`、importerの鍵ディレクトリ `credentialsDirectory`（[PUBLISHER.md](PUBLISHER.md#key-placement)）、公開root設定の `trustFile` を指定します。配信先や信頼の起点は自動選択されません。
+- `publisher.enable = true` と、再配信先の `relayUrl`、importerの鍵（`nostrKeyFile`・`atprotoKeyFile` は sops などの実行時パス、`identityFile`・`chainFile` は公開ファイル。[PUBLISHER.md](PUBLISHER.md#key-placement)）、公開root設定の `trustFile` を指定します。配信先や信頼の起点は自動選択されません。
 - 再配信対象はBot DIDと情報種別の組で選びます。`publisher.selectJmaDefaults` は地震・津波・火山の固定5種、`publisher.selectKikikuruDefaults` は気象の固定23種を選択します。両方を明示選択すると28組になり、いずれも新種別を自動追加しません。
 - 独自の `publisher.selection` は固定プリセットと排他です。再配信対象のBot DIDは `authors` にも登録します。受信側でも信頼するrootとBot・情報種別を個別に選択する必要があります。
 - 気象の優先度ヒントは既定1です。JMA XMLの復元は行いません。優先度の上昇には受信側での独立した認可が必要です。

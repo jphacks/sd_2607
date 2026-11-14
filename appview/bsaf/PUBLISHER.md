@@ -16,7 +16,7 @@ oriom-root                         root key (offline, stratum 0), receivers' roo
 App releases before the root setting was raised to `maxDepth 16` accept at most this two-step chain, so this CA and leaf stay in use until those releases are gone. New importers are planned as root → role-specific issuer → importer operator → node, which needs the newer root setting.
 
 - The chain travels inside every import post (`mosimo:ext:dev.jisaku.mosimo.attest.chain`). Receivers verify it offline against their locally configured root (`publicInformation.roots`: public key, allowed roles, allowed depth) and their own `(botDid, type)` selection ([importer §3](../../protocol/mosimo/attest/importer/README.md#3-受信者の認可)).
-- Nothing expires for two years. Renewal is `mosimo-ca issue` for a new leaf + `mosimo-ca credentials` + redeploying the key directory.
+- Nothing expires for two years. Renewal is `mosimo-ca issue` for a new leaf + `mosimo-ca credentials` + committing the new files (Key placement) and deploying.
 - Revocation is a signed fact ([attest.revocation](../../protocol/mosimo/attest/revocation/README.md)). The CA publishes a signed list at `https://<issuerDomain>/.well-known/mosimo/attest/revocations` (`application/cbor`); it only changes when a key is revoked. Receivers that are online fetch it periodically and persist notices; fetch failure keeps the last state and never blocks relaying. Revocations can also travel as kind `8173` control events.
 - Receivers (this publisher included) check the chain at the post's `created_at` **and** at the current time, require the `import` role plus `importer` and `organization` blocks, require the original `(botDid, type)` to be inside both the importer block and the local selection, and refuse `revoked`/`revoked-later` chains.
 
@@ -29,7 +29,7 @@ node identity-cli.mjs importer-create https://pds.example.org --out=importer-sec
 mosimo-ca issue PARENT NAME --leaf --owner-name 'BSAF importer' --org-id ... --org-name ... --preset jma --preset kikikuru \
   --importer-identity importer-secret.json --days 730
 rm importer-secret.json   # holds the PLC rotation secret in plain text
-# 3. The key directory for the server (below), then deploy it.
+# 3. The files for the server (Key placement below).
 mosimo-ca credentials PARENT/NAME --out ./deploy
 ```
 
@@ -37,20 +37,24 @@ mosimo-ca credentials PARENT/NAME --out ./deploy
 
 ## Key placement
 
-The publisher is the only Mosimo server that holds private keys (the PDS, AppView and the revocation list endpoint hold none). It gets exactly the importer's two signing keys, never a root, CA, operator or PLC rotation key.
+The publisher is the only Mosimo server that holds private keys (the PDS, AppView and the revocation list endpoint hold none). It gets exactly the importer's two signing keys, never a root, CA, operator or PLC rotation key. Everything is declared in the deployment's Nix configuration; nothing is copied to the host by hand.
 
-| File (written by `mosimo-ca credentials`) | Host path | Format |
+| File (written by `mosimo-ca credentials`) | Kind | Declared as |
 |---|---|---|
-| `identity.json` | `/var/lib/mosimo-importer/identity.json` | `{did, nostrPubkey, atprotoPubkey}` (public) |
-| `chain.cbor` | `/var/lib/mosimo-importer/chain.cbor` | canonical CBOR array of KeyAttestation, root-issued first, importer leaf last |
-| `nostr.pem` | `/var/lib/mosimo-importer/nostr.pem` | PKCS#8 PEM, secp256k1: the attested importer key (signs Nostr events) |
-| `atproto.pem` | `/var/lib/mosimo-importer/atproto.pem` | PKCS#8 PEM, secp256k1: the DID's atproto signing key (signs commits) |
-| `roots.json` | `/var/lib/mosimo-importer/roots.json` | public root settings for the publisher's self-check (`trustFile`) |
+| `nostr.pem` | **secret**: PKCS#8 PEM, secp256k1, the attested importer key (signs Nostr events) | `publisher.nostrKeyFile` = a sops-nix secret (`/run/secrets/...`) |
+| `atproto.pem` | **secret**: PKCS#8 PEM, secp256k1, the DID's atproto signing key (signs commits) | `publisher.atprotoKeyFile` = a sops-nix secret |
+| `identity.json` | public: `{did, nostrPubkey, atprotoPubkey}` | `publisher.identityFile` = a file in the deployment repository |
+| `chain.cbor` | public: canonical CBOR array of KeyAttestation, root-issued first, importer leaf last | `publisher.chainFile` = a file in the deployment repository |
+| `roots.json` | public: root settings for the publisher's self-check | `publisher.trustFile` = a file in the deployment repository |
 
-- `/var/lib/mosimo-importer` is `root:root 0700`, every file `root:root 0600`. The PEM files are unencrypted because the service starts unattended; the host directory, systemd credentials and backups are what protect them. Do not place them under `/nix/store` or in a Nix expression.
-- `services.mosimo-bsaf.publisher.credentialsDirectory` points at the host directory. The module passes the four key files with systemd `LoadCredential` (`identity.json:<dir>/identity.json`, ...), so the worker reads them from `/run/credentials/mosimo-bsaf-publisher.service/` and has no access to the host directory itself.
+- The two PEM files are committed only encrypted (sops/age), with exactly two recipients: the operator's workstation and the host that runs the publisher. sops-nix decrypts them at activation to tmpfs (`/run/secrets`, root 0400). The module refuses `/nix/store` paths for them, because the store is world-readable. Set `restartUnits = [ "mosimo-bsaf-publisher.service" ]` on the secrets so a rotated key takes effect.
+- The public files may be Nix paths. A changed file changes the unit and restarts the publisher.
+- The module passes the four files with systemd `LoadCredential` (`nostr.pem:<path>`, ...); the worker reads them from `/run/credentials/mosimo-bsaf-publisher.service/` only.
 - The worker refuses to start unless `nostr.pem` and `atproto.pem` are unencrypted secp256k1 PKCS#8 keys matching `identity.json`, the two keys differ, and the chain's leaf is the Nostr key.
-- Replace the files atomically (write `*.next`, then rename) and restart the publisher. Delete the `--out` directory on the workstation after deploying.
+- An encrypted key in a public repository cannot be withdrawn. If a recipient's age key is ever exposed, revoke the importer key (`mosimo-ca revoke` + `publish`) and issue a new one; the key's validity period bounds the exposure.
+- Workflow: `mosimo-ca credentials NODE --out DIR`, encrypt the PEM files into the deployment's sops file, commit the public files, delete `DIR`, deploy.
+
+The CA's `revocations.cbor` is public as well and is best committed next to these files and served from the Nix store at `https://<issuerDomain>/.well-known/mosimo/attest/revocations`.
 
 ## Explicit opt-in and fixed defaults
 
@@ -69,8 +73,11 @@ services.mosimo-bsaf = {
     enable = true;
     selectJmaDefaults = true;
     selectKikikuruDefaults = true;
-    credentialsDirectory = "/var/lib/mosimo-importer"; # string, NOT a Nix path literal
-    trustFile = "/var/lib/mosimo-importer/roots.json";
+    identityFile = ./mosimo-importer/identity.json;   # public
+    chainFile = ./mosimo-importer/chain.cbor;         # public
+    trustFile = ./mosimo-importer/roots.json;         # public
+    nostrKeyFile = config.sops.secrets.mosimo_importer_nostr_pem.path;     # secret, NOT a Nix path
+    atprotoKeyFile = config.sops.secrets.mosimo_importer_atproto_pem.path; # secret, NOT a Nix path
     relayUrl = "wss://pds.oriom.dev/"; # PDS Nostr endpoint is the root WebSocket path
     maxOriginalAgeSeconds = 3600;
   };

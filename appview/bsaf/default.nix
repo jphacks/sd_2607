@@ -27,12 +27,20 @@ let
     enabled = cfg.publisher.enable;
     inherit (cfg) databasePath;
     credentialsDirectory = "/run/credentials/mosimo-bsaf-publisher.service";
-    trustPath = cfg.publisher.trustFile;
+    trustPath = toString cfg.publisher.trustFile;
     inherit (cfg.publisher) relayUrl maxOriginalAgeSeconds priority jmaPriorityPolicy;
     inherit selection;
   });
-  # Importer key material (PUBLISHER.md, "Key placement"), each file passed as its own systemd credential.
-  credentialFiles = [ "identity.json" "chain.cbor" "nostr.pem" "atproto.pem" ];
+  # Importer key material (PUBLISHER.md, "Key placement"), each file passed as its own systemd credential
+  # under the name the worker reads from $CREDENTIALS_DIRECTORY.
+  credentialFiles = {
+    "identity.json" = cfg.publisher.identityFile;
+    "chain.cbor" = cfg.publisher.chainFile;
+    "nostr.pem" = cfg.publisher.nostrKeyFile;
+    "atproto.pem" = cfg.publisher.atprotoKeyFile;
+  };
+  absolute = value: value != null && lib.hasPrefix "/" (toString value);
+  runtimeSecret = value: absolute value && !(lib.hasPrefix "/nix/store" (toString value));
   hardening = {
     User = "root"; # The existing rootful HappyView volume is root-owned.
     NoNewPrivileges = true;
@@ -54,7 +62,7 @@ in {
   imports = [
     ../happyview
     (lib.mkRemovedOptionModule [ "services" "mosimo-bsaf" "publisher" "credentialsFile" ]
-      "credentials.json was replaced by a directory of PEM/CBOR files written by `mosimo-ca credentials`; set services.mosimo-bsaf.publisher.credentialsDirectory (see appview/bsaf/PUBLISHER.md).")
+      "credentials.json was replaced by the files written by `mosimo-ca credentials`; set services.mosimo-bsaf.publisher.{identityFile,chainFile,nostrKeyFile,atprotoKeyFile} (see appview/bsaf/PUBLISHER.md).")
   ];
 
   options.services.mosimo-bsaf = {
@@ -71,14 +79,29 @@ in {
     };
     publisher = {
       enable = lib.mkEnableOption "opt-in signed BSAF conversion and EVENT publication to PDS";
-      credentialsDirectory = lib.mkOption {
+      identityFile = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str); default = null;
+        example = lib.literalExpression "./mosimo-importer/identity.json";
+        description = "Public identity.json ({did, nostrPubkey, atprotoPubkey}) from `mosimo-ca credentials`. A Nix path is fine.";
+      };
+      chainFile = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str); default = null;
+        example = lib.literalExpression "./mosimo-importer/chain.cbor";
+        description = "Public chain.cbor (the importer's key-attestation chain) from `mosimo-ca credentials`. A Nix path is fine.";
+      };
+      nostrKeyFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str; default = null;
-        example = "/var/lib/mosimo-importer";
-        description = "Absolute host directory (root 0700, files 0600) holding the importer's identity.json, chain.cbor, nostr.pem and atproto.pem as written by `mosimo-ca credentials`; each file is passed with systemd LoadCredential. Never a Nix path, and never root, CA, operator or PLC rotation keys.";
+        example = lib.literalExpression "config.sops.secrets.mosimo_importer_nostr_pem.path";
+        description = "Runtime path (outside /nix/store, e.g. a sops-nix secret) of nostr.pem: the importer's attested Nostr key as unencrypted secp256k1 PKCS#8. Never a Nix path.";
+      };
+      atprotoKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str; default = null;
+        example = lib.literalExpression "config.sops.secrets.mosimo_importer_atproto_pem.path";
+        description = "Runtime path (outside /nix/store, e.g. a sops-nix secret) of atproto.pem: the DID's atproto signing key as unencrypted secp256k1 PKCS#8. Never a Nix path.";
       };
       trustFile = lib.mkOption {
-        type = lib.types.nullOr lib.types.str; default = null;
-        description = "Absolute path of the public roots.json (root pubkey, roles, maxDepth) used for the publisher self-check; no trust anchor is discovered from the relay.";
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str); default = null;
+        description = "Public roots.json (root pubkey, roles, maxDepth) used for the publisher self-check; no trust anchor is discovered from the relay. A Nix path is fine.";
       };
       relayUrl = lib.mkOption { type = lib.types.str; default = ""; description = "Explicit wss PDS Nostr endpoint; no default posting destination."; };
       selectJmaDefaults = lib.mkOption {
@@ -121,13 +144,14 @@ in {
       message = "mosimo-bsaf.authors must contain at most 10000 distinct DIDs";
     } {
       assertion = !cfg.publisher.enable || (
-        cfg.publisher.credentialsDirectory != null && lib.hasPrefix "/" cfg.publisher.credentialsDirectory
-        && !(lib.hasPrefix "/nix/store" cfg.publisher.credentialsDirectory)
-        && cfg.publisher.trustFile != null && lib.hasPrefix "/" cfg.publisher.trustFile
+        absolute cfg.publisher.identityFile && absolute cfg.publisher.chainFile
+        && runtimeSecret cfg.publisher.nostrKeyFile && runtimeSecret cfg.publisher.atprotoKeyFile
+        && cfg.publisher.nostrKeyFile != cfg.publisher.atprotoKeyFile
+        && absolute cfg.publisher.trustFile
         && lib.hasPrefix "wss://" cfg.publisher.relayUrl
         && !((cfg.publisher.selectJmaDefaults || cfg.publisher.selectKikikuruDefaults) && cfg.publisher.selection != [ ])
         && builtins.all (e: builtins.elem e.botDid cfg.authors) selection);
-      message = "BSAF publisher needs an absolute importer credentials directory outside /nix/store, an absolute public trust file, wss relay, and explicitly collected source DIDs; select one selection mode";
+      message = "BSAF publisher needs identity/chain/trust files, two distinct key files outside /nix/store, a wss relay, and explicitly collected source DIDs; select one selection mode";
     }];
     systemd.services.mosimo-bsaf-publisher = lib.mkIf cfg.publisher.enable {
       description = "Sign selected collected BSAF records and push durable EVENT outbox to PDS";
@@ -139,7 +163,7 @@ in {
       environment.PUBLISHER_CONFIG_FILE = publisherSettings;
       serviceConfig = hardening // {
         Type = "simple";
-        LoadCredential = map (name: "${name}:${cfg.publisher.credentialsDirectory}/${name}") credentialFiles;
+        LoadCredential = lib.mapAttrsToList (name: file: "${name}:${toString file}") credentialFiles;
         ExecStart = "${pkgs.nodejs_24}/bin/node --max-old-space-size=64 ${runtime}/publisher.mts";
         Restart = "on-failure";
         RestartSec = 5;
