@@ -113,6 +113,12 @@ export function isBsafImport(event) {
   } catch { return true; }
 }
 
+/** importer §2: feed re-posts (any JMA XML extension, importer §1.1) are Nostr-only too; the importer DID hosts no repository. */
+export const isFeedImport = event => event.tags.some(tag => tag[0] === `${EXT_PREFIX}dev.jisaku.mosimo.public.jma.earthquake`
+  || tag[0] === `${EXT_PREFIX}dev.jisaku.mosimo.public.jma.weather`);
+/** Routing for both import kinds: never published to atproto. */
+export const isNostrOnlyImport = event => isBsafImport(event) || isFeedImport(event);
+
 /** Validate the signed Nostr envelope and recover the original record and commit bytes (core §7.2). */
 export async function decodePost(event) {
   requireValue(event && event.kind === 1 && typeof event.content === 'string'

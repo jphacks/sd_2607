@@ -14,7 +14,7 @@ import { CID } from 'multiformats/cid';
 import { base32 } from 'multiformats/bases/base32';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { finalizeEvent } from 'nostr-tools';
-import { TAG, COLLECTION, decodePost, encodeBytes, isBsafImport } from './repository.mjs';
+import { TAG, COLLECTION, decodePost, encodeBytes, isNostrOnlyImport } from './repository.mjs';
 export { encodeBytes };
 
 export const ATTEST = 'dev.jisaku.mosimo.attest';
@@ -27,6 +27,10 @@ export const ACTIVATION = `${REVOCATION}#activation`;
 export const REVOCATION_LIST = `${REVOCATION}.list`;
 export const IMPORTER = `${ATTEST}.importer`;
 export const BSAF = 'dev.jisaku.mosimo.public.bsaf';
+export const JMA_EARTHQUAKE = 'dev.jisaku.mosimo.public.jma.earthquake';
+export const JMA_WEATHER = 'dev.jisaku.mosimo.public.jma.weather';
+/** importer §1.1: the registered feed of JMA disaster-prevention XML; its types are the original Control/Title. */
+export const JMA_XML_FEED = 'jma-xml';
 export const PRIORITY = 'dev.jisaku.mosimo.priority';
 export const CONTROL_KIND = 8173;
 export const REVOCATION_TAG = `${TAG}/revocation`;
@@ -45,6 +49,11 @@ export const KIKIKURU_SELECTION = Object.freeze([Object.freeze({ botDid: 'did:pl
     'linear-rainband-warning', 'low-temperature-warning', 'melting-snow-warning', 'other-warning',
     'significant-snowfall-warning', 'snow-accretion-warning', 'snow-warning', 'storm-surge-warning',
     'thunderstorm-warning', 'tornado-warning', 'typhoon', 'wave-warning', 'weather-info', 'wind-warning']) })]);
+// importer §1.1: the JMA XML titles the jma-xml importer converts (earthquake and R06 weather warnings).
+export const JMA_XML_SELECTION = Object.freeze([Object.freeze({ feed: JMA_XML_FEED,
+  types: Object.freeze(sortUtf8(['震源・震度に関する情報', '気象警報・注意報（Ｒ０６）（大雨）', '気象警報・注意報（Ｒ０６）（土砂）',
+    '気象警報・注意報（Ｒ０６）（高潮）', '気象警報・注意報（Ｒ０６）（暴風）', '気象警報・注意報（Ｒ０６）（波浪）',
+    '気象警報・注意報（Ｒ０６）（大雪）', '気象警報・注意報（Ｒ０６）（その他注意報）'])) })]);
 
 const DID = /^did:plc:[a-z2-7]{24}$/;
 const DOMAIN = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
@@ -68,13 +77,13 @@ const keys = (value, allowed, required = allowed) => {
 };
 const text = (value, max = 256) => fail(typeof value === 'string' && Buffer.byteLength(value) >= 1 && Buffer.byteLength(value) <= max
   && !/[\x00-\x1f\x7f\ud800-\udfff]/u.test(value), 'Invalid text');
-const utf8Less = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)) < 0;
+function utf8Less(a, b) { return Buffer.compare(Buffer.from(a), Buffer.from(b)) < 0; } // hoisted: the selections above sort with it
 const sortedUnique = (values, max, check) => {
   fail(Array.isArray(values) && values.length <= max, 'List too long');
   values.forEach(check);
   fail(values.every((value, i) => i === 0 || utf8Less(values[i - 1], value)), 'List must be sorted by UTF-8 bytes without duplicates');
 };
-export const sortUtf8 = values => [...values].sort((a, b) => utf8Less(a, b) ? -1 : utf8Less(b, a) ? 1 : 0);
+export function sortUtf8(values) { return [...values].sort((a, b) => utf8Less(a, b) ? -1 : utf8Less(b, a) ? 1 : 0); }
 
 // ---- canonical CBOR -------------------------------------------------------------------
 export function canonical(value, { maxBytes = 32768, allowCid = false } = {}) {
@@ -175,21 +184,35 @@ export const timestamp = seconds => {
 const clock = now => fail(Number.isSafeInteger(now) && now >= 0 && now <= 253402300799, 'Unknown clock');
 
 // ---- key attestations ---------------------------------------------------------------------
+/** importer §1: `sources` (Bot DIDs) and/or `feeds` (registered feed names), each non-empty when present. */
 export function validateImporterBlock(block) {
-  keys(block, ['$type', 'sources']);
-  fail(Array.isArray(block.sources) && block.sources.length >= 1 && block.sources.length <= 16, 'Invalid importer sources');
+  keys(block, ['$type', 'sources', 'feeds'], ['$type']);
+  fail(block.sources !== undefined || block.feeds !== undefined, 'Importer block without sources or feeds');
   let pairs = 0;
-  for (const source of block.sources) {
-    keys(source, ['botDid', 'types']);
-    fail(DID.test(source.botDid), 'Invalid Bot DID');
-    sortedUnique(source.types, 32, type => text(type, 128));
-    fail(source.types.length >= 1, 'Empty types'); pairs += source.types.length;
-  }
-  sortedUnique(block.sources.map(source => source.botDid), 16, () => {});
+  const entries = (list, max, name, check) => {
+    if (list === undefined) return;
+    fail(Array.isArray(list) && list.length >= 1 && list.length <= max, `Invalid importer ${name}`);
+    for (const entry of list) {
+      keys(entry, [name === 'sources' ? 'botDid' : 'feed', 'types']); check(entry);
+      sortedUnique(entry.types, 32, type => text(type, 128));
+      fail(entry.types.length >= 1, 'Empty types'); pairs += entry.types.length;
+    }
+    sortedUnique(list.map(entry => entry.botDid ?? entry.feed), max, () => {});
+  };
+  entries(block.sources, 16, 'sources', source => fail(DID.test(source.botDid), 'Invalid Bot DID'));
+  entries(block.feeds, 8, 'feeds', feed => text(feed.feed, 64));
   fail(pairs <= 64, 'Importer scope limit');
   return block;
 }
 export const includesPair = (sources, botDid, type) => Array.isArray(sources) && sources.some(s => s.botDid === botDid && s.types?.includes(type));
+export const includesFeed = (feeds, feed, type) => Array.isArray(feeds) && feeds.some(f => f.feed === feed && f.types?.includes(type));
+/** Whether an importer scope or local selection (a list of {botDid|feed, types}) holds the post's import pair. */
+const covers = (entries, pair) => pair.feed ? includesFeed(entries, pair.feed, pair.type) : includesPair(entries, pair.botDid, pair.type);
+/** Splits a local selection (mixed {botDid, types} / {feed, types} entries) into importer-block form. */
+export function selectionBlock(selection) {
+  const sources = selection.filter(e => e.botDid !== undefined), feeds = selection.filter(e => e.feed !== undefined);
+  return { $type: IMPORTER, ...(sources.length ? { sources } : {}), ...(feeds.length ? { feeds } : {}) };
+}
 function validateBlock(block) {
   fail(plain(block) && typeof block.$type === 'string' && block.$type.length > 0 && block.$type.length <= 256, 'Invalid block');
   switch (block.$type) {
@@ -289,7 +312,8 @@ export function verifyChain(attestations, { roots, at, now = null }) {
       fail(parentOrg === null || org?.orgId === parentOrg.orgId, 'Organization mismatch');
       const importer = blockOf(attestation, BLOCK.importer);
       if (importer) {
-        fail(parentImporter ? importer.sources.every(s => s.types.every(type => includesPair(parentImporter.sources, s.botDid, type)))
+        fail(parentImporter ? (importer.sources ?? []).every(s => s.types.every(type => includesPair(parentImporter.sources, s.botDid, type)))
+          && (importer.feeds ?? []).every(f => f.types.every(type => includesFeed(parentImporter.feeds, f.feed, type)))
           : parentHasImportRole, 'Importer scope escalation');
       }
       parentRoles = b.roles; parentDepth = depth; parentValidity = v; parentOrg = org ?? parentOrg;
@@ -488,6 +512,23 @@ export function verifyBsaf(extension, { requireOriginal = true } = {}) {
   originalTime(o.createdAt);
   return { botDid: match[1], type: values.type };
 }
+/**
+ * importer §1.1/§2: the pair a re-post is authorized under. A Bot re-post has exactly one `public.bsaf` with `original`;
+ * a jma-xml re-post has exactly one JMA extension (earthquake or weather), no `public.bsaf`, and a `public#source`.
+ */
+export function importPair(record) {
+  const bsaf = record.ext.filter(e => e.$type === BSAF);
+  const jma = record.ext.filter(e => e.$type === JMA_EARTHQUAKE || e.$type === JMA_WEATHER);
+  if (bsaf.length) {
+    fail(bsaf.length === 1 && jma.length === 0, 'Expected exactly one BSAF extension');
+    return verifyBsaf(bsaf[0]);
+  }
+  fail(jma.length === 1, 'Expected exactly one BSAF or JMA extension');
+  fail(record.ext.some(e => e.$type === 'dev.jisaku.mosimo.public#source'), 'JMA re-post without source');
+  const title = jma[0].message?.control?.title;
+  text(title, 128);
+  return { feed: JMA_XML_FEED, type: title };
+}
 export function priorityHint(record) {
   const hints = record.ext.filter(e => e.$type === PRIORITY);
   if (hints.length !== 1) return 1;
@@ -510,7 +551,7 @@ const meshPayloadBytes = event => cbor.encode([1, unhex(event.pubkey), event.cre
   event.content, unhex(event.sig)]).length;
 /**
  * @param {object} event Signed NIP-01 event (never mutated).
- * @param {{roots: any[], selection: ReadonlyArray<{botDid: string, types: ReadonlyArray<string>}>, revocations: ReadonlyArray<{subject: string, issuer: string, effectiveAt: number}>, now: number, seenAt?: number}} options
+ * @param {{roots: any[], selection: ReadonlyArray<{botDid?: string, feed?: string, types: ReadonlyArray<string>}>, revocations: ReadonlyArray<{subject: string, issuer: string, effectiveAt: number}>, now: number, seenAt?: number}} options
  */
 export async function authorizeImport(event, { roots, selection = [], revocations = [], now, seenAt = now }) {
   clock(now);
@@ -520,10 +561,9 @@ export async function authorizeImport(event, { roots, selection = [], revocation
   fail(meshPayloadBytes(event) <= 32768, 'Mesh payload limit');
   fail(event.created_at <= now, 'Future creation time');
   fail(parseTime(decoded.record.exp) > now, 'Delivery deadline passed');
-  const bsaf = decoded.record.ext.filter(e => e.$type === BSAF);
-  fail(bsaf.length === 1, 'Expected exactly one BSAF extension');
-  const { botDid, type } = verifyBsaf(bsaf[0]);
-  fail(includesPair(selection, botDid, type), 'Unselected Bot/type');
+  const pair = importPair(decoded.record);
+  const { botDid = null, feed = null, type } = pair;
+  fail(covers(selection, pair), 'Unselected import pair');
   fail(decoded.record.ext.filter(e => e.$type === PRIORITY).length <= 1, 'Multiple priority hints');
   const chains = decoded.record.ext.filter(e => e.$type === CHAIN);
   fail(chains.length >= 1 && chains.length <= 4, 'Expected one to four signing chains');
@@ -547,11 +587,11 @@ export async function authorizeImport(event, { roots, selection = [], revocation
       fail(leaf.roles.includes('import'), 'Leaf lacks the import role');
       const importer = blockOf(verified.leaf, BLOCK.importer), organization = blockOf(verified.leaf, BLOCK.organization);
       fail(importer && organization, 'Leaf lacks importer/organization blocks');
-      fail(includesPair(importer.sources, botDid, type), 'Bot/type outside the importer scope');
+      fail(covers(feed ? importer.feeds : importer.sources, pair), 'Import pair outside the importer scope');
       const revocation = revocationStatus(verified.keys, verified.root.pubkey, revocations, { createdAt: event.created_at, seenAt });
       fail(revocation === 'not-revoked-as-known', `Revocation state ${revocation}`);
       const priority = priorityHint(decoded.record);
-      return { authorized: true, botDid, type, priority, effectivePriority: effectivePriority(decoded.record, true), rootId: verified.root.id,
+      return { authorized: true, botDid, feed, type, priority, effectivePriority: effectivePriority(decoded.record, true), rootId: verified.root.id,
         leafId: verified.ids[verified.ids.length - 1], orgId: organization.orgId, orgName: organization.orgName,
         issuerDomains: issuerDomains(chain.attestations), checkedAt: now, revocation, record: decoded.record };
     } catch (error) { reasons.push(error.message); }
@@ -605,7 +645,7 @@ export async function createImportPost({ importer, attestations, text: body, ext
     ['mosimo:rkey', rkey], ['mosimo:exp', exp],
     ...extensions.map(({ $type, ...fields }) => [`mosimo:ext:${$type}`, encodeBytes(canonical(fields, { allowCid: true }))]),
   ] }, unhex(importer.nostrSecret));
-  fail(isBsafImport(event) === extensions.some(e => e.$type === BSAF && e.original !== undefined), 'Import routing mismatch');
+  fail(isNostrOnlyImport(event) === extensions.some(e => (e.$type === BSAF && e.original !== undefined) || e.$type === JMA_EARTHQUAKE || e.$type === JMA_WEATHER), 'Import routing mismatch');
   return { event, record, recordCid: recordCid.toString(), state: { entries: [...state.entries, { key: path, cid: recordCid.toString() }],
     base: CID.createV1(cbor.code, await sha256.digest(commitBytes)).toString(), lastMicros: micros } };
 }

@@ -201,7 +201,7 @@ test('BSAF originals are Nostr-only even with expired delivery or untrusted iden
   assert.equal(await ingestion.processOne(), true);
   const old = await job(imported);
   assert.equal(old.status, 'invalid');
-  assert.match(old.error, /Nostr-only BSAF import/);
+  assert.match(old.error, /Nostr-only import/);
   for (const table of ['commits','blocks','repo_blocks','repos','streams','group_sequences']) {
     assert.equal((await rows(`SELECT * FROM ${table}`)).length, 0, table);
   }
