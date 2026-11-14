@@ -1,0 +1,95 @@
+name: Android GitHub release
+
+# Builds the release APK at the source versionCode, signs it with the GitHub release key (not the Play upload key),
+# and publishes it as the GitHub release mosimo-v<versionName>. F-Droid follows the tag; Obtainium and similar clients can track the release.
+# The Google Play pipeline is android.yml and does not depend on this workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-github-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: apps/android
+    shell: bash
+
+env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+  # SHA-256 of the GitHub release signing certificate.
+  SIGNING_CERT_SHA256: 7e4503339f67aa0334f7046f98f369f74da7c870faa2b30d080ff06f93f8ae27
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    # Only this environment holds MISE_SOPS_AGE_KEY; its branch policy limits the run to main.
+    environment: play-mosimo
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read version
+        id: version
+        run: |
+          set -euo pipefail
+          code=$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+)[[:space:]]*$/\1/p' app/build.gradle.kts)
+          name=$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)"[[:space:]]*$/\1/p' app/build.gradle.kts)
+          if [[ -z $code || -z $name || $code == *$'\n'* || $name == *$'\n'* ]]; then
+            echo "::error::Expected exactly one literal versionCode and versionName in app/build.gradle.kts"; exit 1
+          fi
+          tag="mosimo-v$name"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists; bump versionCode and versionName first"; exit 1
+          fi
+          for locale in ja-JP en-US; do
+            f="../../fastlane/metadata/android/$locale/changelogs/$code.txt"
+            [[ -f $f ]] || { echo "::error::Missing $f"; exit 1; }
+          done
+          { echo "code=$code"; echo "name=$name"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
+      # No tool cache in release jobs: https://github.com/jdx/mise-action#release-workflows
+      - uses: jdx/mise-action@v5
+        with:
+          working_directory: apps/android
+          cache: false
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Build the signed APK
+        env:
+          SOPS_AGE_KEY: ${{ secrets.MISE_SOPS_AGE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export SOPS_AGE_KEY_FILE="$RUNNER_TEMP/age.txt"
+          trap 'rm -f "$SOPS_AGE_KEY_FILE"' EXIT
+          printf '%s' "$SOPS_AGE_KEY" > "$SOPS_AGE_KEY_FILE"
+          mise run github-release-apk
+      - name: Check the signer and version
+        env:
+          CODE: ${{ steps.version.outputs.code }}
+          NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          tools="$(mise exec -- printenv ANDROID_HOME)/build-tools/36.0.0"
+          "$tools/apksigner" verify --print-certs "$apk" | grep -qi "certificate SHA-256 digest: $SIGNING_CERT_SHA256" \
+            || { echo "::error::APK is not signed with the GitHub release key"; exit 1; }
+          "$tools/aapt2" dump badging "$apk" | grep -q "versionCode='$CODE' versionName='$NAME'" \
+            || { echo "::error::APK version does not match the source"; exit 1; }
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.version.outputs.code }}
+          NAME: ${{ steps.version.outputs.name }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          asset="$RUNNER_TEMP/mosimo-$NAME.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$asset"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            cat "../../fastlane/metadata/android/ja-JP/changelogs/$CODE.txt"
+            echo
+            cat "../../fastlane/metadata/android/en-US/changelogs/$CODE.txt"
+          } > "$notes"
+          gh release create "$TAG" "$asset" --target "$GITHUB_SHA" --title "もしもの防災 $NAME (Android)" --notes-file "$notes"

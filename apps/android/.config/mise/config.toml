@@ -69,3 +69,19 @@ env._.file = [
 ]
 env.ANDROID_KEYSTORE_PATH = "{{ get_env(name='ANDROID_KEYSTORE_PATH', default=config_root ~ '/release_key.jks') }}"
 run = "bundle exec fastlane android internal app:mosimo"
+
+[tasks.github-release-apk]
+depends = ["sdk-setup"]
+description = "Build the release APK for GitHub Releases, signed with the GitHub release key (not the Play upload key)"
+env._.file = { path = "{{ config_root }}/secrets/github-release.sops.yaml", redact = true }
+run = '''
+set -euo pipefail
+umask 077
+# The source versionCode is what F-Droid and GitHub Releases use; never take the Play run number here.
+unset ORG_GRADLE_PROJECT_mosimoVersionCode
+ANDROID_KEYSTORE_PATH="$(mktemp)"
+export ANDROID_KEYSTORE_PATH
+trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+./gradlew :app:assembleRelease
+'''
