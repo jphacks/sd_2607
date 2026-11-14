@@ -47,20 +47,18 @@ fun Relays(mesh: MeshState, chats: Chats) {
     val items = remember(mesh.events, chats.trails, mesh.publicKey) { carried(mesh.events, mesh.publicKey, chats.trails) }
     var graph by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(Hanashi.canvas)) {
-        Column(Modifier.background(Color.White).padding(bottom = 8.dp)) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                Stat(items.size, "受信", Color.Black)
-                Stat(items.count { it.trail.forwarded.isNotEmpty() }, "中継", Hanashi.green)
-                val exported = items.count { it.trail.exported.isNotEmpty() }
-                if (chats.gateway || exported > 0) Stat(exported, "搬出", Hanashi.internet)
-                Stat(mesh.neighbors.size, "近くの端末", Color.Black)
-            }
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                SegmentedButton(!graph, { graph = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("タイムライン") }
-                SegmentedButton(graph, { graph = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("ネットワーク図") }
-            }
-            if (mesh.running && !mesh.radios && mesh.neighbors.any { "local" in it.links }) RadioHolderNotice()
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(16.dp, 12.dp, 16.dp, 0.dp)) {
+            SegmentedButton(!graph, { graph = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("タイムライン") }
+            SegmentedButton(graph, { graph = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("ネットワーク図") }
         }
+        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Stat(items.size, "受信", Color.Black)
+            Stat(items.count { it.trail.forwarded.isNotEmpty() }, "中継", Hanashi.green)
+            val exported = items.count { it.trail.exported.isNotEmpty() }
+            if (chats.gateway || exported > 0) Stat(exported, "搬出", Hanashi.internet)
+            Stat(mesh.neighbors.size, "近くの端末", Color.Black)
+        }
+        if (mesh.running && !mesh.radios && mesh.neighbors.any { "local" in it.links }) RadioHolderNotice()
         if (graph) RelayGraph(mesh, Modifier.weight(1f))
         else if (items.isEmpty()) Empty("まだ中継したデータはありません\n近くで Mosimo のアプリが使われると、ここに流れます")
         else Timeline(items, chats, mesh.publicKey)
@@ -76,7 +74,7 @@ private fun RadioHolderNotice() {
     val context = LocalContext.current
     // ponytail: assumes the holder is Mosimo Bosai; any other holder (say, a second Talk) is stopped by hand.
     val bosai = remember { listOf("dev.jisaku.mosimo", "dev.jisaku.mosimo.debug").firstOrNull { context.packageManager.getLaunchIntentForPackage(it) != null } }
-    Row(Modifier.fillMaxWidth().padding(16.dp, 8.dp, 16.dp, 0.dp).background(Hanashi.canvas, RoundedCornerShape(8.dp)).padding(12.dp, 6.dp),
+    Row(Modifier.fillMaxWidth().padding(16.dp, 0.dp, 16.dp, 8.dp).background(Color.White, RoundedCornerShape(8.dp)).padding(12.dp, 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("電波は同じ端末の別のアプリが担当中", fontSize = 13.sp, fontWeight = FontWeight.Bold)
