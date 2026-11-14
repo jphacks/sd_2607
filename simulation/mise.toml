@@ -21,6 +21,11 @@ run = "npm run tauri build"
 description = "Build the .deb/.rpm/.AppImage in an Ubuntu 22.04 container (target/linux/release/bundle; needs podman)"
 run = "scripts/build_linux.sh"
 
+[tasks.build-mac-x64]
+description = "Build the Intel Mac .dmg on an Apple Silicon Mac (target/x86_64-apple-darwin/release/bundle)"
+depends = ["setup"]
+run = ["rustup target add x86_64-apple-darwin", "npm run tauri build -- --target x86_64-apple-darwin --bundles dmg"]
+
 [tasks.test]
 description = "Run the simulation tests and type-check the frontend"
 depends = ["setup"]
