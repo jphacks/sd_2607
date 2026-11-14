@@ -11,10 +11,14 @@ public enum HazardAlerts {
         public let createdAt: Int64
         public let official: Bool
         public let danger: Bool
+        /// An authorized re-post (importer §3): takes part in folding (public §8.1).
+        public let importAuthorized: Bool
         public let ext: PostExtensions
-        public init(id: String, pubkey: String, createdAt: Int64, official: Bool, danger: Bool = false, ext: PostExtensions) {
-            self.id = id; self.pubkey = pubkey; self.createdAt = createdAt; self.official = official; self.danger = danger; self.ext = ext
+        public init(id: String, pubkey: String, createdAt: Int64, official: Bool, danger: Bool = false, importAuthorized: Bool = false, ext: PostExtensions) {
+            self.id = id; self.pubkey = pubkey; self.createdAt = createdAt; self.official = official; self.danger = danger
+            self.importAuthorized = importAuthorized; self.ext = ext
         }
+        var repost: RepostGroups.Post { RepostGroups.Post(id: id, createdAt: createdAt, ext: ext) }
     }
 
     /// Notification kinds, each with its own switch.
@@ -27,6 +31,9 @@ public enum HazardAlerts {
     public struct Alert: Equatable, Sendable {
         public let post: Candidate
         public let genre: Genre
+        /// Recorded as notified without showing (public §8.1): another post of its group was already notified (or comes
+        /// first in this batch) with at least its severity.
+        public var silent = false
     }
 
     /// Older official posts are not news: a first sync can bring a long backlog.
@@ -40,6 +47,8 @@ public enum HazardAlerts {
 
     /// The posts of [posts] to notify now, official Extreme first, other official, then danger reports; newest first within.
     /// All: not ours ([me]), not in [notified], not replaced by a newer post of its series (jma §5.3).
+    /// Silent (public §8.1): an authorized re-post whose group already has a notified post at least as severe; posts of one
+    /// group due together are taken in representative order, so only the first of them (or a more severe one) is shown.
     /// Official (genres A–C): `Actual`, no all-clear, at most [maxAgeSeconds] old; then, with [here] inside its area,
     /// `Extreme`/`Severe`/`Moderate`; outside, never; with no area, [here] unknown or the containment unknown (geo §4.2),
     /// `Extreme` only.
@@ -62,8 +71,19 @@ public enum HazardAlerts {
         guard !fresh.isEmpty else { return [] }
         // The replacement looks at every official post, already notified or not, as the map does.
         let replaced = JmaDisplay.superseded(posts.compactMap { p in p.official ? p.ext.jma.map { (p.id, $0) } : nil })
+        let reposts = posts.filter { $0.importAuthorized }.map(\.repost)
+        var groupOf = [String: Int](), severities = [Int: [Int]]()
+        for (i, g) in RepostGroups.groups(reposts).enumerated() { for id in g.members { groupOf[id] = i } }
+        for p in posts where notified.contains(p.id) { if let g = groupOf[p.id] { severities[g, default: []].append(RepostGroups.severity(p.ext.hazard?.severity)) } }
+        var silent = Set<String>()
+        let kept = fresh.filter { !replaced.contains($0.post.id) }
+        for x in RepostGroups.representativeOrder(kept.map(\.post.repost)) {
+            guard let g = groupOf[x.id] else { continue }
+            let s = RepostGroups.severity(x.ext.hazard?.severity)
+            if severities[g, default: []].contains(where: { $0 >= s }) { silent.insert(x.id) } else { severities[g, default: []].append(s) }
+        }
         func rank(_ a: Alert) -> Int { a.genre == .nearbyDanger ? 2 : a.post.ext.hazard?.severity == "Extreme" ? 0 : 1 }
-        return fresh.filter { !replaced.contains($0.post.id) }.sorted { a, b in
+        return kept.map { a in var a = a; a.silent = silent.contains(a.post.id); return a }.sorted { a, b in
             rank(a) != rank(b) ? rank(a) < rank(b) : a.post.createdAt > b.post.createdAt
         }
     }
@@ -71,10 +91,10 @@ public enum HazardAlerts {
     public enum Permission: Sendable { case granted, refused, unknown }
     /// Which [alerts] to show and which to record as notified. A switched-off genre, or a refused permission, records
     /// without showing, so a later opt-in does not ring for all of them at once; while the permission is still unknown,
-    /// alerts of switched-on genres are left for later.
+    /// alerts of switched-on genres are left for later. A silent alert is recorded and never shown.
     public static func split(_ alerts: [Alert], on: Set<Genre>, permission: Permission) -> (show: [Alert], record: [Alert]) {
-        let show = permission == .granted ? alerts.filter { on.contains($0.genre) } : []
-        return (show, alerts.filter { !on.contains($0.genre) || permission != .unknown })
+        let show = permission == .granted ? alerts.filter { on.contains($0.genre) && !$0.silent } : []
+        return (show, alerts.filter { $0.silent || !on.contains($0.genre) || permission != .unknown })
     }
 
     static func genre(_ h: Hazard) -> Genre {

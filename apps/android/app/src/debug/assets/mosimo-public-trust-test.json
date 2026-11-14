@@ -7,7 +7,7 @@
         "attest",
         "import"
       ],
-      "maxDepth": 2,
+      "maxDepth": 16,
       "enabled": true
     }
   ],

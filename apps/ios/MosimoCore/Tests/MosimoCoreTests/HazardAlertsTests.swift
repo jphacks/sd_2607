@@ -128,6 +128,100 @@ final class HazardAlertsTests: XCTestCase {
         XCTAssertEqual(due([quake("2026-11-14T01:00:00Z", "old"), quake("2026-11-14T01:05:00Z", official: false, "new")]), ["old"])
     }
 
+    // MARK: public §8.1 groups of authorized re-posts of one event
+
+    let quakeKind = HazardKind.earthquake(kind: "event", hypocenter: nil, magnitude: nil)
+    /// An authorized re-post: a Bot one (`public.bsaf` with `original`) or, with [feed], a feed one.
+    func repost(_ id: String, feed: Bool, age: Int64 = 60, severity: String = "Extreme", status: String = "Actual", responses: [String] = [],
+                kind: HazardKind? = nil, onset: String? = "2026-11-14T01:00:00Z", cells: [String] = [], authorized: Bool = true) -> HazardAlerts.Candidate {
+        var ext = PostExtensions()
+        ext.hazard = Hazard(status: status, category: ["Geo"], severity: severity, urgency: "Immediate", certainty: "Observed", responseTypes: responses,
+                            onset: onset, event: nil, scales: [], glide: nil, kind: kind ?? quakeKind)
+        ext.areas = cells.isEmpty ? [] : [Area(regions: cells.map { .geohash($0) }, approximation: true)]
+        if feed { ext.feed = FeedRef(id: PublicIngress.jmaFeed, type: "震源・震度に関する情報") }
+        else { ext.bsaf = Bsaf(type: "earthquake", time: nil, target: nil, source: "jma", tags: [], imported: true, botDid: "did:plc:x") }
+        return HazardAlerts.Candidate(id: id, pubkey: "other", createdAt: now - age, official: true, importAuthorized: authorized, ext: ext)
+    }
+    func related(_ x: HazardAlerts.Candidate, _ y: HazardAlerts.Candidate) -> Bool {
+        let r = RepostGroups.related(x.repost, y.repost)
+        XCTAssertEqual(r, RepostGroups.related(y.repost, x.repost), "symmetric")
+        return r
+    }
+
+    func testRepostGroupConditions() {
+        let p = repost("p", feed: true)
+        // Earthquake: any route, any severity; both `event` with onsets at most 60 s apart.
+        XCTAssertTrue(related(repost("a", feed: false), p))
+        XCTAssertTrue(related(repost("a", feed: false), repost("b", feed: false)))
+        XCTAssertTrue(related(repost("q", feed: true, cells: ["xn"]), repost("r", feed: true, cells: ["wv"])))
+        XCTAssertTrue(related(repost("a", feed: false, severity: "Extreme"), repost("p", feed: true, severity: "Minor")))
+        XCTAssertTrue(related(repost("a", feed: false, onset: "2026-11-14T01:01:00Z"), p))
+        XCTAssertFalse(related(repost("a", feed: false, onset: "2026-11-14T01:01:01Z"), p))
+        XCTAssertFalse(related(repost("a", feed: false, onset: nil), p))
+        let forecast = HazardKind.earthquake(kind: "forecast", hypocenter: nil, magnitude: nil)
+        XCTAssertFalse(related(repost("a", feed: false, kind: forecast), repost("p", feed: true, kind: forecast)))
+        // Same status and the same all-clear membership.
+        XCTAssertFalse(related(repost("a", feed: false, status: "Exercise"), p))
+        XCTAssertFalse(related(repost("a", feed: false, responses: ["AllClear"]), p))
+        XCTAssertTrue(related(repost("a", feed: false, responses: ["AllClear"]), repost("p", feed: true, responses: ["Monitor", "AllClear"])))
+        // Weather: one feed and one Bot re-post, a common phenomenon, created at most 30 min apart, overlapping cells.
+        let rain = HazardKind.weather(phenomena: ["大雨", "洪水"]), flood = HazardKind.weather(phenomena: ["洪水"]), snow = HazardKind.weather(phenomena: ["大雪"])
+        let wp = repost("p", feed: true, kind: rain, cells: ["xn7"])
+        XCTAssertTrue(related(repost("a", feed: false, age: 60 + 1800, kind: flood, cells: ["xn76", "wvu"]), wp))
+        XCTAssertTrue(related(repost("a", feed: false, kind: flood, cells: ["xn"]), wp))
+        XCTAssertFalse(related(repost("a", feed: false, age: 60 + 1801, kind: flood, cells: ["xn76"]), wp))
+        XCTAssertFalse(related(repost("a", feed: false, kind: snow, cells: ["xn76"]), wp))
+        XCTAssertFalse(related(repost("a", feed: false, kind: flood, cells: ["xn8"]), wp))
+        XCTAssertFalse(related(repost("a", feed: false, kind: flood), wp))
+        XCTAssertFalse(related(repost("q", feed: true, kind: flood, cells: ["xn76"]), wp))
+        XCTAssertFalse(related(repost("a", feed: false, kind: flood, cells: ["xn76"]), repost("b", feed: false, kind: rain, cells: ["xn76"])))
+        // Other kinds, or different kinds, never.
+        let tsunami = HazardKind.tsunami(maxHeight: nil, arrival: nil)
+        XCTAssertFalse(related(repost("a", feed: false, kind: tsunami), repost("p", feed: true, kind: tsunami)))
+        XCTAssertFalse(related(repost("a", feed: false, kind: flood, cells: ["xn7"]), p))
+    }
+
+    func testRepostGroupsAreConnectedWithARepresentative() {
+        func groups(_ posts: [HazardAlerts.Candidate]) -> [RepostGroups.Group] { RepostGroups.groups(posts.map(\.repost)) }
+        // A chain of onsets 50 s apart joins into one group through the middle post; an unrelated post stays alone.
+        let g = groups([repost("a", feed: false, severity: "Severe", onset: "2026-11-14T01:00:00Z"),
+                        repost("p", feed: true, severity: "Severe", onset: "2026-11-14T01:00:50Z"),
+                        repost("q", feed: true, age: 10, severity: "Moderate", onset: "2026-11-14T01:01:40Z"),
+                        repost("x", feed: false, onset: "2026-11-14T03:00:00Z")])
+        XCTAssertEqual(g, [.init(representative: "p", members: ["p", "q", "a"])])
+        // Representative: the most severe, then a feed re-post, then the newest.
+        XCTAssertEqual(groups([repost("a", feed: false, severity: "Extreme"), repost("p", feed: true, severity: "Severe")]).first?.representative, "a")
+        XCTAssertEqual(groups([repost("a", feed: false, age: 1), repost("p", feed: true, age: 100)]).first?.representative, "p")
+        XCTAssertEqual(groups([repost("p", feed: true, age: 100), repost("q", feed: true, age: 1)]).first?.representative, "q")
+        XCTAssertEqual(groups([repost("a", feed: false)]), [])
+    }
+
+    func testGroupedRepostIsNotNotifiedTwice() {
+        func alerts(_ posts: [HazardAlerts.Candidate], here: GeoPoint? = nil, notified: Set<String> = []) -> Set<String> {
+            Set(HazardAlerts.due(posts, me: "me", here: here, nowSeconds: now, notified: notified).map { "\($0.post.id)\($0.silent ? "(silent)" : "")" })
+        }
+        let a = repost("a", feed: false), p = repost("p", feed: true)
+        // Arriving together: only the representative is shown; the other is recorded silently.
+        XCTAssertEqual(alerts([a, p]), ["a(silent)", "p"])
+        let due = HazardAlerts.due([a, p], me: nil, here: nil, nowSeconds: now, notified: [])
+        let r = HazardAlerts.split(due, on: Set(HazardAlerts.Genre.allCases), permission: .unknown)
+        XCTAssertEqual([r.show.map(\.post.id), r.record.map(\.post.id)], [[], ["a"]])
+        let g = HazardAlerts.split(due, on: Set(HazardAlerts.Genre.allCases), permission: .granted)
+        XCTAssertEqual([g.show.map(\.post.id), Set(g.record.map(\.post.id)).sorted()], [["p"], ["a", "p"]])
+        // Either one notified first: the other is silent when not more severe.
+        XCTAssertEqual(alerts([a, p], notified: ["a"]), ["p(silent)"])
+        XCTAssertEqual(alerts([a, p], notified: ["p"]), ["a(silent)"])
+        // Inside the area (so Severe is due too): a more severe later post is shown.
+        let inside = { (id: String, feed: Bool, severity: String) in self.repost(id, feed: feed, severity: severity, cells: ["xn76"]) }
+        XCTAssertEqual(alerts([inside("a", false, "Severe"), inside("p", true, "Severe")], here: tokyo, notified: ["a"]), ["p(silent)"])
+        XCTAssertEqual(alerts([inside("a", false, "Severe"), inside("p", true, "Extreme")], here: tokyo, notified: ["a"]), ["p"])
+        // A whole group: a JMA per-prefecture post joined through another notified one is silent too.
+        XCTAssertEqual(alerts([a, p, repost("q", feed: true, onset: "2026-11-14T01:00:30Z")], notified: ["a"]), ["p(silent)", "q(silent)"])
+        // Unauthorized posts take no part; an unrelated event is shown.
+        XCTAssertEqual(alerts([a, repost("p", feed: true, authorized: false)]), ["a", "p"])
+        XCTAssertEqual(alerts([repost("b", feed: false, onset: "2026-11-14T02:00:00Z"), p], notified: ["p"]), ["b"])
+    }
+
     func testDecodedAreaMarksUnreadElements() throws {
         let author = try Author(keys: SecretKeys(nostr: key(3), atproto: key(4), plc: key(5)), pdsEndpoint: "https://pds.invalid")
         var area = Extensions.area([.geohash("xn76")])

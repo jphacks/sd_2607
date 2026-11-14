@@ -32,7 +32,7 @@ struct PostDetail: View {
                     fact(post.isPublic ? "転載者" : "投稿者", post.senderName ?? shortDid(post.did, post.pubkey))
                     if let validity = post.validityLabel { fact("情報の有効期間", validity) }
                     if post.isPublic {
-                        BsafVerification(post: post)
+                        SourceAttribution(post: post)
                         if let audit = post.publicAuthorization { Text(audit).font(.labelSmall).foregroundStyle(Mosimo.textTertiary) }
                     } else {
                         HStack(spacing: 2) {
@@ -41,9 +41,16 @@ struct PostDetail: View {
                         }
                         .foregroundStyle(Mosimo.safe)
                     }
-                    if post.ext.hasChain || post.chain != nil { SenderVerification(chain: post.chain) }
+                    // An authorized re-post already shows its importer as confirmed (SourceAttribution); the identity line would contradict it.
+                    if (post.ext.hasChain || post.chain != nil) && !post.importerAuthorized { SenderVerification(chain: post.chain) }
                 }
                 if let hazard = post.ext.hazard { HazardSection(post: post, hazard: hazard) }
+                if let group = post.group {
+                    // public §8.1: every post of the group by source, feed re-posts first.
+                    let members = group.members.compactMap { id in state.posts.first { $0.id == id } }
+                    Text("同じ事象の情報 \(members.count)件").font(.titleMedium).foregroundStyle(Mosimo.textPrimary).padding(.top, 4)
+                    ForEach(members) { GroupMember(post: $0, current: $0.id == post.id) }
+                }
                 FlowLayout(spacing: 8) {
                     if let onShowOnMap, post.coordinate != nil {
                         Button("マップで見る", action: onShowOnMap).font(.labelLarge).foregroundStyle(Mosimo.primary)
@@ -85,6 +92,24 @@ struct PostDetail: View {
             Button("キャンセル", role: .cancel) {}
             Button("削除を依頼", role: .destructive) { mesh.delete(post.id); onBlocked() }
         } message: { Text("削除要求を署名して配送し、この端末では表示・中継をやめます。既に受け取った端末やサーバーから確実に消えるとは限りません。") }
+    }
+}
+
+/// One post of a re-post group in the detail: its source, kind, main facts and text.
+private struct GroupMember: View {
+    let post: PostView
+    let current: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SourceAttribution(post: post)
+            KindLabel(post: post)
+            if let hazard = post.ext.hazard { HazardSummary(hazard: hazard) }
+            Text(post.content).font(.bodyMedium).foregroundStyle(Mosimo.textPrimary).textSelection(.enabled)
+            Text("\(dateTime(post.eventTime)) · 転載 \(dateTime(post.createdAt)) · \(post.routeLabel)" + (current ? " · 表示中の投稿" : ""))
+                .font(.labelSmall).foregroundStyle(Mosimo.textTertiary)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Mosimo.bgSurface2, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

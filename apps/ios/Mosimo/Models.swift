@@ -24,6 +24,9 @@ struct PostView: Identifiable, Equatable {
     var ext = PostExtensions()
     /// attest.chain verification of the sender, nil when the post carries no chain.
     var chain: PublicIngress.ChainView? = nil
+    /// public §8.1: the group of authorized re-posts of one event this post belongs to in this snapshot. The map and the
+    /// timeline show only its representative; the detail lists every member by source.
+    var group: RepostGroups.Group? = nil
 }
 
 /// mesh.time §2: an unverified peer clock difference, for diagnostics only.
@@ -76,9 +79,13 @@ struct MeshState: Equatable {
     var reported: Set<String> = []
 }
 
-/// One Bot DID or feed selected for ingress, with the types selected for it (BSAF `type:` values, or JMA titles for `jma-xml`).
+/// One Bot DID, or one feed and its optional issuer (importer §1.1), selected for ingress, with the types selected for it
+/// (BSAF `type:` values, or the feed's types such as JMA titles). [types] is nil when every type of the feed is selected.
 struct TrustSource: Identifiable {
-    /// The Bot DID, or 「フィード <name>」.
-    let name: String, types: [String]
-    var id: String { name }
+    /// The Bot DID or the feed ID.
+    let name: String, feed: Bool, origin: String?
+    let types: [String]?
+    var id: String { "\(name)|\(origin ?? "")" }
+    /// importer §3.2, jma §12: the Bot DID, or the feed's source name.
+    var label: String { feed ? feedName(name, origin) : name }
 }

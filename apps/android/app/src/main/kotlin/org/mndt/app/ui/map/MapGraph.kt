@@ -57,6 +57,8 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
+import org.mndt.app.alert.groupedAway
+import org.mndt.app.alert.hazardGroups
 import org.mndt.app.ui.Banner
 import org.mndt.app.ui.MapKey
 import org.mndt.app.ui.openAppSettings
@@ -105,7 +107,10 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
     fun askLocation() = ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
 
     val handle = remember { MapHandle() }
-    val all = remember(state.posts) { mapPosts(state.posts) }
+    // public §8.1: a group of posts of one event is one pin (its representative) with the area of the whole group.
+    val eventGroups = remember(state.posts) { hazardGroups(mapPosts(state.posts)) }
+    val all = remember(state.posts, eventGroups) { groupedAway(eventGroups).let { away -> mapPosts(state.posts).filter { it.id !in away } } }
+    val groupRegions = remember(eventGroups) { eventGroups.associate { g -> g.representative.id to g.members.flatMap { it.ext.regions }.distinct() } }
     val shown = remember(all, vm.filter) { if (vm.filter.isEmpty()) all else all.filter { it.category() in vm.filter } }
     // Alert areas follow their pin's [minZoom]; the alert layers have none of their own, so the features are rebuilt
     // whenever the camera crosses one of those zooms (ordinary areas are cut by the post layers' minzoom).
@@ -114,12 +119,13 @@ private fun MapScreen(focus: String?, vm: MapViewModel = koinViewModel()) {
         handle.map?.cameraPosition?.zoom?.let { z -> ALERT_ZOOM_STEPS.lastOrNull { z >= it } } ?: 0.0
     } }
     // An area is a fill plus one outline of its perimeter: geohash cells are filled without edges and traced as a whole.
-    val regions = remember(shown, alertStep) {
+    val regions = remember(shown, groupRegions, alertStep) {
         featureCollection(shown.filterNot { it.allClearNotice || (it.alert && it.minZoom > alertStep) }.flatMap { p ->
             val color = (p.ext.hazard?.takeIf { p.officialHazard }?.color(true) ?: p.category()?.color ?: Mosimo.info).hex()
             val (fill, line) = if (p.alert) "alert-fill" to "alert-line" else "post-fill" to "post-line"
-            val circles = p.ext.regions.filterIsInstance<Region.Circle>().map { circleRing(it.lat / 1e6, it.lon / 1e6, it.r / 1000.0) }
-            val hashes = p.ext.regions.filterIsInstance<Region.Geohash>().map { it.hash }
+            val area = groupRegions[p.id] ?: p.ext.regions
+            val circles = area.filterIsInstance<Region.Circle>().map { circleRing(it.lat / 1e6, it.lon / 1e6, it.r / 1000.0) }
+            val hashes = area.filterIsInstance<Region.Geohash>().map { it.hash }
             val cells = hashes.mapNotNull { runCatching { boundsRing(geohashBounds(it)) }.getOrNull() }
             (circles + cells).map { polygonFeature(it, color, fill) } +
                 listOfNotNull(circles.takeIf { it.isNotEmpty() }?.let { lineFeature(it, color, line) },

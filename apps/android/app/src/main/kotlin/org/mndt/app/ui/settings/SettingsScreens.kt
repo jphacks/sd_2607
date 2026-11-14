@@ -31,6 +31,7 @@ import org.json.JSONObject
 import org.koin.compose.koinInject
 import org.mndt.app.ui.post.bsafLabel
 import org.mndt.app.ui.post.dateTime
+import org.mndt.app.ui.post.feedName
 import org.mndt.app.ui.startRelay
 import org.mndt.app.ui.theme.Mosimo
 import org.mndt.core.ClockConfidence
@@ -39,8 +40,11 @@ import org.mndt.mesh.MeshCoordinator
 import org.mndt.mesh.MeshPermissions
 import org.mndt.mesh.MeshService
 
-/** The selected types of one source in the local trust config: a Bot DID (BSAF `type:` values) or a feed (importer §1.1). */
-internal class TrustSource(val name: String, val feed: Boolean, val types: List<String>)
+/**
+ * The selected types of one source in the local trust config: a Bot DID (BSAF `type:` values) or a feed and its optional issuer
+ * (importer §1.1). [types] is null when every type of the feed is selected.
+ */
+internal class TrustSource(val name: String, val feed: Boolean, val origin: String?, val types: List<String>?)
 private fun JSONArray?.objects() = if (this == null) emptyList() else (0 until length()).map(::getJSONObject)
 
 private fun trustConfig(context: Context): JSONObject? =
@@ -49,8 +53,9 @@ private fun trustConfig(context: Context): JSONObject? =
 
 internal fun trustSources(context: Context): List<TrustSource> = runCatching {
     trustConfig(context)!!.optJSONArray("selected").objects()
-        .groupBy({ (it.optString("feed").ifEmpty { null } ?: it.getString("botDid")) to it.has("feed") }, { it.getString("type") })
-        .map { (source, types) -> TrustSource(source.first, source.second, types) }
+        .groupBy({ Triple(it.optString("feed").ifEmpty { null } ?: it.getString("botDid"), it.has("feed"), it.optString("origin").ifEmpty { null }) },
+            { it.optString("type").ifEmpty { null } })
+        .map { (source, types) -> TrustSource(source.first, source.second, source.third, if (null in types) null else types.filterNotNull()) }
 }.getOrDefault(emptyList())
 
 @Composable
@@ -81,9 +86,10 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
     if (sources.isEmpty()) Group { Text("なし", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary) }
     sources.forEach { source ->
         Group {
-            SettingRow(Icons.Outlined.Download, Mosimo.info, if (source.feed) feedLabel(source.name) else source.name, value = "${source.types.size}種別")
+            SettingRow(Icons.Outlined.Download, Mosimo.info, if (source.feed) feedName(source.name, source.origin) else source.name,
+                value = source.types?.let { "${it.size}種別" } ?: "全種別")
             Line()
-            Text(source.types.joinToString("・") { if (source.feed) it else bsafLabel(it) }, Modifier.padding(16.dp),
+            Text(source.types?.joinToString("・") { if (source.feed) it else bsafLabel(it) } ?: "このフィードの全ての種別", Modifier.padding(16.dp),
                 style = MaterialTheme.typography.bodyMedium, color = Mosimo.textSecondary)
         }
     }
@@ -97,8 +103,6 @@ internal fun TrustScreen(nav: Navigator) = SubScreen("公式情報とみなす�
         }
     }
 }
-
-private fun feedLabel(feed: String) = if (feed == PublicIngress.FEED_JMA_XML) "気象庁防災情報XML（$feed）" else feed
 
 private fun originLabel(o: PublicIngress.RootOrigin) = when (o) {
     PublicIngress.RootOrigin.BUILTIN -> "アプリに同梱"

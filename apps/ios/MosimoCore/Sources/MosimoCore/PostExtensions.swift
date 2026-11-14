@@ -24,7 +24,23 @@ public struct Bsaf: Equatable, Sendable {
     public let imported: Bool
     /// The re-posted Bot's DID, from `original.uri`.
     public let botDid: String?
+    /// `original.uri` as received (`at://<did>/app.bsky.feed.post/<rkey>`).
+    public var originalUri: String? = nil
+    /// The original post on Bluesky's web app, when `original.uri` is a post record of a DID.
+    public var originalWebUrl: URL? {
+        guard let uri = originalUri, uri.hasPrefix("at://") else { return nil }
+        let parts = uri.dropFirst(5).split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[1] == "app.bsky.feed.post", let profile = Self.profileUrl(String(parts[0])),
+              matches(Self.rkeyPattern, String(parts[2])) else { return nil }
+        return URL(string: "\(profile.absoluteString)/post/\(parts[2])")
+    }
+    /// A DID's profile on Bluesky's web app.
+    public static func profileUrl(_ did: String) -> URL? { matches(didPattern, did) ? URL(string: "https://bsky.app/profile/\(did)") : nil }
+    private static let didPattern = try! NSRegularExpression(pattern: "^did:[a-z]+:[A-Za-z0-9._:%-]{1,2048}$")
+    private static let rkeyPattern = try! NSRegularExpression(pattern: "^[A-Za-z0-9._~:-]{1,512}$")
 }
+/// public §5.1 `public#source.links`: related links (stored original, web page), as read.
+public struct SourceLink: Equatable, Sendable { public let url: String; public let mediaType: String? }
 public enum Relation: String, CaseIterable, Sendable { case correction, supplement, endorsement }
 /// [targetEventId] is the Nostr target (hex); atproto references are kept as [targetUri].
 public struct Annotation: Equatable, Sendable { public let relation: Relation; public let targetEventId: String?; public let targetUri: String? }
@@ -76,6 +92,11 @@ public struct Jma: Equatable, Sendable {
     /// weather: the forecast district of the series, `areas[0].code` of the 「気象警報・注意報（府県予報区等）」 warning item.
     public let forecastAreaCode: Code?
 }
+/// public §5.1 `public#source.feed`: the (feed, origin, type) a feed re-post declares (importer §1.2), as read; not validated.
+public struct FeedRef: Equatable, Sendable {
+    public let id: String, origin: String?, type: String
+    public init(id: String, origin: String? = nil, type: String) { self.id = id; self.origin = origin; self.type = type }
+}
 public struct PostExtensions: Equatable, Sendable {
     public var origin: Origin?
     public var areas: [Area] = []
@@ -86,6 +107,15 @@ public struct PostExtensions: Equatable, Sendable {
     public var hazard: Hazard?
     /// The single JMA extension (earthquake or weather); nil when absent, malformed or more than one.
     public var jma: Jma?
+    /// The feed declaration of the single `public#source`; nil when absent, malformed or with several source extensions.
+    public var feed: FeedRef?
+    /// `links` of the single `public#source` (empty when absent or with several source extensions).
+    public var sourceLinks: [SourceLink] = []
+    /// The page of the original to open: the first http(s) link, a `text/html` one first.
+    public var sourceWebUrl: URL? {
+        let web = sourceLinks.filter { l in URL(string: l.url).map { ["http", "https"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil } ?? false }
+        return (web.first { $0.mediaType?.lowercased().hasPrefix("text/html") == true } ?? web.first).flatMap { URL(string: $0.url) }
+    }
     /// An `attest.chain` extension is present (verification is the coordinator's).
     public var hasChain = false
     public var regions: [Region] { areas.flatMap(\.regions) }
@@ -176,7 +206,7 @@ public enum Extensions {
             let uri = m["original"]?["uri"]?.text
             let did = uri.map { String($0.replacingOccurrences(of: "at://", with: "").prefix { $0 != "/" }) }.flatMap { $0.hasPrefix("did:") ? $0 : nil }
             p.bsaf = Bsaf(type: tag("type"), time: tag("time"), target: tag("target"), source: tag("source"), tags: tags,
-                          imported: m["original"] != nil, botDid: did)
+                          imported: m["original"] != nil, botDid: did, originalUri: uri)
         }
         if let m = first(annotation), let relation = m["relation"]?.text.flatMap(Relation.init(rawValue:)), let target = m["target"]?.map {
             let eventId = target["network"] == .text("nostr") ? target["eventId"]?.bytes.flatMap { $0.count == 32 ? hex($0) : nil } : nil
@@ -187,6 +217,11 @@ public enum Extensions {
         // importer §1.1: a JMA re-post carries exactly one of the two; with both, neither is its subject.
         let jma = ext.filter { $0["$type"] == .text(PublicIngress.jmaEarthquake) || $0["$type"] == .text(PublicIngress.jmaWeather) }
         if jma.count == 1 { p.jma = Self.jma(jma[0]) }
+        let sources = ext.filter { $0["$type"] == .text(PublicIngress.sourceType) }
+        if sources.count == 1 {
+            if let f = sources[0]["feed"], let id = f["id"]?.text, let type = f["type"]?.text { p.feed = FeedRef(id: id, origin: f["origin"]?.text, type: type) }
+            p.sourceLinks = (sources[0]["links"]?.array ?? []).compactMap { l in l["url"]?.text.map { SourceLink(url: $0, mediaType: l["mediaType"]?.text) } }
+        }
         if let m = first(hazard) {
             // hazard §7: several type-specific extensions are forbidden, so none is trusted to be the subject.
             let kinds = ext.filter { e in hazardKinds.contains { e["$type"] == .text($0) } }

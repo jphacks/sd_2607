@@ -17,8 +17,8 @@ struct TimelineScreen: View {
 
     var body: some View {
         let state = mesh.state
-        // Newest first by event time, annotations with a present target folded away.
-        let all = standalone(state.posts).sorted { $0.eventTime > $1.eventTime }
+        // Newest first by event time, annotations with a present target folded away, a re-post group shown by its representative.
+        let all = standalone(state.posts).filter { !$0.groupedAway }.sorted { $0.eventTime > $1.eventTime }
         let annotations = annotationsByTarget(state.posts)
         let cards = publicOnly ? all.filter(\.isPublic) : all
         VStack(alignment: .leading, spacing: 0) {
@@ -105,7 +105,7 @@ private struct PostCard: View {
             Text(title).font(.titleMedium).foregroundStyle(Mosimo.textPrimary)
             if !rest.isEmpty { Text(rest).font(.bodyMedium).foregroundStyle(Mosimo.textSecondary).lineLimit(3) }
             HStack(spacing: 0) {
-                if post.isPublic { BsafVerification(post: post) }
+                if post.isPublic { SourceAttribution(post: post, compact: true) }
                 else {
                     Text(([post.senderName ?? shortDid(post.did, post.pubkey)] + (post.distance(from: here).map { [distanceLabel($0) + "先"] } ?? [])).joined(separator: " · "))
                         .font(.bodySmall).foregroundStyle(Mosimo.textTertiary).lineLimit(1)

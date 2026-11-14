@@ -59,16 +59,17 @@ object Attest {
         val revocationSubkey: ByteArray? = blocks[SUBKEY]?.let { publicKey(it["key"]) }
         /** importer block: botDid → types. Null when the block is absent; empty when the block has no `sources`. */
         val importerSources: Map<String, Set<String>>?
-        /** importer block: feed → types (importer §1.1). Null when the block is absent; empty when the block has no `feeds`. */
-        val importerFeeds: Map<String, Set<String>>?
+        /** importer block: `feeds` (importer §1.1, §1.3). Null when the block is absent; empty when the block has no `feeds`. */
+        val importerFeeds: List<FeedScope>?
         init {
             val block = blocks[IMPORTER]
             importerSources = block?.let { b -> pairs(b["sources"], "botDid", 16) { require(AtRepository.didPattern.matches(it)) } }
-            importerFeeds = block?.let { b -> pairs(b["feeds"], "feed", 8) { require(utf8(it).size in 1..MAX_TEXT_BYTES) } }
+            importerFeeds = block?.let { b -> feedScopes(b["feeds"]) }
             if (block != null) {
-                // importer §1: sources, feeds or both, each non-empty; §4: at most 64 pairs in all.
+                // importer §1: sources, feeds or both, each non-empty; §4: at most 64 explicit types in all.
+                require(block.keys.all { it == "\$type" || it == "sources" || it == "feeds" }) { "Unexpected importer fields" }
                 require(block["sources"] != null || block["feeds"] != null) { "importer needs sources or feeds" }
-                require(importerSources!!.values.sumOf { it.size } + importerFeeds!!.values.sumOf { it.size } <= 64)
+                require(importerSources!!.values.sumOf { it.size } + importerFeeds!!.sumOf { it.types?.size ?: 0 } <= 64)
             }
         }
         /** Display name for `identity`: the organization if any, else the owner. */
@@ -138,7 +139,8 @@ object Attest {
         var parentUntil: Instant? = null
         var parentOrg: String? = null
         var parentSources: Map<String, Set<String>>? = null
-        var parentFeeds: Map<String, Set<String>>? = null
+        var parentFeeds: List<FeedScope>? = null
+        var parentHasImport = ROLE_IMPORT in root.roles
         for ((i, a) in attestations.withIndex()) {
             val leaf = i == attestations.lastIndex
             fun invalid(why: String) = ChainResult(ChainState.INVALID, "attestation $i: $why", root)
@@ -151,14 +153,18 @@ object Attest {
             if (a.maxDepth > parentDepth - 1) return invalid("delegation depth exceeds the issuer's")
             if (!leaf && a.maxDepth < 1) return invalid("intermediate without delegation")
             if (parentOrg != null && a.orgId != parentOrg) return invalid("organization differs from the issuer's")
-            // importer §1: each child pair lies in the issuer's pairs of the same kind; an issuer block without `feeds` allows
-            // no child feeds (likewise `sources`). A child of a block-less issuer is unconstrained.
+            // importer §1: each child pair lies in the pairs of the same kind of the nearest ancestor block; a block without
+            // `feeds` allows no child feeds (likewise `sources`), and a block-less intermediate widens nothing. With no
+            // ancestor block, a child block needs an issuer with the `import` role.
             val sources = a.importerSources
             val feeds = a.importerFeeds
-            if (parentSources != null && sources != null && !within(sources, parentSources)) return invalid("importer sources exceed the issuer's")
-            if (parentFeeds != null && feeds != null && !within(feeds, parentFeeds)) return invalid("importer feeds exceed the issuer's")
+            if (sources != null && feeds != null) {
+                if (parentSources == null || parentFeeds == null) { if (!parentHasImport) return invalid("importer block below an issuer without import") }
+                else if (!within(sources, parentSources) || !feeds.all { feedWithin(parentFeeds!!, it) }) return invalid("importer scope exceeds the ancestor's")
+                parentSources = sources; parentFeeds = feeds
+            }
             parentRoles = a.roles.toSet(); parentDepth = a.maxDepth; parentFrom = a.validFrom; parentUntil = a.validUntil
-            parentOrg = a.orgId ?: parentOrg; parentSources = sources; parentFeeds = feeds
+            parentOrg = a.orgId ?: parentOrg; parentHasImport = ROLE_IMPORT in a.roles
         }
         if (now == null) return ChainResult(ChainState.UNKNOWN_TIME, "clock unknown", root, attestations)
         if (!attestations.all { it.validAt(createdAt) }) return ChainResult(ChainState.EXPIRED, "outside validity at creation", root, attestations)
@@ -167,6 +173,32 @@ object Attest {
 
     private fun within(child: Map<String, Set<String>>, parent: Map<String, Set<String>>) =
         child.all { (name, types) -> parent[name]?.containsAll(types) == true }
+
+    /** One `feeds` entry (importer §1): a feed, optionally one issuer, optionally some types. Null stands for every issuer or type. */
+    data class FeedScope(val feed: String, val origin: String? = null, val types: Set<String>? = null) {
+        /** importer §1.3: holds (feed, origin, type); a null [origin] or [type] asks for every issuer or type. */
+        fun includes(feed: String, origin: String?, type: String?): Boolean = this.feed == feed &&
+            (this.origin == null || (origin != null && this.origin == origin)) && (types == null || (type != null && type in types))
+    }
+    /** importer §1.3: whether a feeds scope holds (feed, origin, type). A post without origin is held only by an entry without one. */
+    fun includesFeed(scope: List<FeedScope>?, feed: String, origin: String?, type: String?): Boolean =
+        scope?.any { it.includes(feed, origin, type) } == true
+    /** importer §1.3: a child entry lies in the parent's scope when every pair it stands for does. */
+    private fun feedWithin(parent: List<FeedScope>, child: FeedScope): Boolean =
+        child.types?.all { includesFeed(parent, child.feed, child.origin, it) } ?: includesFeed(parent, child.feed, child.origin, null)
+
+    /** importer §1.1: an NSID with a lowercase authority names a feed definition (`public.bsaf` never does). */
+    private val nsid = Regex("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\\.[a-zA-Z][a-zA-Z0-9]{0,62}")
+    fun isFeedId(v: String): Boolean = v.length <= 317 && nsid.matches(v) && v.split('.').size >= 3 && v != PublicIngress.BSAF
+    /** importer §1.1: an issuer is an absolute URI of at most 256 bytes without whitespace or control characters. */
+    private val scheme = Regex("[a-zA-Z][a-zA-Z0-9+.-]*")
+    /** JS `\s` (Unicode white space, U+FEFF included) and controls are checked per character: Android's regex has no `(?U)`. */
+    private fun jsSpaceOrControl(c: Char) = c.isWhitespace() || c.isISOControl() || c == '\u00A0' || c == '\u2007' || c == '\u202F' || c == '\uFEFF'
+    fun isOrigin(v: String): Boolean {
+        val colon = v.indexOf(':')
+        return utf8(v).size <= 256 && colon > 0 && scheme.matches(v.substring(0, colon))
+            && colon < v.length - 1 && v.substring(colon + 1).none(::jsSpaceOrControl)
+    }
 
     /**
      * attest.chain §1: a 32-byte leaf is the Nostr key itself; a 33-byte leaf is the atproto key, bound to the Nostr
@@ -314,6 +346,23 @@ object Attest {
         require(parsed.zipWithNext().all { (a, b) -> lexical.compare(a.first, b.first) < 0 }) { "Unsorted $key list" }
         return parsed.toMap()
     }
-    private fun sortedTexts(v: Any?, max: Int, min: Int = 0): List<String> = (v as? List<*> ?: error("Expected array")).map { text(it).also { t -> require(utf8(t).size <= MAX_TEXT_BYTES) } }
+    /** importer §1: `[{feed, origin?, types?}]`, at most 32, sorted by (feed, origin) bytes with an absent origin first, unique. */
+    private fun feedScopes(v: Any?): List<FeedScope> {
+        if (v == null) return emptyList()
+        val list = v as? List<*> ?: error("Expected feeds list")
+        require(list.size in 1..32)
+        val parsed = list.map { e ->
+            val m = map(e)
+            require(m.keys.all { it == "feed" || it == "origin" || it == "types" }) { "Unexpected feed fields" }
+            FeedScope(text(m["feed"]).also { require(isFeedId(it)) { "Invalid feed ID" } },
+                m["origin"]?.let { o -> text(o).also { require(isOrigin(it)) { "Invalid feed origin" } } },
+                m["types"]?.let { sortedTexts(it, 32, min = 1, maxBytes = 128).toSet() })
+        }
+        require(parsed.zipWithNext().all { (a, b) -> lexical.compare(a.feed, b.feed).let { c -> c < 0 || (c == 0 && lexical.compare(a.origin ?: "", b.origin ?: "") < 0) } }) {
+            "Feeds must be sorted by (feed, origin) without duplicates"
+        }
+        return parsed
+    }
+    private fun sortedTexts(v: Any?, max: Int, min: Int = 0, maxBytes: Int = MAX_TEXT_BYTES): List<String> = (v as? List<*> ?: error("Expected array")).map { text(it).also { t -> require(utf8(t).size <= maxBytes) } }
         .also { require(it.size in min..max && it.zipWithNext().all { (a, b) -> lexicographic(utf8(a), utf8(b)) < 0 }) { "Unsorted/duplicate/oversized list" } }
 }

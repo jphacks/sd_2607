@@ -18,7 +18,9 @@ data class Validity(val from: String?, val until: String?)
 /** BSAF original tags; `time:` is the source event time, not the import time. */
 data class Bsaf(val type: String?, val time: String?, val target: String?, val source: String?, val tags: List<String>, val imported: Boolean,
     /** The re-posted Bot's DID, from `original.uri`. */
-    val botDid: String? = null)
+    val botDid: String? = null,
+    /** `original.uri` (`at://<did>/app.bsky.feed.post/<rkey>`). */
+    val originalUri: String? = null)
 enum class Relation(val wire: String) { CORRECTION("correction"), SUPPLEMENT("supplement"), ENDORSEMENT("endorsement") }
 /** [targetEventId] is the Nostr target (hex); atproto references are kept as [targetUri]. */
 data class Annotation(val relation: Relation, val targetEventId: String?, val targetUri: String? = null)
@@ -51,6 +53,10 @@ data class JmaCode(val value: String, val type: String?)
  */
 data class Jma(val earthquake: Boolean, val title: String, val status: String, val dateTime: String, val eventId: String,
     val whole: Boolean, val pref: JmaCode? = null, val forecastArea: String? = null)
+/** public §5.1 `public#source.feed`: the (feed, origin, type) a feed re-post declares (importer §1.2). Authorization is the chain's. */
+data class FeedRef(val id: String, val origin: String?, val type: String)
+/** public §5.1 `public#source.links`: where the original or related pages are; never fetched automatically. */
+data class SourceLink(val url: String, val mediaType: String?)
 data class PostExtensions(
     val origin: Origin? = null, val areas: List<Area> = emptyList(), val validity: Validity? = null,
     val priority: Int = 1, val bsaf: Bsaf? = null, val annotation: Annotation? = null,
@@ -59,6 +65,10 @@ data class PostExtensions(
     val hazard: Hazard? = null,
     /** Exactly one public.jma.* extension, decoded; null when absent, ambiguous or malformed. */
     val jma: Jma? = null,
+    /** The feed declaration of the single `public#source`; null when absent, ambiguous or malformed. */
+    val feed: FeedRef? = null,
+    /** `links` of the single `public#source`, in order. */
+    val links: List<SourceLink> = emptyList(),
 ) {
     val regions: List<Region> get() = areas.flatMap { it.regions }
 }
@@ -107,6 +117,7 @@ object Extensions {
             }
         }
         fun first(type: String) = ext.firstOrNull { it["\$type"] == type }
+        val source = ext.filter { it["\$type"] == PublicIngress.SOURCE }.singleOrNull()
         return PostExtensions(
             origin = first(ORIGIN)?.let { m -> runCatching { Origin(m.long("lat"), m.long("lon"), m["acc"] as? Long, m["at"] as? String) }.getOrNull() },
             areas = ext.filter { it["\$type"] == AREA }.map { m ->
@@ -119,7 +130,7 @@ object Extensions {
                 fun tag(name: String) = tags.filter { it.startsWith("$name:") }.singleOrNull()?.removePrefix("$name:")
                 val uri = (m["original"] as? Map<*, *>)?.get("uri") as? String
                 Bsaf(tag("type"), tag("time"), tag("target"), tag("source"), tags, m["original"] != null,
-                    uri?.removePrefix("at://")?.substringBefore('/')?.takeIf { it.startsWith("did:") })
+                    uri?.removePrefix("at://")?.substringBefore('/')?.takeIf { it.startsWith("did:") }, uri)
             },
             annotation = first(ANNOTATION)?.let { m ->
                 val relation = Relation.entries.firstOrNull { it.wire == m["relation"] }
@@ -132,6 +143,13 @@ object Extensions {
             hazard = first(HAZARD)?.let { m -> runCatching { hazard(m, ext) }.getOrNull() },
             jma = ext.filter { it["\$type"] == PublicIngress.JMA_EARTHQUAKE || it["\$type"] == PublicIngress.JMA_WEATHER }.singleOrNull()
                 ?.let { m -> runCatching { jma(m) }.getOrNull() },
+            feed = (source?.get("feed") as? Map<*, *>)?.let { f ->
+                val id = f["id"] as? String; val type = f["type"] as? String
+                if (id != null && type != null) FeedRef(id, f["origin"] as? String, type) else null
+            },
+            links = (source?.get("links") as? List<*>).orEmpty().mapNotNull { l ->
+                (l as? Map<*, *>)?.let { m -> (m["url"] as? String)?.let { SourceLink(it, m["mediaType"] as? String) } }
+            },
         )
     }
 

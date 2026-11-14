@@ -36,7 +36,8 @@ enum class AlertGenre(val label: String) {
     NEARBY_DANGER("近くの危険情報"),
 }
 
-data class Alert(val post: PostView, val genre: AlertGenre)
+/** [silent]: due but recorded without a notification, because the same event was or will be notified by another post (public §8.1). */
+data class Alert(val post: PostView, val genre: AlertGenre, val silent: Boolean = false)
 
 /**
  * Posts to alert on now (same conditions as iOS), never our own nor [handled] ones.
@@ -46,6 +47,8 @@ data class Alert(val post: PostView, val genre: AlertGenre)
  * - Anyone else's 「［危険］」 post that is not an official hazard, created within [NEARBY_WINDOW_SECONDS], whose origin or
  *   area is within [NEARBY_METERS] of a known [here].
  * [here] is null when the fix is unknown or too old.
+ * An official alert whose group (public §8.1) already has an alerted post at least as severe comes back [Alert.silent]:
+ * one of the [handled] ones, or a more severe one of this same call.
  */
 fun alertCandidates(posts: List<PostView>, me: String, nowSeconds: Long, here: Pair<Double, Double>?, handled: Set<String>): List<Alert> {
     val fresh = posts.filter { it.id !in handled && it.pubkey != me }.mapNotNull { p ->
@@ -55,7 +58,19 @@ fun alertCandidates(posts: List<PostView>, me: String, nowSeconds: Long, here: P
     if (fresh.none { it.genre != AlertGenre.NEARBY_DANGER }) return fresh
     // Replacement needs the whole list: the newer post of the series may be one already handled.
     val superseded = supersededJma(posts)
-    return fresh.filter { it.post.id !in superseded }
+    val official = fresh.filter { it.post.id !in superseded }
+    val groups = hazardGroupsById(posts)
+    if (official.none { it.post.id in groups }) return official
+    // Representative order, so that within one call the head of a group rings and the rest count as notified after it.
+    val notified = posts.filterTo(mutableListOf()) { it.id in handled && it.id in groups }
+    val silent = HashSet<String>()
+    official.filter { it.genre != AlertGenre.NEARBY_DANGER }.sortedWith { x, y -> representativeOrder.compare(x.post, y.post) }.forEach { a ->
+        val group = groups[a.post.id] ?: return@forEach
+        val severity = severityRank(a.post.ext.hazard?.severity)
+        if (notified.any { y -> groups[y.id] === group && severityRank(y.ext.hazard?.severity) >= severity }) silent += a.post.id
+        else notified += a.post
+    }
+    return official.map { if (it.post.id in silent) it.copy(silent = true) else it }
 }
 
 private fun officialGenre(p: PostView, nowSeconds: Long, here: Pair<Double, Double>?): AlertGenre? {

@@ -46,8 +46,8 @@ extension PostView {
         return categoryPrefix.stringByReplacingMatches(in: content, range: NSRange(location: 0, length: ns.length), withTemplate: "")
     }
     /// A re-posted BSAF original (`original` present), not just any post carrying the extension.
-    /// A re-post by an importer: a BSAF original or a JMA XML message (importer §1.1).
-    var isPublic: Bool { ext.bsaf?.imported == true || ext.jma != nil }
+    /// A re-post by an importer: a BSAF original, a JMA XML message or another feed re-post (importer §1.1, §1.2).
+    var isPublic: Bool { ext.bsaf?.imported == true || ext.jma != nil || ext.feed != nil }
     /// Card label of a re-post: the JMA Control/Title, else the BSAF type.
     var publicLabel: String { ext.jma?.title ?? bsafLabel(ext.bsaf?.type) }
     /// The confirmed sender name (attest.chain §4.3): shown only when the chain is confirmed now and the leaf may name itself.
@@ -86,11 +86,13 @@ extension PostView {
         guard let hop, hop > 0 else { return "直接受信" }
         return "\(hop)ホップ"
     }
-    /// BSAF `source:` tag, e.g. `jma` → 「気象庁」.
-    var bsafSource: String {
-        if ext.jma != nil { return "気象庁防災情報XML" }
-        guard let s = ext.bsaf?.source, !s.isEmpty else { return "公的情報" }
-        return s.lowercased() == "jma" ? "気象庁" : s
+    /// public §8.1: a member of a group that is not its representative; the map and the timeline show the group once.
+    var groupedAway: Bool { group.map { $0.representative != id } ?? false }
+    /// importer §3.2: the original source's name — the feed's source name, a Bot re-post's BSAF `source:`, or 「公的情報」.
+    var originalSource: String {
+        if let f = ext.feed { return feedName(f.id, f.origin) }
+        if ext.jma != nil { return "気象庁" }
+        return bsafSourceName(ext.bsaf?.source)
     }
     /// 「6/1 12:00 から・6/2 18:00 まで」 from the validity extension, independent of the delivery deadline.
     var validityLabel: String? {
@@ -99,6 +101,20 @@ extension PostView {
         let parts = [v.from.map { "\(t($0)) から" }, v.until.map { "\(t($0)) まで" }].compactMap { $0 }
         return parts.isEmpty ? "不明" : parts.joined(separator: "・")
     }
+}
+
+/// BSAF `source:` tag, e.g. `jma` → 「気象庁」; other values as they are.
+func bsafSourceName(_ source: String?) -> String {
+    guard let s = source, !s.isEmpty else { return "公的情報" }
+    return s.lowercased() == "jma" ? "気象庁" : s
+}
+/// Known BSAF Bot accounts by DID; others are shown by their DID.
+private let bsafHandles = ["did:plc:vwi7zhfyamyvrg5v6ycjgzxi": "jma-alert-bot.bsky.social", "did:plc:kxwz5cz7o6g4jlmxh6doyfsm": "bsaf-kikikuru-bot.bsky.social"]
+func bsafAccount(_ did: String) -> String { bsafHandles[did].map { "@\($0)" } ?? did }
+
+/// importer §3.2, jma §12: a feed is shown by its definition's source name (「気象庁」), else by its ID and issuer.
+func feedName(_ feed: String, _ origin: String? = nil) -> String {
+    feed == PublicIngress.jmaFeed ? "気象庁" : feed + (origin.map { "（\($0)）" } ?? "")
 }
 
 /// BSAF `type:` → short Japanese label; unknown types show the raw value.
@@ -160,12 +176,21 @@ func standalone(_ posts: [PostView]) -> [PostView] {
 func endorsers(_ annotations: [PostView]) -> Set<String> {
     Set(annotations.filter { $0.ext.annotation?.relation == .endorsement }.map { $0.did ?? $0.pubkey })
 }
-/// Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail)
-/// and official JMA re-posts a newer one of the same series replaces (jma §5.3; the timeline and details still show them).
+/// Posts drawn on the map: those with a pin position ([mapPoint]), minus annotations whose target is shown (they live in its detail),
+/// official JMA re-posts a newer one of the same series replaces (jma §5.3; the timeline and details still show them) and the
+/// members of a re-post group other than its representative, which carries the whole group's area (public §8.1).
 @MainActor func mapPosts(_ posts: [PostView]) -> [PostView] {
     let ids = Set(posts.map(\.id))
     let replaced = JmaDisplay.superseded(posts.compactMap { p in p.officialHazard ? p.ext.jma.map { (p.id, $0) } : nil })
-    return posts.filter { $0.mapPoint != nil && !replaced.contains($0.id) && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
+    let areas = Dictionary(posts.map { ($0.id, $0.ext.areas) }, uniquingKeysWith: { a, _ in a })
+    return posts.filter { !$0.groupedAway && !replaced.contains($0.id) && !($0.ext.annotation?.targetEventId.map { ids.contains($0) } ?? false) }
+        .map { p in
+            guard let g = p.group else { return p }
+            var r = p
+            r.ext.areas = g.members.flatMap { areas[$0] ?? [] }
+            return r
+        }
+        .filter { $0.mapPoint != nil }
 }
 
 /// Geohash anchors keyed by their cell list: tracing a prefecture cover is too slow to redo on every view update.
