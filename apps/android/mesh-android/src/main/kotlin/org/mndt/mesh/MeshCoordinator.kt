@@ -154,6 +154,11 @@ class MeshCoordinator private constructor(private val context: Context) {
     private val links: List<Link> = listOf(local)
     private val blocked get() = disk?.blockedPubkeys.orEmpty()
     private var hideExpired = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(HIDE_EXPIRED, true)
+    /**
+     * False for apps that never show posts (Talk). Building [MeshState.posts] over the online caches (up to 500 relay and
+     * 500 PDS events) after every action pegs the actor once online, and a LocalLink follower then misses the 10 s HELLO.
+     */
+    @Volatile var postViews = true
     // ponytail: in-memory only; apps that need it across restarts persist their own delivery status.
     private val arrived = mutableMapOf<String, Handoff>()
     /** Event ID → peer label → the first handoff to that peer; [exported] is the same by relay URL. */
@@ -417,7 +422,8 @@ class MeshCoordinator private constructor(private val context: Context) {
     }
     private fun refresh() {
         val data = disk
-        val stopped = (engine.entries().map { it.event } + relaySubscription.events() + publicEvents).filter { moderation.stopped(it) }.mapTo(hashSetOf()) { it.id }
+        val stopped = if (!postViews) emptySet() else
+            (engine.entries().map { it.event } + relaySubscription.events() + publicEvents).filter { moderation.stopped(it) }.mapTo(hashSetOf()) { it.id }
         mutableState.update { state -> state.copy(
             ready = author != null && !fatal, running = running, clockConfidence = engine.clockConfidence,
             onlineEnabled = data?.onlineEnabled == true, onlineActive = onlineAllowed(),
@@ -446,7 +452,7 @@ class MeshCoordinator private constructor(private val context: Context) {
                     (seen - syncing.keys).map { (node, via) -> Neighbor(node, node, "近く（${via.distinct().joinToString("・")}）", via.distinct()) }
             },
             // Other apps' kinds (DMs, profiles) are relayed but are not posts.
-            posts = if (fatal) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
+            posts = if (fatal || !postViews) emptyList() else mergePostViews(engine.entries().asReversed().filter { it.event.kind == 1 }.map {
                 PostView(it.event.id, it.event.pubkey, it.event.content, it.hop, acceptedAnywhere(it.event.id),
                     deliveryDeadline = engine.deadline(it.event, now()),
                     acceptedBy = data?.relayAccepted.orEmpty().filterValues { ids -> it.event.id in ids }.keys.toList(),
