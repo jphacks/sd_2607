@@ -1,0 +1,2 @@
+noto_carnav_only: 1/10noto_carnav_only: 2/10noto_carnav_only: 3/10noto_carnav_only: 4/10noto_carnav_only: 5/10noto_carnav_only: 6/10noto_carnav_only: 7/10noto_carnav_only: 8/10noto_carnav_only: 9/10noto_carnav_only: 10/10noto_carnav_only: done in 5.7 min
+noto_carnav_with_phones: 1/10noto_carnav_with_phones: 2/10noto_carnav_with_phones: 3/10Terminated                 cargo run -q --release -p mosimo-sim-core --bin experiments -- experiments/post_fix/carnav --only noto_carnav_only,noto_carnav_with_phones,shelter_carnav_only --noto-hours 72 --seeds 2
