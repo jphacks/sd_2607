@@ -300,6 +300,22 @@ URL・`EventID`・`Serial` のいずれも単独では全球一意の電文 ID �
 
 未知の拡張・既知型内の未知フィールドは保持する。未知の XML 要素まで汎用 XML バッグとして運ぶ方式は採らず、意味に影響する未対応構造は取り込み側で扱いを保留して型の追加・改訂を検討する。未知の内容を削って既存型に収まったことにしてはならない。
 
+## 12. フィード
+
+本書は、[転載サーバー §1.1](../../attest/importer/README.md#11-情報源の識別) のフィード `dev.jisaku.mosimo.public.jma` の定義を兼ねる。
+
+| 項目 | 定義 |
+|---|---|
+| フィード ID | `dev.jisaku.mosimo.public.jma` |
+| 原情報 | 気象庁防災情報 XML の原電文（[PULL 型](https://xml.kishou.go.jp/xmlpull.html)等で取得したもの、§2） |
+| 情報源名（表示） | 気象庁 |
+| `origin` | 使わない。発表官署は `public#source.document.senderId` に記録する |
+| `type` | 原電文の `Control/Title` の文字列そのもの。全角・半角を含めて変えず、表記の似た別名称へ広げない |
+| 投稿の形式拡張 | `public.jma.earthquake` または `public.jma.weather` のちょうど 1 個と、`feed` を持つ `public#source` のちょうど 1 個 |
+| 投稿単位・更新・取消 | §5・§6 と電文別の拡張 |
+
+宣言の確認（転載サーバー §1.2）では、形式拡張の `message.control.title` が `type` と一致し、`origin` がないことを確かめる。
+
 ## 未確定事項
 
 - 気象警報・注意報（R06）以外の気象電文の独立した情報単位の系列キーと取消対象の確定規則。

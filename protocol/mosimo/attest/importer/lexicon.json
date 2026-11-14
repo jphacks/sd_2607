@@ -20,31 +20,39 @@
             "type": "ref",
             "ref": "#feed"
           },
-          "maxLength": 8,
-          "description": "Sorted by feed, no duplicates. Verifiers that predate this field reject the block."
+          "maxLength": 32,
+          "description": "Sorted by feed, then origin (absent first); no duplicate (feed, origin). Verifiers that predate this field reject the block."
         }
       },
-      "description": "Block in a key attestation listing the (botDid, type) and (feed, type) pairs an importer may re-publish. Holds sources, feeds or both, each non-empty."
+      "description": "Block in a key attestation listing the (botDid, type) and (feed, origin, type) pairs an importer may re-publish. Holds sources, feeds or both, each non-empty."
     },
     "feed": {
       "type": "object",
       "required": [
-        "feed",
-        "types"
+        "feed"
       ],
       "properties": {
         "feed": {
           "type": "string",
-          "description": "Registered feed name, e.g. jma-xml."
+          "maxLength": 317,
+          "description": "Feed ID: the NSID of the feed definition (attest.importer §1.1), e.g. dev.jisaku.mosimo.public.jma."
+        },
+        "origin": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 256,
+          "description": "Issuer of the originals as an absolute URI. Absent: every issuer of the feed."
         },
         "types": {
           "type": "array",
           "items": {
             "type": "string",
-            "description": "Information type defined per feed; for jma-xml the original Control/Title."
+            "maxLength": 128,
+            "description": "Information type defined by the feed definition; for dev.jisaku.mosimo.public.jma the original Control/Title."
           },
           "minLength": 1,
-          "maxLength": 32
+          "maxLength": 32,
+          "description": "Sorted, no duplicates. Absent: every type of the feed."
         }
       }
     },

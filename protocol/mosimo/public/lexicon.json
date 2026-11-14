@@ -44,7 +44,21 @@
           "type": "array",
           "description": "Related links: stored original, attachments, web references. Presence of a link does not require retrieval or delivery of its target.",
           "items": { "type": "ref", "ref": "#link" }
+        },
+        "feed": {
+          "type": "ref",
+          "ref": "#feedRef",
+          "description": "Declares a feed re-post: the (feed, origin, type) the importer's key attestation must cover (attest.importer §1.2)."
         }
+      }
+    },
+    "feedRef": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 317, "description": "Feed ID: the NSID of the feed definition, authority in lowercase." },
+        "origin": { "type": "string", "format": "uri", "maxLength": 256, "description": "Issuer of the original as an absolute URI (e.g. a WMO Register of Alerting Authorities OID), only for feeds whose definition uses it." },
+        "type": { "type": "string", "maxLength": 128, "description": "Information type defined by the feed definition." }
       }
     },
     "sourceRef": {
