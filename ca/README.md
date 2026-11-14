@@ -96,13 +96,23 @@ mosimo-ca issue oriom-root/import/oriom bsaf-1 --leaf --owner-name 'BSAF ノー�
 
 省略したパラメーターは、端末から実行していれば対話で尋ねます（`maxDepth` の既定は親より 1 小さい値、役割・転載範囲は親の範囲から選択）。発行前に鍵署名の内容を表示して確認を求めます。`--yes` で確認を省略します。
 
-転載範囲は `--preset` と、`--source DID=type1,type2`（Bot の転載）・`--feed FEED=type1,type2`（フィードの転載、[importer §1.1](../protocol/mosimo/attest/importer/README.md#11-フィード)）で指定します。
+転載範囲は `--preset`、`--source`、`--feed` で指定します。識別方法は [importer §1.1〜1.3](../protocol/mosimo/attest/importer/README.md#11-情報源の識別) のとおりです。
+
+| 指定 | 範囲 |
+|---|---|
+| `--source DID=type1,type2` | Bot の転載。原投稿の著者 DID と BSAF の `type:` の値 |
+| `--feed FEED` | フィードの転載。フィード ID（フィード定義の NSID）の全ての発表者・全ての種別 |
+| `--feed FEED=type1,type2` | そのフィードの全ての発表者の、指定した種別 |
+| `--feed FEED@ORIGIN` | 発表者 ID（絶対 URI。警報の発表機関なら WMO Register of Alerting Authorities の OID を推奨）の全ての種別 |
+| `--feed FEED@ORIGIN=type1,type2` | その発表者の、指定した種別 |
 
 | プリセット | 範囲 |
 |---|---|
 | `jma` | JMA Bot（`did:plc:vwi7zhfyamyvrg5v6ycjgzxi`）の 5 種 |
 | `kikikuru` | Kikikuru Bot（`did:plc:kxwz5cz7o6g4jlmxh6doyfsm`）の 23 種 |
-| `jma-xml` | フィード `jma-xml` の 8 種（[importer/jma-xml](../importer/jma-xml/README.md) が変換する電文の `Control/Title`） |
+| `jma-xml` | フィード `dev.jisaku.mosimo.public.jma` の 8 種（[importer/jma-xml](../importer/jma-xml/README.md) が変換する電文の `Control/Title`） |
+
+新しい情報源は、自分が管理するドメインの名前空間でフィード ID を決め、フィード定義（原情報、`origin` と `type` の決め方、投稿の形式拡張）を公開すれば、ツールやアプリの改修なしに `--feed` で発行できます。子の範囲は親に含まれる必要があります。`origin` や種別を省略した（全てを表す）範囲は、親も同じく省略している場合にだけ発行できます。
 
 `feeds` を持つ鍵署名は、`feeds` に未対応の検証器ではチェーンごと不正になります。`feeds` に対応したアプリはルート設定の `maxDepth` も 16 に上げているので、3 段以上のチェーン（ルート → 役割ごとの認証局 → 運営者 → ノード）の認証局には含めてかまいません。現行の 2 段のチェーン（`oriom-mosimo-ca`）には含めないでください。
 
