@@ -84,22 +84,13 @@ function rel(s) {
   return new Date(s).toLocaleDateString('ja-JP');
 }
 
-// Mosimo posts carry no top-level createdAt; recover the authoritative µs timestamp from the TID rkey.
-const TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz';
-function tidTime(rkey) {
-  if (typeof rkey !== 'string' || rkey.length !== 13) return;
-  let v = 0n;
-  for (const c of rkey) {
-    const n = TID_CHARS.indexOf(c);
-    if (n < 0) return;
-    v = (v << 5n) | BigInt(n);
-  }
-  return new Date(Number(v >> 10n) / 1000).toISOString();
-}
-function createdOf(r) {
-  if (r.$type === 'app.bsky.feed.post') return r.createdAt;
-  if (typeof r.created === 'string') return r.created;
-  return tidTime(typeof r.uri === 'string' ? r.uri.split('/').at(-1) : undefined);
+// The TID rkey is not the posting time (core §6.2). Without `created`, show when the AppView first saw the post.
+const times = new Map(); // uri → [time, label]
+function timeOf(r, p) {
+  if (r.$type === 'app.bsky.feed.post') return [r.createdAt, ''];
+  if (typeof r.created === 'string') return [r.created, ''];
+  const at = p?.firstSeenAt ?? p?.indexedAt;
+  return [typeof at === 'string' ? at : undefined, '受信 '];
 }
 
 function el(tag, cls, text) {
@@ -118,8 +109,8 @@ function render(records) {
     a.dataset.did = did;
     const avatar = el('div', 'avatar');
     avatar.style.background = color(did);
-    const createdAt = createdOf(r) ?? '';
-    const time = el('span', 'time', rel(createdAt));
+    const [createdAt = '', label = ''] = times.get(r.uri) ?? [];
+    const time = el('span', 'time', label + rel(createdAt));
     time.title = createdAt;
     const meta = el('div', 'meta');
     meta.append(el('span', 'name'), time);
@@ -156,8 +147,10 @@ async function load() {
       const data = await res.json();
       const rows = data.record ? [data.record] : data.records;
       if (!Array.isArray(rows)) throw new Error('Invalid feed response');
+      const provenance = data.provenance ?? {};
       for (const r of rows) {
-        if (r && typeof r.uri === 'string' && typeof r.text === 'string' && createdOf(r)) records.set(r.uri, r);
+        const t = r && typeof r.uri === 'string' && typeof r.text === 'string' && timeOf(r, provenance[r.uri]);
+        if (t?.[0]) { records.set(r.uri, r); times.set(r.uri, t); }
       }
       cursor = data.cursor;
       if (cursor == null) break;
