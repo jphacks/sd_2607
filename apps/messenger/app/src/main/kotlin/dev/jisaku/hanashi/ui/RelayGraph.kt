@@ -212,13 +212,14 @@ fun RelayGraph(mesh: MeshState, modifier: Modifier = Modifier) {
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        // Wraps instead of squeezing a label onto two lines under a large system font.
+        FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp), Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
             Key(Icons.Outlined.Bluetooth, "Bluetooth")
             Key(Icons.Outlined.Wifi, "Wi-Fi")
             Key(Icons.Outlined.Apps, "同じ端末のアプリ")
             if (cloud) Key(Icons.Outlined.Cloud, "インターネット")
         }
-        Row(Modifier.fillMaxWidth().padding(16.dp, 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        FlowRow(Modifier.fillMaxWidth().padding(16.dp, 8.dp), Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
             Dot(Hanashi.bosai, "防災アプリの投稿")
             Dot(Hanashi.green, "トーク")
             Dot(Hanashi.other, "その他")
