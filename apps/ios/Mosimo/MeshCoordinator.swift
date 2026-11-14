@@ -218,7 +218,7 @@ final class MeshCoordinator: ObservableObject, LinkListener {
             reloadPublicConfig()
         } catch {
             fatal = true
-            issue("暗号化状態を開けません。鍵は再生成せず停止しました")
+            issue("暗号化状態を開けません。鍵は再生成せず停止しました（\(error)）")
         }
         refresh()
     }
