@@ -156,3 +156,12 @@ jobs:
             apps/messenger/**/build/test-results/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/reports/
             third_party/sd_2607-dtn7-kotlin/bpv7/build/test-results/
+
+  # After Mosimo reaches Play, publish the GitHub release (and F-Droid's tag) when versionName is new; otherwise a no-op.
+  github-release:
+    needs: release
+    if: github.event_name == 'workflow_dispatch' && inputs.app == 'mosimo'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/android-github-release.yml
+    secrets: inherit

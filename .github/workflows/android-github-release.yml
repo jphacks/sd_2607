@@ -2,9 +2,11 @@ name: Android GitHub release
 
 # Builds the release APK at the source versionCode, signs it with the GitHub release key (not the Play upload key),
 # and publishes it as the GitHub release mosimo-v<versionName>. F-Droid follows the tag; Obtainium and similar clients can track the release.
-# The Google Play pipeline is android.yml and does not depend on this workflow.
+# android.yml calls it after a successful Play distribution of Mosimo; it can also be run on its own.
+# When the tag for the current versionName already exists, it does nothing, so Play-only runs are unaffected.
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: write
@@ -41,7 +43,8 @@ jobs:
           fi
           tag="mosimo-v$name"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
-            echo "::error::$tag already exists; bump versionCode and versionName first"; exit 1
+            echo "::notice::$tag already exists; bump versionCode and versionName to publish a new GitHub release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           for locale in ja-JP en-US; do
             f="../../fastlane/metadata/android/$locale/changelogs/$code.txt"
@@ -50,11 +53,14 @@ jobs:
           { echo "code=$code"; echo "name=$name"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
       # No tool cache in release jobs: https://github.com/jdx/mise-action#release-workflows
       - uses: jdx/mise-action@v5
+        if: steps.version.outputs.skip != 'true'
         with:
           working_directory: apps/android
           cache: false
       - uses: gradle/actions/setup-gradle@v5
+        if: steps.version.outputs.skip != 'true'
       - name: Build the signed APK
+        if: steps.version.outputs.skip != 'true'
         env:
           SOPS_AGE_KEY: ${{ secrets.MISE_SOPS_AGE_KEY }}
         run: |
@@ -65,6 +71,7 @@ jobs:
           printf '%s' "$SOPS_AGE_KEY" > "$SOPS_AGE_KEY_FILE"
           mise run github-release-apk
       - name: Check the signer and version
+        if: steps.version.outputs.skip != 'true'
         env:
           CODE: ${{ steps.version.outputs.code }}
           NAME: ${{ steps.version.outputs.name }}
@@ -77,6 +84,7 @@ jobs:
           "$tools/aapt2" dump badging "$apk" | grep -q "versionCode='$CODE' versionName='$NAME'" \
             || { echo "::error::APK version does not match the source"; exit 1; }
       - name: Publish the GitHub release
+        if: steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CODE: ${{ steps.version.outputs.code }}

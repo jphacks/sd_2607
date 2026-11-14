@@ -129,7 +129,7 @@ Google Play とは別の経路です。Play 用の `android.yml`・`fastlane/`�
 ### リリース手順
 
 1. `versionCode`・`versionName` を上げ、changelog を追加して main にマージする。
-2. GitHub Actions の「Android GitHub release」を main で手動実行する。署名済み APK を作り、`mosimo-v<versionName>` タグと GitHub Release を作成する。ローカルでは `mise run github-release-apk` で同じ APK を作れる（復号鍵が必要）。
+2. いつもどおり「Android」ワークフローで Mosimo を Play に配布する。配布が成功すると、続けて「Android GitHub release」が呼ばれ、署名済み APK・`mosimo-v<versionName>` タグ・GitHub Release を作成する。そのタグがすでにあれば（versionName を上げていなければ）何もしない。「Android GitHub release」を main で単独実行しても同じ。ローカルでは `mise run github-release-apk` で同じ APK を作れる（復号鍵が必要）。
 3. F-Droid はタグを検出して自動でビルドを追加する（`fdroid/dev.jisaku.mosimo.yml` の `UpdateCheckMode`）。反映には数日かかる。
 
 ### F-Droid への初回申請
