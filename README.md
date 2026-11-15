@@ -20,7 +20,7 @@
 
   ### **🏆 Award Day**
   [![Bluesky賞](https://img.shields.io/badge/Sponsor%20Award-Bluesky-blue?style=for-the-badge&logo=bluesky)](https://github.com/jphacks/sd_2607)
-  [![HUAWEI JAPAN賞](https://img.shields.io/badge/Sponsor%20Award-HUAWEI%20JAPAN-red?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
+  [![HUAWEI JAPAN賞](https://img.shields.io/badge/Sponsor%20Award-HUAWEI%20JAPAN-red?style=for-the-badge&logo=huawei)](https://github.com/jphacks/sd_2607)
 
 
   <br/>
