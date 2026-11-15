@@ -17,6 +17,12 @@
   [![JPHacks 2026](https://img.shields.io/badge/JPHacks%202026-Audience%20Award-gold?style=for-the-badge&logo=rocket)](https://github.com/jphacks/sd_2607)
   [![三菱重工業株式会社 航空機・飛昇体事業部賞](https://img.shields.io/badge/Sponsor%20Award-三菱重工業株式会社%20航空機・飛昇体事業部-orange?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
 
+
+  ### **🏆 Award Day**
+  [![Bluesky賞](https://img.shields.io/badge/Sponsor%20Award-Bluesky-blue?style=for-the-badge&logo=bluesky)](https://github.com/jphacks/sd_2607)
+  [![HUAWEI JAPAN賞](https://img.shields.io/badge/Sponsor%20Award-HUAWEI%20JAPAN-red?style=for-the-badge&logo=mitsubishi)](https://github.com/jphacks/sd_2607)
+
+
   <br/>
 
   [![Used Skills](https://skillicons.dev/icons?i=rust,swift,kotlin,cpp,js,ts,python,nix)](https://skillicons.dev)
