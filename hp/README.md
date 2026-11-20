@@ -8,6 +8,8 @@ npm run dev
 npm run check
 ```
 
+Nix を使う場合は、`hp/` で `nix develop` を実行すると Node.js 24 と、NixOS でも動く workerd（`npm run dev` と `npm run build` が起動する）が使えるようになります。workerd は `node_modules` に入ったものを初回起動時に `patchelf` で書き換えて `node_modules/.cache/workerd-nix/` に複製するため、先に `npm ci` を済ませてください。
+
 ## プロトコル仕様ページ
 
 `/protocol/` 以下は `../protocol/mosimo/**/README.md` をビルド時に `import.meta.glob` で直接読み込んで生成します（`src/lib/specs.ts`）。仕様の本文はリポジトリの README が唯一のソースであり、`hp/` 側には複製を置きません。
@@ -17,7 +19,7 @@ npm run check
 - Lexicon JSON（`lexicon.json`、`post.json`、`getFeed.json`）は `src/pages/protocol/[...path].json.ts` が同じパスでそのまま配信します。
 - 用語集 `/protocol/glossary/` はリポジトリ直下の `CONTEXT.md` から生成します。
 
-Cloudflare Workers 向けの `npm run build` は、仕様ページを事前生成するため workerd を起動します。NixOS では npm が配る workerd がそのままでは動かないため、`patchelf` で interpreter を書き換えた複製を用意し、`MINIFLARE_WORKERD_PATH` で指定してください。GitHub Pages 向けの `npm run build:pages` と `npm run check` には不要です。
+Cloudflare Workers 向けの `npm run build` は、仕様ページを事前生成するため workerd を起動します。NixOS では npm が配る workerd がそのままでは動かないため、`nix develop` の環境で実行してください（`patchelf` で interpreter を書き換えた複製を `MINIFLARE_WORKERD_PATH` で指定します）。GitHub Pages 向けの `npm run build:pages` と `npm run check` には不要です。
 
 ## GitHub Pages
 
