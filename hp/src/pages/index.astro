@@ -1,5 +1,6 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { brandIcons, type BrandIcon } from "../data/award-icons";
 
 // 「なぜプロトコルか」の図。同じ40人のうち、Bluetooth などで中継に参加できる人を塗る。
 const people = Array.from({ length: 40 }, (_, i) => i);
@@ -17,15 +18,32 @@ const chapters = [
   { start: 395, time: "6:35", label: "技術構成解説" },
 ];
 
-const awardDay = [
+// brand がない賞（オーディエンス賞と、ロゴを用意していない企業賞）にはトロフィーを表示する。
+type Award = {
+  name: string;
+  kind: string;
+  parts?: string[];
+  brand?: BrandIcon;
+  featured?: boolean;
+};
+const awardDay: Award[] = [
   { name: "Best Audience Award", kind: "オーディエンス賞", featured: true },
-  { name: "Bluesky賞", kind: "企業賞" },
-  { name: "Huawei賞", kind: "企業賞" },
+  { name: "Bluesky賞", kind: "企業賞", brand: brandIcons.bluesky },
+  { name: "Huawei賞", kind: "企業賞", brand: brandIcons.huawei },
   { name: "SoftBank賞", kind: "企業賞" },
 ];
-const hackDay = [
+const hackDay: Award[] = [
   { name: "Audience Award", kind: "オーディエンス賞" },
-  { name: "三菱重工業株式会社 航空機・飛昇体事業部賞", parts: ["三菱重工業株式会社", "航空機・飛昇体事業部賞"], kind: "企業賞" },
+  {
+    name: "三菱重工業株式会社 航空機・飛昇体事業部賞",
+    parts: ["三菱重工業株式会社", "航空機・飛昇体事業部賞"],
+    kind: "企業賞",
+    brand: brandIcons.mitsubishi,
+  },
+];
+const awards = [
+  { stage: "Award Day", note: "決勝", list: awardDay },
+  { stage: "Hack Day", note: "仙台会場", list: hackDay },
 ];
 const awardCount = awardDay.length + hackDay.length;
 ---
@@ -547,44 +565,48 @@ const awardCount = awardDay.length + hackDay.length;
           </p>
         </div>
 
-        <div class="home-award-stage">
-          <div class="home-award-stage-head">
-            <h3>Award Day</h3>
-            <span>決勝・{awardDay.length}賞</span>
-          </div>
-          <ul class="home-award-list">
-            {
-              awardDay.map((a) => (
-                <li class:list={["home-award", a.featured && "home-award-featured"]}>
-                  <span class="home-award-kind">{a.kind}</span>
-                  <strong>{a.name}</strong>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-
-        <div class="home-award-stage">
-          <div class="home-award-stage-head">
-            <h3>Hack Day</h3>
-            <span>仙台会場・{hackDay.length}賞</span>
-          </div>
-          <ul class="home-award-list home-award-list-two">
-            {
-              hackDay.map((a) => (
-                <li class="home-award">
-                  <span class="home-award-kind">{a.kind}</span>
-                  <strong>
-                    {a.parts ? a.parts.map((part) => <span class="home-award-part">{part}</span>) : a.name}
-                  </strong>
-                </li>
-              ))
-            }
-          </ul>
-          <p class="home-award-note">
-            仙台会場の代表として、Award Dayのファイナリストに選出されました。
-          </p>
-        </div>
+        {
+          awards.map(({ stage, note, list }) => (
+            <div class="home-award-stage">
+              <div class="home-award-stage-head">
+                <h3>{stage}</h3>
+                <span>
+                  {note}・{list.length}賞
+                </span>
+              </div>
+              <ul class:list={["home-award-list", list.length === 2 && "home-award-list-two"]}>
+                {list.map((a) => (
+                  <li class:list={["home-award", a.featured && "home-award-featured"]}>
+                    <div class="home-award-top">
+                      {a.brand ? (
+                        <span class="home-award-icon home-award-icon-brand" title={a.brand.title}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true" fill={a.brand.color}>
+                            <path d={a.brand.path} />
+                          </svg>
+                        </span>
+                      ) : (
+                        <span class="home-award-icon home-award-icon-trophy">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 3h10v2h3v3a4 4 0 0 1-4 4h-.3A5 5 0 0 1 13 14.9V17h3v2H8v-2h3v-2.1A5 5 0 0 1 8.3 12H8a4 4 0 0 1-4-4V5h3zm0 4H6v1a2 2 0 0 0 1 1.7zm10 0v2.7A2 2 0 0 0 18 8V7zM7 20h10v2H7z" />
+                          </svg>
+                        </span>
+                      )}
+                      <span class="home-award-kind">{a.kind}</span>
+                    </div>
+                    <strong>
+                      {a.parts ? a.parts.map((part) => <span class="home-award-part">{part}</span>) : a.name}
+                    </strong>
+                  </li>
+                ))}
+              </ul>
+              {stage === "Hack Day" && (
+                <p class="home-award-note">
+                  仙台会場の代表として、Award Dayのファイナリストに選出されました。
+                </p>
+              )}
+            </div>
+          ))
+        }
       </div>
     </section>
 
@@ -1400,20 +1422,42 @@ const awardCount = awardDay.length + hackDay.length;
     background: #fff;
     overflow-wrap: anywhere;
   }
-  .home-award::after {
-    content: "★";
-    position: absolute;
-    top: 16px;
-    right: 18px;
-    font-size: 18px;
-    color: #c7a800;
+  .home-award-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .home-award-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 52px;
+    height: 52px;
+    border: 2px solid var(--home-ink);
+    background: #fff;
+  }
+  .home-award-icon svg {
+    width: 30px;
+    height: 30px;
+  }
+  .home-award-icon-trophy {
+    background: var(--home-yellow);
+  }
+  .home-award-icon-trophy svg {
+    fill: var(--home-ink);
+  }
+  .home-award-featured .home-award-icon-trophy {
+    background: var(--home-ink);
+  }
+  .home-award-featured .home-award-icon-trophy svg {
+    fill: var(--home-yellow);
   }
   .home-award-part {
     display: inline-block;
     margin-right: 0.3em;
   }
   .home-award-kind {
-    align-self: start;
     font-size: 11px;
     font-weight: 900;
     letter-spacing: 0.08em;
@@ -1428,9 +1472,6 @@ const awardCount = awardDay.length + hackDay.length;
   .home-award-featured {
     background: var(--home-yellow);
     box-shadow: 5px 5px 0 var(--home-ink);
-  }
-  .home-award-featured::after {
-    color: var(--home-ink);
   }
   .home-page .home-award-note {
     font-size: 14px;
