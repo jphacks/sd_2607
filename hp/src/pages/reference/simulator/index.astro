@@ -298,7 +298,7 @@ const version = files[0]?.version;
   }
   .sim-hero-inner {
     display: grid;
-    grid-template-columns: 1.1fr 1fr;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
     gap: 4rem;
     align-items: center;
   }
@@ -327,8 +327,9 @@ const version = files[0]?.version;
     line-height: 1.25;
   }
   .sim-page h1 {
+    min-width: 0;
     margin: 0;
-    font-size: clamp(2rem, 4vw, 3.5rem);
+    font-size: clamp(1.75rem, 4vw, 3.5rem);
     letter-spacing: -0.04em;
   }
   .sim-page h2 {
@@ -395,11 +396,14 @@ const version = files[0]?.version;
   }
   .sim-files {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
     gap: 1rem;
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+  .sim-files > li {
+    min-width: 0;
   }
   .sim-button {
     display: flex;
@@ -427,7 +431,11 @@ const version = files[0]?.version;
   .sim-button-light {
     background: #fff;
   }
+  .sim-lead {
+    word-break: auto-phrase;
+  }
   .sim-size {
+    white-space: nowrap;
     flex: none;
     font-size: 0.85rem;
     font-weight: 700;
@@ -544,7 +552,7 @@ const version = files[0]?.version;
     .sim-hero-inner,
     .sim-split,
     .sim-note {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
       gap: 2.5rem;
     }
     .sim-cards {
@@ -563,6 +571,12 @@ const version = files[0]?.version;
     .sim-model-list li {
       grid-template-columns: 1fr;
       gap: 0.25rem;
+    }
+  }
+  @media (max-width: 480px) {
+    .sim-download {
+      padding: 1.25rem;
+      box-shadow: 6px 6px 0 var(--yellow);
     }
   }
 </style>

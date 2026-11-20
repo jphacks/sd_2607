@@ -1,5 +1,33 @@
 ---
 import Layout from "../layouts/Layout.astro";
+
+// 「なぜプロトコルか」の図。同じ40人のうち、Bluetooth などで中継に参加できる人を塗る。
+const people = Array.from({ length: 40 }, (_, i) => i);
+const dedicated = new Set([6, 19, 33]);
+// 対応アプリが3種類（A・B・C）あり、それぞれの利用者が混在している想定。
+const protocolApp = (i: number) => ((i * 7) % 10 < 7 ? ["a", "b", "c"][i % 3] : null);
+
+const youtubeMain = "piaNsc6ilBI";
+const youtubeTalk = "nQAZIvaILJc";
+const embed = (id: string, start = 0) =>
+  `https://www.youtube-nocookie.com/embed/${id}?rel=0${start ? `&start=${start}` : ""}`;
+const chapters = [
+  { start: 0, time: "0:00", label: "概要プレゼンテーション" },
+  { start: 239, time: "3:59", label: "実機デモ" },
+  { start: 395, time: "6:35", label: "技術構成解説" },
+];
+
+const awardDay = [
+  { name: "Best Audience Award", kind: "オーディエンス賞", featured: true },
+  { name: "Bluesky賞", kind: "企業賞" },
+  { name: "Huawei賞", kind: "企業賞" },
+  { name: "SoftBank賞", kind: "企業賞" },
+];
+const hackDay = [
+  { name: "Audience Award", kind: "オーディエンス賞" },
+  { name: "三菱重工業株式会社 航空機・飛昇体事業部賞", parts: ["三菱重工業株式会社", "航空機・飛昇体事業部賞"], kind: "企業賞" },
+];
+const awardCount = awardDay.length + hackDay.length;
 ---
 
 <Layout
@@ -14,9 +42,9 @@ import Layout from "../layouts/Layout.astro";
             <span class="home-dot"></span> FOR WHEN CONNECTION FAILS
           </p>
           <h1 id="home-title">
-            いつものアプリが、
+            いつもの<wbr />アプリが、
             <br />
-            <span>もしもの通信網になる。</span>
+            <span>もしもの<wbr />通信網に<wbr />なる。</span>
           </h1>
 
           <p class="home-hero-text">
@@ -24,22 +52,22 @@ import Layout from "../layouts/Layout.astro";
             Protocolは、情報をつなぐための共通プロトコルです。
           </p>
           <div class="home-actions">
-            <a class="home-button home-button-primary" href="#how">
-              しくみを見る <span aria-hidden="true">↘</span>
+            <a class="home-button home-button-primary" href="#what">
+              しくみを知る <span aria-hidden="true">↘</span>
             </a>
-            <a class="home-button home-button-light" href="/protocol/">
-              プロトコル仕様 <span aria-hidden="true">→</span>
-            </a>
-            <a
-              class="home-button home-button-light"
-              href="https://github.com/jphacks/sd_2607"
-            >
-              GitHub <span aria-hidden="true">↗</span>
+            <a class="home-button home-button-ghost" href="#video">
+              動画で見る <span aria-hidden="true">▶</span>
             </a>
           </div>
+          <a class="home-hero-award" href="#awards">
+            <span class="home-hero-award-mark" aria-hidden="true">★</span>
+            <span>JPHACKS 2026 で{awardCount}つの賞を受賞しました</span>
+            <span aria-hidden="true">→</span>
+          </a>
         </div>
         <div
           class="home-signal"
+          role="img"
           aria-label="圏外の端末から中継を経てオンラインへ情報を届けるイメージ"
         >
           <div class="home-signal-top">
@@ -56,13 +84,13 @@ import Layout from "../layouts/Layout.astro";
               <strong>発信</strong>
               <small>OFFLINE</small>
             </div>
-            <div class="home-route-line">······→</div>
+            <div class="home-route-line">→</div>
             <div class="home-node home-node-yellow">
               <span>02</span>
               <strong>中継</strong>
-              <small>DEVICE TO DEVICE</small>
+              <small>RELAY</small>
             </div>
-            <div class="home-route-line">······→</div>
+            <div class="home-route-line">→</div>
             <div class="home-node">
               <span>03</span>
               <strong>公開</strong>
@@ -106,12 +134,194 @@ import Layout from "../layouts/Layout.astro";
             地域の情報が届かない。
           </p>
           <p>
-            災害で通信設備が被害を受けると、普段の連絡や情報共有が難しくなります。端末同士で通信する技術があっても、専用アプリを事前に入れていなければ使えない。それも、もしもの時の壁です。
+            大きな災害では、基地局の故障や停電で、スマートフォンが圏外になることがあります。家族の安否、避難所で足りない物資、通れない道。いちばん情報が必要なときに、それを伝える手段がなくなってしまいます。
+          </p>
+          <p>
+            スマートフォン同士がBluetoothなどで直接つながる技術はすでにあります。でも、そのための専用アプリを、災害が起きる前から入れている人はほとんどいません。圏外になってから入れることもできません。それが、もしもの時の壁です。
           </p>
           <p>
             だから私たちは、日常使うアプリが、非常時には情報を運ぶ一端を担う未来を考えました。
           </p>
         </div>
+      </div>
+    </section>
+
+    <section
+      class="home-what home-section"
+      id="what"
+      aria-labelledby="home-what-title"
+    >
+      <div class="home-wrap">
+        <div class="home-split">
+          <div>
+            <p class="home-label">02 / WHAT IS A PROTOCOL</p>
+            <h2 id="home-what-title">
+              プロトコルって、
+              <br />
+              なに？
+            </h2>
+          </div>
+          <div class="home-what-copy">
+            <p class="home-large">
+              違うもの同士が話すための、
+              <br />
+              共通の約束ごとです。
+            </p>
+            <p>
+              プロトコルとは、データをどんな形で、どんな手順でやりとりするかを決めたルールのことです。ルールさえ同じなら、作った会社やアプリが違っても、お互いの言葉が通じます。じつは私たちは、毎日プロトコルの恩恵を受けています。
+            </p>
+          </div>
+        </div>
+
+        <ul class="home-analogies">
+          <li>
+            <span class="home-analogy-icon" aria-hidden="true">✉</span>
+            <h3>メール</h3>
+            <p>
+              GmailからiPhoneのメールアプリへ。サービスが違ってもメールが届くのは、メールの送り方を決めたプロトコルが共通だからです。
+            </p>
+          </li>
+          <li>
+            <span class="home-analogy-icon" aria-hidden="true">☎</span>
+            <h3>電話</h3>
+            <p>
+              携帯電話の会社が違っても、番号を押せば相手につながります。会社をまたいでつなぐ方法が、あらかじめ決められているからです。
+            </p>
+          </li>
+          <li class="home-analogy-mosimo">
+            <span class="home-analogy-icon" aria-hidden="true">✳</span>
+            <h3>Mosimo Protocol</h3>
+            <p>
+              アプリが違っても、圏外でも、災害時の投稿をスマートフォン同士で受け渡せる。そのための約束ごとを決めたのが、Mosimo Protocolです。
+            </p>
+          </li>
+        </ul>
+
+        <div class="home-defines">
+          <h3>Mosimo Protocolが決めていること</h3>
+          <dl>
+            <div>
+              <dt>投稿の形</dt>
+              <dd>
+                本文・場所・有効期間など、災害時の情報をどんな形で書き表すか。どのアプリが読んでも同じ意味になるように決めています。
+              </dd>
+            </div>
+            <div>
+              <dt>端末同士の受け渡し方</dt>
+              <dd>
+                BluetoothやWi-Fiで近くの端末を見つけ、相手がまだ持っていない投稿だけを効率よく交換する手順です。
+              </dd>
+            </div>
+            <div>
+              <dt>書いた人の証明</dt>
+              <dd>
+                投稿には電子署名を付けます。何人の手を経て運ばれても、誰の鍵で書かれたか、途中で書き換えられていないかを確かめられます。
+              </dd>
+            </div>
+            <div>
+              <dt>インターネットへの届け方</dt>
+              <dd>
+                電波の届く場所に来た端末が、運んできた投稿をインターネット上のサーバーへ渡す方法です。遠くの家族や支援者もWebで読めるようになります。
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="home-why home-section" aria-labelledby="home-why-title">
+      <div class="home-wrap">
+        <div class="home-section-head">
+          <div>
+            <p class="home-label">03 / WHY A PROTOCOL</p>
+            <h2 id="home-why-title">
+              なぜ、アプリではなく
+              <br />
+              プロトコルなのか
+            </h2>
+          </div>
+          <p>
+            端末から端末へ情報を運ぶには、
+            <br />
+            近くに「仲間」がいることが必要です。
+          </p>
+        </div>
+
+        <div class="home-compare">
+          <figure class="home-compare-panel">
+            <figcaption>
+              <span class="home-compare-tag">専用アプリだけの場合</span>
+              <strong>近くに仲間がほとんどいない</strong>
+            </figcaption>
+            <div
+              class="home-people"
+              role="img"
+              aria-label="40人のうち、専用アプリを入れている3人だけが中継に参加できる図"
+            >
+              {
+                people.map((i) => (
+                  <span class:list={["home-person", dedicated.has(i) && "is-a"]} />
+                ))
+              }
+            </div>
+            <p>
+              災害のために専用アプリを入れている人はわずかです。隣の人に届けようにも、相手がアプリを持っていなければ情報は止まってしまいます。
+            </p>
+          </figure>
+          <figure class="home-compare-panel home-compare-panel-yes">
+            <figcaption>
+              <span class="home-compare-tag">共通のプロトコルの場合</span>
+              <strong>いつものアプリが、<wbr />みんな<wbr />仲間になる</strong>
+            </figcaption>
+            <div
+              class="home-people"
+              role="img"
+              aria-label="40人のうち、異なる3種類の対応アプリを使う多くの人が、互いに中継に参加できる図"
+            >
+              {
+                people.map((i) => {
+                  const app = protocolApp(i);
+                  return <span class:list={["home-person", app && `is-${app}`]} />;
+                })
+              }
+            </div>
+            <ul class="home-legend" aria-hidden="true">
+              <li><span class="home-person is-a"></span>アプリA</li>
+              <li><span class="home-person is-b"></span>アプリB</li>
+              <li><span class="home-person is-c"></span>アプリC</li>
+            </ul>
+            <p>
+              地域のアプリ、学校のアプリ、SNS。違うアプリでも同じ約束ごとを話せれば、互いに情報を中継できます。
+            </p>
+          </figure>
+        </div>
+        <p class="home-note">
+          ※ 図はイメージです。導入率による違いは<a href="/reference/simulator/">もしもシミュレーター</a>で試せます。
+        </p>
+
+        <ol class="home-reasons">
+          <li>
+            <span>01</span>
+            <h3>事前の準備がいらない</h3>
+            <p>
+              普段使っているアプリが対応していれば、それだけで備えになります。災害用のアプリを探して入れておく必要はありません。
+            </p>
+          </li>
+          <li>
+            <span>02</span>
+            <h3>つながる相手が増える</h3>
+            <p>
+              中継は、近くに対応した端末がいて初めて成り立ちます。アプリの垣根をなくすことで、つながる相手の数を大きく増やせます。
+            </p>
+          </li>
+          <li>
+            <span>03</span>
+            <h3>特定の会社に頼らない</h3>
+            <p>
+              仕様は公開されていて、誰でも自分のアプリに組み込めます。ひとつのサービスが止まっても、仕組みそのものは止まりません。
+            </p>
+          </li>
+        </ol>
       </div>
     </section>
 
@@ -123,7 +333,7 @@ import Layout from "../layouts/Layout.astro";
       <div class="home-wrap">
         <div class="home-section-head">
           <div>
-            <p class="home-label">02 / HOW IT WORKS</p>
+            <p class="home-label">04 / HOW IT WORKS</p>
             <h2 id="home-how-title">
               端末から端末へ
               <br />
@@ -148,7 +358,7 @@ import Layout from "../layouts/Layout.astro";
               情報を交換
             </h3>
             <p>
-              BluetoothやWi-Fiを使い、対応する端末同士で投稿を受け渡します。
+              BluetoothやWi-Fiを使い、対応する端末同士で投稿を受け渡します。インターネットも基地局も使いません。
             </p>
             <div class="home-card-tag">OFFLINE</div>
           </article>
@@ -163,7 +373,7 @@ import Layout from "../layouts/Layout.astro";
               情報も移動
             </h3>
             <p>
-              受け取った情報を端末に保存し、別の端末へ中継。つながる機会を待ちながら運びます。
+              受け取った情報を端末に保存し、別の端末へ中継。避難所へ歩く人、物資を運ぶ車と一緒に、情報も少しずつ遠くへ運ばれます。
             </p>
             <div class="home-card-tag">RELAY</div>
           </article>
@@ -178,7 +388,7 @@ import Layout from "../layouts/Layout.astro";
               つなぐ
             </h3>
             <p>
-              接続できる端末を通じて投稿を公開。離れた場所からもWebクライアントで閲覧できます。
+              電波の届く場所に着いた端末が投稿を公開。離れた場所からもWebクライアントで閲覧できます。
             </p>
             <div class="home-card-tag">ONLINE</div>
           </article>
@@ -191,12 +401,80 @@ import Layout from "../layouts/Layout.astro";
     </section>
 
     <section
+      class="home-video home-section"
+      id="video"
+      aria-labelledby="home-video-title"
+    >
+      <div class="home-wrap">
+        <div class="home-section-head">
+          <div>
+            <p class="home-label">05 / WATCH</p>
+            <h2 id="home-video-title">動画で見る</h2>
+          </div>
+          <p>
+            しくみと実機での動作を、
+            <br />
+            動画で紹介しています。
+          </p>
+        </div>
+        <div class="home-videos">
+          <figure class="home-video-item">
+            <div class="home-video-frame">
+              <iframe
+                src={embed(youtubeMain)}
+                title="Mosimo Protocol 紹介動画（YouTube）"
+                loading="lazy"
+                allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allowfullscreen></iframe>
+            </div>
+            <figcaption>
+              <strong>紹介動画</strong>
+              <span>いつものアプリが、もしもの通信網になる。</span>
+            </figcaption>
+          </figure>
+          <figure class="home-video-item">
+            <div class="home-video-frame">
+              <iframe
+                id="home-talk-video"
+                src={embed(youtubeTalk)}
+                title="JPHACKS 2026 発表とデモ（YouTube）"
+                loading="lazy"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allowfullscreen></iframe>
+            </div>
+            <figcaption>
+              <strong>JPHACKS 2026 発表とデモ</strong>
+              <span>見たいところから再生できます。</span>
+            </figcaption>
+            <ul class="home-chapters">
+              {
+                chapters.map((c) => (
+                  <li>
+                    <a
+                      href={`https://youtu.be/${youtubeTalk}?t=${c.start}`}
+                      data-start={c.start}
+                    >
+                      <span>{c.time}</span>
+                      {c.label}
+                    </a>
+                  </li>
+                ))
+              }
+            </ul>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section
       class="home-features home-section"
       aria-labelledby="home-features-title"
     >
       <div class="home-wrap home-split">
         <div>
-          <p class="home-label">03 / BUILT FOR CONNECTION</p>
+          <p class="home-label">06 / BUILT FOR CONNECTION</p>
           <h2 id="home-features-title">
             ひとつのアプリに
             <br />
@@ -210,7 +488,7 @@ import Layout from "../layouts/Layout.astro";
           <article>
             <span>01</span>
             <div>
-              <h3>アプリを越える共通の土台</h3>
+              <h3>アプリを越える<wbr />共通の土台</h3>
               <p>
                 対応する異なるアプリ間で情報を交換できる設計。用途に応じて情報を拡張し、未対応の拡張も壊さず中継できます。仕様は<a href="/protocol/">プロトコル仕様</a>として公開しています。
               </p>
@@ -219,7 +497,7 @@ import Layout from "../layouts/Layout.astro";
           <article>
             <span>02</span>
             <div>
-              <h3>署名を保って、情報を運ぶ</h3>
+              <h3>署名を保って、<wbr />情報を運ぶ</h3>
               <p>
                 投稿者の署名を保ちながら中継し、発信元の検証につなげます。署名は投稿内容の真偽を保証するものではありません。
               </p>
@@ -227,6 +505,15 @@ import Layout from "../layouts/Layout.astro";
           </article>
           <article>
             <span>03</span>
+            <div>
+              <h3>既存のネットワークともつながる</h3>
+              <p>
+                インターネット側では、BlueskyのAT ProtocolやNostrといった分散型SNSの仕組みを使って投稿を公開・保存します。特定のサーバーが止まっても、情報が失われにくい構成です。
+              </p>
+            </div>
+          </article>
+          <article>
+            <span>04</span>
             <div>
               <h3>アプリとして、すぐに使える</h3>
               <p>
@@ -238,14 +525,121 @@ import Layout from "../layouts/Layout.astro";
       </div>
     </section>
 
+    <section
+      class="home-awards home-section"
+      id="awards"
+      aria-labelledby="home-awards-title"
+    >
+      <div class="home-wrap">
+        <div class="home-section-head">
+          <div>
+            <p class="home-label">07 / AWARDS</p>
+            <h2 id="home-awards-title">
+              JPHACKS 2026で
+              <br />
+              <span>{awardCount}つの賞</span>を受賞
+            </h2>
+          </div>
+          <p>
+            Team JISAKUとして出場し、
+            <br />
+            Hack DayとAward Dayで評価をいただきました。
+          </p>
+        </div>
+
+        <div class="home-award-stage">
+          <div class="home-award-stage-head">
+            <h3>Award Day</h3>
+            <span>決勝・{awardDay.length}賞</span>
+          </div>
+          <ul class="home-award-list">
+            {
+              awardDay.map((a) => (
+                <li class:list={["home-award", a.featured && "home-award-featured"]}>
+                  <span class="home-award-kind">{a.kind}</span>
+                  <strong>{a.name}</strong>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+
+        <div class="home-award-stage">
+          <div class="home-award-stage-head">
+            <h3>Hack Day</h3>
+            <span>仙台会場・{hackDay.length}賞</span>
+          </div>
+          <ul class="home-award-list home-award-list-two">
+            {
+              hackDay.map((a) => (
+                <li class="home-award">
+                  <span class="home-award-kind">{a.kind}</span>
+                  <strong>
+                    {a.parts ? a.parts.map((part) => <span class="home-award-part">{part}</span>) : a.name}
+                  </strong>
+                </li>
+              ))
+            }
+          </ul>
+          <p class="home-award-note">
+            仙台会場の代表として、Award Dayのファイナリストに選出されました。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="home-faq home-section" aria-labelledby="home-faq-title">
+      <div class="home-wrap home-split">
+        <div>
+          <p class="home-label">08 / FAQ</p>
+          <h2 id="home-faq-title">
+            よくある
+            <br />
+            質問
+          </h2>
+        </div>
+        <div class="home-faq-list">
+          <details>
+            <summary>圏外でも、本当に情報が届くのですか？</summary>
+            <p>
+              近くに対応した端末があれば、BluetoothやWi-Fiで直接受け渡せます。受け取った端末は情報を保存しておき、持ち主が移動した先で出会った端末へさらに渡します。すぐには届かなくても、人の動きに乗って少しずつ広がっていく仕組みです。ただし、周りに対応した端末がない、電池が切れたなどの条件によっては届かないこともあります。
+            </p>
+          </details>
+          <details>
+            <summary>今すぐ使ってみるには？</summary>
+            <p>
+              iPhone・iPad・Android向けのアプリ「<a href="/reference/mobile">もしもの防災</a>」で体験できます。届いた投稿は<a href="https://mosimo.oriom.dev">Webクライアント</a>でも見られます。
+            </p>
+          </details>
+          <details>
+            <summary>投稿した内容は、誰に見られますか？</summary>
+            <p>
+              Mosimo Protocolは、公開を前提とした投稿を扱います。本文や公開した位置情報は、中継した端末やWebクライアントを通じて誰でも読める状態になります。個人を特定できる情報は書かないようにしてください。
+            </p>
+          </details>
+          <details>
+            <summary>デマや、なりすましは防げますか？</summary>
+            <p>
+              すべての投稿に電子署名が付いているため、誰の鍵で書かれたものか、途中で書き換えられていないかは確かめられます。自治体などの公的な発信者を確かめる仕組みや、訂正・通報の仕組みも仕様に含めています。ただし、署名は内容が正しいことまでは保証しません。
+            </p>
+          </details>
+          <details>
+            <summary>自分のアプリに組み込めますか？</summary>
+            <p>
+              はい。<a href="/protocol/">プロトコル仕様</a>を公開しているので、誰でも実装できます。実装例として、Android・iOSアプリ、ESP32の中継機器、サーバーのソースコードを<a href="https://github.com/jphacks/sd_2607">GitHub</a>で公開しています。
+            </p>
+          </details>
+        </div>
+      </div>
+    </section>
+
     <section class="home-cta home-section" aria-labelledby="home-cta-title">
       <div class="home-wrap home-cta-inner">
         <div>
-          <p class="home-label">04 / THE NEXT CONNECTION</p>
+          <p class="home-label">09 / THE NEXT CONNECTION</p>
           <h2 id="home-cta-title">実装と仕様を見る</h2>
-          <p>Team JISAKUによるJPHACKS 2026の作品です。仙台会場でAudience Awardと三菱重工業株式会社 航空機・飛昇体事業部賞を受賞し、Award Day Finalistに選出されました。</p>
           <p>
-            対応アプリや通信手段を広げ、異なる実装同士で使える通信基盤を目指しています。
+            Team JISAKUによるJPHACKS 2026の作品です。対応アプリや通信手段を広げ、異なる実装同士で使える通信基盤を目指しています。
           </p>
           <div class="home-actions">
             <a class="home-button home-button-dark" href="/protocol/">
@@ -273,15 +667,30 @@ import Layout from "../layouts/Layout.astro";
               class="home-button home-button-light"
               href="https://github.com/jphacks/sd_2607"
             >
-              プロジェクトを知る <span aria-hidden="true">↗</span>
+              GitHubで見る <span aria-hidden="true">↗</span>
             </a>
           </div>
         </div>
-
       </div>
     </section>
   </main>
 </Layout>
+
+<script>
+  // チャプターのリンクは、JavaScript が使えればページ内の動画をその位置から再生する。
+  const player = document.querySelector<HTMLIFrameElement>("#home-talk-video");
+  document.querySelectorAll<HTMLAnchorElement>(".home-chapters a").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      if (!player) return;
+      event.preventDefault();
+      const url = new URL(player.src);
+      url.searchParams.set("start", link.dataset.start ?? "0");
+      url.searchParams.set("autoplay", "1");
+      player.src = url.href;
+      player.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
+</script>
 
 <style lang="scss">
   .home-page {
@@ -319,6 +728,9 @@ import Layout from "../layouts/Layout.astro";
   .home-page p {
     margin-top: 0;
   }
+  .home-page :is(h1, h2, h3, summary, strong, dt, figcaption, .home-button, .home-large, .home-feature-intro, .home-section-head > p) {
+    word-break: auto-phrase;
+  }
   .home-page h2 {
     font-size: clamp(34px, 4.5vw, 60px);
     line-height: 1.25;
@@ -351,7 +763,7 @@ import Layout from "../layouts/Layout.astro";
     margin-right: 9px;
   }
   .home-page h1 {
-    font-size: clamp(42px, 5.5vw, 76px);
+    font-size: clamp(42px, 5vw, 68px);
     line-height: 1.25;
     letter-spacing: -0.055em;
     margin-bottom: 32px;
@@ -418,6 +830,7 @@ import Layout from "../layouts/Layout.astro";
     box-shadow: 12px 12px 0 var(--home-yellow);
     padding: 24px;
     transform: rotate(2deg);
+    margin-right: 14px;
   }
   .home-signal-top,
   .home-signal-bottom {
@@ -474,6 +887,7 @@ import Layout from "../layouts/Layout.astro";
     margin: auto 0;
   }
   .home-route-line {
+    padding: 0 10px;
     font-weight: 900;
     white-space: nowrap;
   }
@@ -529,7 +943,7 @@ import Layout from "../layouts/Layout.astro";
   }
   .home-cards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 16px;
   }
   .home-card {
@@ -567,9 +981,9 @@ import Layout from "../layouts/Layout.astro";
     font-weight: 900;
     letter-spacing: 0.12em;
   }
-  .home-note {
+  .home-page .home-note {
     font-size: 12px;
-    margin: 24px 0 0;
+    margin: 28px 0 0;
   }
   .home-feature-intro {
     max-width: 390px;
@@ -609,11 +1023,484 @@ import Layout from "../layouts/Layout.astro";
     align-items: center;
     gap: 40px;
   }
+  .home-cta .home-button {
+    gap: 16px;
+    white-space: nowrap;
+  }
+  .home-cta .home-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
   .home-cta p:not(.home-label) {
     margin-top: 24px;
     max-width: 520px;
   }
 
+  .home-button-ghost {
+    background: transparent;
+    color: var(--home-paper);
+    border-color: #6b6d66;
+  }
+  .home-hero-award {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 28px;
+    color: var(--home-yellow);
+    font-size: 14px;
+    font-weight: 800;
+    text-decoration: none;
+    min-height: 44px;
+    text-decoration: underline;
+    text-underline-offset: 5px;
+  }
+  .home-hero-award-mark {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--home-yellow);
+    color: var(--home-ink);
+    font-size: 13px;
+  }
+  .home-hero-award:hover {
+    color: #fff;
+  }
+
+  /* 02 プロトコルとは */
+  .home-what {
+    background: #deded3;
+    border-top: 2px solid var(--home-ink);
+    border-bottom: 2px solid var(--home-ink);
+  }
+  .home-what-copy {
+    max-width: 560px;
+    font-size: 15px;
+  }
+  .home-analogies {
+    list-style: none;
+    margin: 64px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+  }
+  .home-analogies li {
+    border: 2px solid var(--home-ink);
+    background: var(--home-paper);
+    padding: 24px;
+  }
+  .home-analogies li.home-analogy-mosimo {
+    background: var(--home-yellow);
+    box-shadow: 5px 5px 0 var(--home-ink);
+  }
+  .home-analogy-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 2px solid var(--home-ink);
+    background: #fff;
+    font-size: 20px;
+    line-height: 1;
+  }
+  .home-analogies h3 {
+    font-size: 21px;
+    margin: 18px 0 8px;
+  }
+  .home-analogies p {
+    font-size: 14px;
+    margin-bottom: 0;
+  }
+  .home-defines {
+    margin-top: 64px;
+    border: 2px solid var(--home-ink);
+    background: var(--home-paper);
+  }
+  .home-defines h3 {
+    margin: 0;
+    padding: 16px 24px;
+    background: var(--home-ink);
+    color: var(--home-paper);
+    font-size: 16px;
+    letter-spacing: 0.04em;
+  }
+  .home-defines dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-defines dl > div {
+    padding: 22px 24px;
+    border-top: 2px solid var(--home-ink);
+  }
+  .home-defines dl > div:nth-child(-n + 2) {
+    border-top: 0;
+  }
+  .home-defines dl > div:nth-child(odd) {
+    border-right: 2px solid var(--home-ink);
+  }
+  .home-defines dt {
+    font-size: 18px;
+    font-weight: 900;
+    margin-bottom: 6px;
+  }
+  .home-defines dt::before {
+    content: "";
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 10px;
+    background: #a7462c;
+    vertical-align: 0.1em;
+  }
+  .home-defines dd {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  /* 03 なぜプロトコルか */
+  .home-compare {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .home-compare-panel {
+    margin: 0;
+    border: 2px solid var(--home-ink);
+    background: #fff;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+  }
+  .home-compare-panel-yes {
+    box-shadow: 5px 5px 0 var(--home-ink);
+  }
+  .home-compare-panel figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+  .home-compare-tag {
+    align-self: start;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    padding: 2px 10px;
+    border: 2px solid var(--home-ink);
+  }
+  .home-compare-panel-yes .home-compare-tag {
+    background: var(--home-yellow);
+  }
+  .home-compare-panel figcaption strong {
+    min-height: 2.9em;
+    font-size: 20px;
+    line-height: 1.45;
+  }
+  .home-people {
+    width: 100%;
+    max-width: 480px;
+    margin-inline: auto;
+    display: grid;
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 8px;
+    padding: 16px;
+    background: var(--home-paper);
+    border: 2px solid var(--home-ink);
+  }
+  .home-person {
+    display: block;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 2px solid #b3b3a8;
+    background: transparent;
+  }
+  .home-person.is-a {
+    background: #a7462c;
+    border-color: #a7462c;
+  }
+  .home-person.is-b {
+    background: var(--home-ink);
+    border-color: var(--home-ink);
+  }
+  .home-person.is-c {
+    background: #e2c400;
+    border-color: #8a7800;
+  }
+  .home-legend {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 12px 0 0;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .home-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .home-legend .home-person {
+    width: 12px;
+  }
+  .home-compare-panel > p {
+    font-size: 14px;
+    margin: 18px 0 0;
+  }
+  .home-reasons {
+    list-style: none;
+    margin: 56px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0 32px;
+    border-top: 2px solid var(--home-ink);
+  }
+  .home-reasons li {
+    padding-top: 24px;
+  }
+  .home-reasons li > span {
+    font-size: 13px;
+    font-weight: 900;
+    color: #a7462c;
+  }
+  .home-reasons h3 {
+    font-size: 20px;
+    margin: 6px 0 8px;
+  }
+  .home-reasons p {
+    font-size: 14px;
+    margin-bottom: 0;
+  }
+
+  /* 05 動画 */
+  .home-video {
+    background: var(--home-ink);
+    color: var(--home-paper);
+  }
+  .home-video .home-label {
+    color: var(--home-yellow);
+  }
+  .home-videos {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 32px;
+    align-items: start;
+  }
+  .home-video-item {
+    margin: 0;
+    min-width: 0;
+  }
+  .home-video-frame {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border: 2px solid var(--home-paper);
+    box-shadow: 8px 8px 0 var(--home-yellow);
+  }
+  .home-video-frame iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  .home-video-item figcaption {
+    display: flex;
+    flex-direction: column;
+    margin-top: 22px;
+  }
+  .home-video-item figcaption strong {
+    font-size: 18px;
+  }
+  .home-video-item figcaption span {
+    font-size: 14px;
+    color: #c7c7bd;
+  }
+  .home-chapters {
+    list-style: none;
+    margin: 14px 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .home-chapters a {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 14px;
+    border: 2px solid #6b6d66;
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+  }
+  .home-chapters a:hover {
+    border-color: var(--home-yellow);
+    color: var(--home-yellow);
+  }
+  .home-chapters a span {
+    font-variant-numeric: tabular-nums;
+    color: var(--home-yellow);
+  }
+
+  /* 07 受賞 */
+  .home-awards {
+    border-top: 2px solid var(--home-ink);
+  }
+  .home-awards h2 span {
+    color: #a7462c;
+  }
+  .home-award-stage + .home-award-stage {
+    margin-top: 48px;
+  }
+  .home-award-stage-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    border-bottom: 2px solid var(--home-ink);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  .home-award-stage-head h3 {
+    font-size: 26px;
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+  .home-award-stage-head span {
+    font-size: 13px;
+    font-weight: 800;
+  }
+  .home-award-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .home-award-list-two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-award {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 150px;
+    padding: 22px;
+    border: 2px solid var(--home-ink);
+    background: #fff;
+    overflow-wrap: anywhere;
+  }
+  .home-award::after {
+    content: "★";
+    position: absolute;
+    top: 16px;
+    right: 18px;
+    font-size: 18px;
+    color: #c7a800;
+  }
+  .home-award-part {
+    display: inline-block;
+    margin-right: 0.3em;
+  }
+  .home-award-kind {
+    align-self: start;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    padding: 1px 8px;
+    border: 2px solid var(--home-ink);
+  }
+  .home-award strong {
+    margin-top: auto;
+    font-size: 22px;
+    line-height: 1.35;
+  }
+  .home-award-featured {
+    background: var(--home-yellow);
+    box-shadow: 5px 5px 0 var(--home-ink);
+  }
+  .home-award-featured::after {
+    color: var(--home-ink);
+  }
+  .home-page .home-award-note {
+    font-size: 14px;
+    margin: 24px 0 0;
+  }
+
+  /* 08 FAQ */
+  .home-faq {
+    background: #deded3;
+    border-top: 2px solid var(--home-ink);
+  }
+  .home-faq-list {
+    border-top: 2px solid var(--home-ink);
+  }
+  .home-faq-list details {
+    border-bottom: 2px solid var(--home-ink);
+  }
+  .home-faq-list summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 0;
+    font-size: 17px;
+    font-weight: 800;
+    cursor: pointer;
+    list-style: none;
+  }
+  .home-faq-list summary::-webkit-details-marker {
+    display: none;
+  }
+  .home-faq-list summary::after {
+    content: "+";
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 2px solid var(--home-ink);
+    font-size: 18px;
+    line-height: 1;
+  }
+  .home-faq-list details[open] summary::after {
+    content: "−";
+    background: var(--home-yellow);
+  }
+  .home-faq-list summary:focus-visible {
+    outline: 3px solid #e65a36;
+    outline-offset: 2px;
+  }
+  .home-faq-list details p {
+    font-size: 14px;
+    margin: 0 0 22px;
+    max-width: 640px;
+  }
+
+  @media (max-width: 960px) {
+    .home-faq .home-split,
+    .home-features .home-split {
+      grid-template-columns: 1fr;
+      gap: 40px;
+    }
+    .home-award-list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .home-videos {
+      grid-template-columns: 1fr;
+      gap: 56px;
+    }
+  }
   @media (max-width: 800px) {
     .home-section {
       padding: 72px 0;
@@ -630,9 +1517,7 @@ import Layout from "../layouts/Layout.astro";
     }
     .home-signal {
       transform: none;
-    }
-    .home-cards {
-      grid-template-columns: 1fr;
+      box-shadow: 8px 8px 0 var(--home-yellow);
     }
     .home-card {
       min-height: 250px;
@@ -641,23 +1526,78 @@ import Layout from "../layouts/Layout.astro";
       align-items: start;
       flex-direction: column;
     }
-
+    .home-analogies,
+    .home-defines {
+      margin-top: 48px;
+    }
+    .home-defines dl {
+      grid-template-columns: 1fr;
+    }
+    .home-defines dl > div:nth-child(odd) {
+      border-right: 0;
+    }
+    .home-defines dl > div:nth-child(2) {
+      border-top: 2px solid var(--home-ink);
+    }
+    .home-cta-inner {
+      display: block;
+    }
+  }
+  @media (max-width: 640px) {
+    .home-compare {
+      grid-template-columns: 1fr;
+    }
+    .home-compare-panel figcaption strong {
+      min-height: 0;
+    }
+  }
+  @media (max-width: 560px) {
+    .home-award-list,
+    .home-award-list-two {
+      grid-template-columns: 1fr;
+    }
+    .home-award {
+      min-height: 0;
+    }
+    .home-actions .home-button {
+      flex: 1 1 100%;
+    }
+    .home-people {
+      gap: 5px;
+      padding: 10px;
+    }
   }
   @media (max-width: 420px) {
     .home-wrap {
       width: calc(100% - 32px);
     }
     .home-page h1 {
-      font-size: 38px;
+      font-size: 34px;
     }
     .home-signal {
       padding: 16px;
     }
+    .home-signal-top,
+    .home-signal-bottom {
+      font-size: 9px;
+    }
     .home-node {
       padding: 6px;
     }
+    .home-node strong {
+      font-size: 16px;
+    }
     .home-route-line {
-      font-size: 11px;
+      padding: 0 4px;
+    }
+    .home-card,
+    .home-analogies li,
+    .home-compare-panel,
+    .home-defines dl > div {
+      padding: 18px;
+    }
+    .home-faq-list summary {
+      font-size: 16px;
     }
   }
 </style>
