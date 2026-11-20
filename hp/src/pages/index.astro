@@ -18,7 +18,7 @@ const chapters = [
   { start: 395, time: "6:35", label: "技術構成解説" },
 ];
 
-// brand がない賞（オーディエンス賞と、ロゴを用意していない企業賞）にはトロフィーを表示する。
+// brand がない賞（オーディエンス賞）にはトロフィーを表示する。
 type Award = {
   name: string;
   kind: string;
@@ -30,7 +30,7 @@ const awardDay: Award[] = [
   { name: "Best Audience Award", kind: "オーディエンス賞", featured: true },
   { name: "Bluesky賞", kind: "企業賞", brand: brandIcons.bluesky },
   { name: "Huawei賞", kind: "企業賞", brand: brandIcons.huawei },
-  { name: "SoftBank賞", kind: "企業賞" },
+  { name: "SoftBank賞", kind: "企業賞", brand: brandIcons.softbank },
 ];
 const hackDay: Award[] = [
   { name: "Audience Award", kind: "オーディエンス賞" },

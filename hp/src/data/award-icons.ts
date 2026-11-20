@@ -1,6 +1,7 @@
 // 受賞一覧に添える企業ロゴ。Simple Icons 16.38.0（https://simpleicons.org/、CC0-1.0）の
 // 24×24 のパスと色をそのまま使う。各ロゴは各社の商標であり、受賞した賞を示すためにだけ使う。
-// Simple Icons に収録のない企業（SoftBank など）には、ロゴを作らずトロフィーを使う。
+// SoftBank は Simple Icons に収録がないため、Wikimedia Commons の File:Softbank_mobile_logo.svg
+// （パブリックドメイン、商標）から2本のバーのマークだけを取り出し、同じ 24×24 の枠に収めた。
 export type BrandIcon = { title: string; color: string; path: string };
 
 export const brandIcons = {
@@ -18,5 +19,10 @@ export const brandIcons = {
     title: "Mitsubishi",
     color: "#E60012",
     path: "M8 22.38H0l4-6.92h8zm8 0h8l-4-6.92h-8zm0-13.84l-4-6.92-4 6.92 4 6.92Z",
+  },
+  softbank: {
+    title: "SoftBank",
+    color: "#BBBCBE",
+    path: "M1 3.89h22v5.42H1zm0 10.79h22v5.42H1z",
   },
 } satisfies Record<string, BrandIcon>;
